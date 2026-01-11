@@ -9,14 +9,15 @@ def cli_loop():
             break
         
         if cmd in ("quit", "exit"): 
-                break 
+            print("Goodbye.")
+            break 
 
         if cmd == "help": 
-                print("""
-                      Commands:
-                      exit / quit
-                      """)
-                continue
+            print("""
+                    Commands:
+                    exit / quit
+                """)
+            continue
 
         if cmd == "":
             continue
