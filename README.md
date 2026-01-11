@@ -4,4 +4,6 @@ Phase 0: project and cli setup.
 
 ## Run 
 ```bash
-python -m dashboard --help
+python -m pip install -e ".[dev]"
+dash help
+dash is_alive
