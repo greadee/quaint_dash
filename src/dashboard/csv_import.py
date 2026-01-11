@@ -18,7 +18,7 @@ def load_positions_csv(csv_path):
                 asset_type = row["asset_type"].strip().lower(),
                 currency = row["currency"].strip().upper(),
                 country = normalize_optional(row["country"]),
-                sector = normalize_optional(row["sector"]),
+                sector = normalize_optional(row["sector"])
             )
             positions.append(pos)
         

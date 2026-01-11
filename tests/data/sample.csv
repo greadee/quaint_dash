@@ -1,4 +1,4 @@
-ticker,type,quantity,currency,country,sector,size
-BN.TO,stock,30,CAD,CAN,Finance,mid
-ASML,stock,1,USD,NLD,Technology,large
-AVUV,etf,7,USD,USA,None,small
+ticker,asset_type,quantity,currency,country,sector
+BN.TO,stock,30,CAD,CAN,Finance
+ASML,stock,1,USD,NLD,Technology
+AVUV,etf,7,USD,USA,None
