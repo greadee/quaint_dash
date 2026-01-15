@@ -1,2 +1,0 @@
-portfolio_id, t, txn_type, asset_id, qty, price, cash_amt, fees, ccy, note
-TFSA, 2026-01-01 00:01:00, contribution, None, None, None, 100, 0, CAD, ""
