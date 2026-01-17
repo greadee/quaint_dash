@@ -4,8 +4,7 @@ Phase 0: Project and CLI setup.
 
 Phase 1: Data Modelling
     - DB schema, queries
-    - Need: domain models (Portfolio, Position, DB)
-    - Need: storage and service models for transactions
+    - Domain models and storage layer
     - Need: refactor csv import to take transactions / batches
     - Need: testing
 
