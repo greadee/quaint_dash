@@ -64,6 +64,7 @@ INSERT INTO transaction (
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING txn_id;
 """
+
 LIST_TXNS_FOR_PORTFOLIO = """
 SELECT
     txn_id,

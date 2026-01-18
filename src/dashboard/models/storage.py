@@ -17,6 +17,7 @@ class PortfolioManager:
 
     def __init__(self, db: DB):
         self.db = db
+        self.conn = db.conn
 
     @classmethod
     def open(cls, db: DB):
@@ -28,9 +29,8 @@ class PortfolioManager:
         # Basic MAX(id)+1 generation for portfolio_id
 
         # Good enough for a single-user embedded DB.
-        with self.db.connect() as con:
-            id = con.execute(qry.NEW_PORTFOLIO_ID).fetchone()[0]
-            con.execute(qry.UPSERT_PORTFOLIO, [id, name, base_ccy],)
+        id = self.conn.execute(qry.NEW_PORTFOLIO_ID).fetchone()[0]
+        self.conn.execute(qry.UPSERT_PORTFOLIO, [id, name, base_ccy],)
 
         return PortfolioStore(self.db, portfolio_name=name)
 
@@ -45,26 +45,24 @@ class PortfolioStore:
 
     def __init__(self, db: DB, portfolio_name: str):
         self.db = db
+        self.conn = db.conn
         self.portfolio = self._load_portfolio(portfolio_name)
 
     def _load_portfolio(self, name: str):
-        with self.db.connect() as con:
-            row = con.execute(qry.GET_PORTFOLIO_BY_NAME, [name],).fetchone()
+        row = self.conn.execute(qry.GET_PORTFOLIO_BY_NAME, [name],).fetchone()
         if row is None:
             raise ValueError(f"Portfolio not found: {name}")
         return Portfolio(*row)
 
     def _next_txn_id(self) -> int:
-        with self.db.connect() as con:
-            return con.execute(qry.NEW_PORTFOLIO_ID).fetchone()[0]
+        return self.conn.execute(qry.NEW_PORTFOLIO_ID).fetchone()[0]
 
     def upsert_asset(self, asset_id: str, asset_type: str, ccy: str):
         """
         Add/update an asset
         """
 
-        with self.db.connect() as con:
-            con.execute(qry.UPSERT_ASSET,[asset_id, asset_type, ccy],)
+        self.conn.execute(qry.UPSERT_ASSET,[asset_id, asset_type, ccy],)
 
     def add_txn(
         self,
@@ -80,24 +78,22 @@ class PortfolioStore:
         """
         Insert a transaction row and return txn_id
         """
-        with self.db.connect() as con:
-           return con.execute(qry.INSERT_TXN,
-                [self.portfolio.portfolio_id,
-                time_stamp,
-                txn_type,
-                asset_id,
-                qty,
-                price,
-                ccy,
-                cash_amt,
-                fee_amt,
-                ext_ref],)
+        return self.conn.execute(qry.INSERT_TXN,
+            [self.portfolio.portfolio_id,
+            time_stamp,
+            txn_type,
+            asset_id,
+            qty,
+            price,
+            ccy,
+            cash_amt,
+            fee_amt,
+            ext_ref],)
 
 
     def list_txns(self):
         """
         list transactions for a portfolio
         """
-        with self.db.connect() as con:
-            rows = con.execute(qry.LIST_TXNS_FOR_PORTFOLIO, [self.portfolio.portfolio_id]).fetchall()
+        rows = self.conn.execute(qry.LIST_TXNS_FOR_PORTFOLIO, [self.portfolio.portfolio_id]).fetchall()
         return [Txn(*row) for row in rows]
