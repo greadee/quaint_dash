@@ -65,6 +65,34 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING txn_id;
 """
 
+INSERT_TXN_BATCH = """
+INSERT INTO transaction (
+  portfolio_id, 
+  time_stamp, 
+  txn_type, 
+  asset_id, 
+  qty, 
+  price, 
+  ccy, 
+  cash_amt, 
+  fee_amt, 
+  ext_ref
+  )
+SELECT 
+    portfolio_id,
+    time_stamp, 
+    txn_type, 
+    asset_id, 
+    qty, 
+    price, 
+    ccy, 
+    cash_amt,
+    fee_amt, 
+    ext_ref
+FROM stg_txn_table
+ON CONFLICT (prtfolio_id, ext_ref) DO NOTHING;
+"""
+
 LIST_TXNS_FOR_PORTFOLIO = """
 SELECT
     txn_id,

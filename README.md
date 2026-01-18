@@ -5,8 +5,8 @@ Phase 0: Project and CLI setup.
 Phase 1: Data Modelling
     - DB schema, queries
     - Domain models and storage layer
-    - Need: refactor csv import to take transactions / batches
-    - Need: testing
+    - CSV import transaction batch
+    - Need: update CLI & testing
 
 ## Run 
 ```bash
