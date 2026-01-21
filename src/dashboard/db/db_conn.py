@@ -13,7 +13,7 @@ import duckdb
 class DB:
     def __init__(self, path):
         self.path = Path(path)
-        self.conn = self.connect(path)
+        self.conn = self.connect()
 
     def connect(self):
         return duckdb.connect(str(self.path))

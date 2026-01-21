@@ -22,7 +22,7 @@ class Txn:
     cash_amt: float
     fee_amt: float
 
-    ext_ref: str # manual csv, broker ingest, etc.
+    batch_id: str 
 
 @dataclass(frozen=True)
 class Asset:
@@ -34,7 +34,9 @@ class Asset:
 @dataclass
 class Portfolio:
     portfolio_id: int
-    name: str
+    portfolio_name: str
+    created_at: datetime 
+    updated_at: datetime
     base_ccy: str = "CAD"
 
 @dataclass

@@ -4,7 +4,6 @@ db wrapper
 - PortfolioManager: opens DB and finds/creates portfolios.
 - PortfolioStore: works with one portfolio_id.
 """
-from dataclasses import classmethod
 from datetime import datetime
 from dashboard.db.db_conn import DB, init_db
 from dashboard.db import queries as qry
@@ -19,51 +18,71 @@ class PortfolioManager:
         self.db = db
         self.conn = db.conn
 
-    @classmethod
-    def open(cls, db: DB):
-        init_db(db)
-        return cls(db)
+    def open(self):
+        """
+        Runs the db initialization statements in schema.sql, returns nothing
+        """
+        init_db(self.db)
 
-    def create_portfolio(self, name: str, base_ccy: str = "CAD"):
-        # Creates a new portfolio row and returns a store object for it.
-        # Basic MAX(id)+1 generation for portfolio_id
-
-        # Good enough for a single-user embedded DB.
-        id = self.conn.execute(qry.NEW_PORTFOLIO_ID).fetchone()[0]
+    def upsert_portfolio(self, name: str, base_ccy: str = "CAD"):
+        """
+        Updates or creates a portfolio based on a name.
+        - Uses MAX(id)+1 for new portfolios and returns created = true
+        - Searches db for given name and returns created = false if found
+        """
+        id, created = self.conn.execute(qry.CHECK_NEW_PORTFOLIO_ID, [name],).fetchone()
         self.conn.execute(qry.UPSERT_PORTFOLIO, [id, name, base_ccy],)
+        return created
+    
+    def list_portfolios(self):
+        """
+        Returns all portfolio rows from the database
+        """
+        return self.conn.execute(qry.LIST_PORTFOLIOS).fetchall()
 
-        return PortfolioStore(self.db, portfolio_name=name)
+    def open_portfolio_by_name(self, name: str):
+        """
+        Returns a PortfolioStore object with the same name as provided as an argument to the function
+        """
+        id = self.conn.execute(qry.GET_PORTFOLIO_BY_NAME, [name],).fetchone()[0]
+        if not id:
+            raise ValueError(f"Portfolio not found: {name}")
+        return PortfolioStore(self.db, int(id), name)
+    
+    def upsert_asset(self, asset_id: str, asset_type: str, ccy: str):
+        """
+        Add/update an asset in the database
+        """
+        self.conn.execute(qry.UPSERT_ASSET,[asset_id, asset_type, ccy],)
 
-    def open_portfolio(self, name: str):
-        return PortfolioStore(self.db, portfolio_name=name)
 
-
-class PortfolioStore:
+class PortfolioStore():
     """
     Actions in db for a single portfolio
     """
 
-    def __init__(self, db: DB, portfolio_name: str):
+    def __init__(self, db: DB, id: int, name: str):
         self.db = db
         self.conn = db.conn
-        self.portfolio = self._load_portfolio(portfolio_name)
+        self.portfolio_id = id
+        self.portfolio_name = name
 
-    def _load_portfolio(self, name: str):
-        row = self.conn.execute(qry.GET_PORTFOLIO_BY_NAME, [name],).fetchone()
+    def load_portfolio(self):
+        """
+        Returns a Portfolio object from ID -> To return more useful data later.
+        """
+        row = self.conn.execute(qry.GET_PORTFOLIO_BY_ID, [self.portfolio_id],).fetchone()
         if row is None:
-            raise ValueError(f"Portfolio not found: {name}")
+            raise ValueError(f"Portfolio not found: {self.portfolio_name}")
         return Portfolio(*row)
-
-    def _next_txn_id(self) -> int:
-        return self.conn.execute(qry.NEW_PORTFOLIO_ID).fetchone()[0]
-
-    def upsert_asset(self, asset_id: str, asset_type: str, ccy: str):
+    
+    def list_txns(self):
         """
-        Add/update an asset
+        list transactions for a portfolio. 
         """
-
-        self.conn.execute(qry.UPSERT_ASSET,[asset_id, asset_type, ccy],)
-
+        rows = self.conn.execute(qry.LIST_TXNS_FOR_PORTFOLIO, [self.portfolio_id]).fetchall()
+        return [Txn(*row) for row in rows]
+    
     def add_txn(
         self,
         time_stamp: datetime,
@@ -74,12 +93,12 @@ class PortfolioStore:
         ccy: str, 
         cash_amt: float,
         fee_amt: float,
-        ext_ref: str):
+        batch_id: str):
         """
         Insert a transaction row and return txn_id
         """
         return self.conn.execute(qry.INSERT_TXN,
-            [self.portfolio.portfolio_id,
+            [self.portfolio_id,
             time_stamp,
             txn_type,
             asset_id,
@@ -88,12 +107,4 @@ class PortfolioStore:
             ccy,
             cash_amt,
             fee_amt,
-            ext_ref],)
-
-
-    def list_txns(self):
-        """
-        list transactions for a portfolio
-        """
-        rows = self.conn.execute(qry.LIST_TXNS_FOR_PORTFOLIO, [self.portfolio.portfolio_id]).fetchall()
-        return [Txn(*row) for row in rows]
+            batch_id],)

@@ -1,0 +1,2 @@
+portfolio_name, time_stamp, txn_type, asset_id, qty, price, ccy, cash_amt, fee_amt
+TFSA, 2026-01-01 00:01:00, contribution,,,, CAD, 100,,

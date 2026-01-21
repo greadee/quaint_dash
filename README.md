@@ -2,11 +2,11 @@
 
 Phase 0: Project and CLI setup.
 
-Phase 1: Data Modelling
+Phase 1: Data Modelling and CLI refinement
     - DB schema, queries
     - Domain models and storage layer
-    - CSV import transaction batch
-    - Need: update CLI & testing
+    - CSV import transaction by batch and manually
+    - Need: See TODO.md
 
 ## Run 
 ```bash
