@@ -39,21 +39,35 @@ class PortfolioManager:
         Returns all portfolio rows from the database
         """
         return self.conn.execute(qry.LIST_PORTFOLIOS).fetchall()
+    
+
+    def open_portfolio_by_id(self, id: int):
+        """
+        Checks DB for existence of a portfolio by the same name as the parameter id
+        If not exists, raises a ValueError
+        If exists, returns a PortfolioStore object for the portfolio that was found
+        """
+        row = self.conn.execute(qry.GET_PORTFOLIO_BY_ID, [id],).fetchone()[0]
+        if not row:
+            raise ValueError(f"Portfolio not found: {id}")
+        return PortfolioStore(self.db, id, row['portfolio_name'])
 
     def open_portfolio_by_name(self, name: str):
         """
-        Returns a PortfolioStore object with the same name as provided as an argument to the function
+        Checks DB for existence of a portfolio by the same name as the parameter name
+        If not exists, raises a ValueError
+        If exists, returns a PortfolioStore object for the portfolio that was found        
         """
-        id = self.conn.execute(qry.GET_PORTFOLIO_BY_NAME, [name],).fetchone()[0]
-        if not id:
+        row = self.conn.execute(qry.GET_PORTFOLIO_BY_NAME, [name],).fetchone()[0]
+        if not row:
             raise ValueError(f"Portfolio not found: {name}")
-        return PortfolioStore(self.db, int(id), name)
+        return PortfolioStore(self.db, row['portfolio_id'], name)
     
-    def upsert_asset(self, asset_id: str, asset_type: str, ccy: str):
+    def upsert_asset(self, asset_id: str, asset_type: str, asset_subtype: str, ccy: str):
         """
         Add/update an asset in the database
         """
-        self.conn.execute(qry.UPSERT_ASSET,[asset_id, asset_type, ccy],)
+        self.conn.execute(qry.UPSERT_ASSET,[asset_id, asset_type, asset_subtype, ccy],)
 
 
 class PortfolioStore():
@@ -83,28 +97,4 @@ class PortfolioStore():
         rows = self.conn.execute(qry.LIST_TXNS_FOR_PORTFOLIO, [self.portfolio_id]).fetchall()
         return [Txn(*row) for row in rows]
     
-    def add_txn(
-        self,
-        time_stamp: datetime,
-        txn_type: str, 
-        asset_id: str,
-        qty: float,
-        price: float,
-        ccy: str, 
-        cash_amt: float,
-        fee_amt: float,
-        batch_id: str):
-        """
-        Insert a transaction row and return txn_id
-        """
-        return self.conn.execute(qry.INSERT_TXN,
-            [self.portfolio_id,
-            time_stamp,
-            txn_type,
-            asset_id,
-            qty,
-            price,
-            ccy,
-            cash_amt,
-            fee_amt,
-            batch_id],)
+    

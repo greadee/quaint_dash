@@ -48,7 +48,7 @@ def cli_loop():
             break
 
         if cmd == "":
-            print("Unknown command. Type 'help'.") 
+            print("Empty command. Type 'help'.") 
             continue
         
         if cmd in ("quit", "exit"): 
@@ -124,9 +124,9 @@ def cli_loop():
         if args[0] == "add-transaction":
             conn = manager.conn
             # Txn.portfolio_id
-            id_or_name = input("Portfolio ID or name: ")
+            id_or_name = input("Portfolio ID or name: ").strip()
             if not id_or_name.isdigit():
-               portfolio_id = conn.execute("SELECT portfolio_id FROM portfolio where name = ?", [id_or_name.strip()],)
+               portfolio_id = conn.execute("SELECT portfolio_id FROM portfolio where name = ?", [id_or_name],)
            
             # Txn.time_stamp
             time_stamp = datetime.now()
@@ -182,7 +182,7 @@ def cli_loop():
             # Txn.batch_id
             batch_id = importer.get_next_batch_id(portfolio_id, "manual-entry")
             
-            return manager.add_txn(portfolio_id, 
+            manager.add_txn(portfolio_id, 
                                 time_stamp, 
                                 txn_type, 
                                 asset_id, 
@@ -191,4 +191,7 @@ def cli_loop():
                                 txn_ccy, 
                                 cash_amt, 
                                 fee_amt, 
-                                batch_id)        
+                                batch_id)  
+
+        # all if statements == false - command not in available commands 
+        print("Unknown command. Type 'help'.")       

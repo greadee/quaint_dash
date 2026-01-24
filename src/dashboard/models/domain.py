@@ -14,13 +14,13 @@ class Txn:
     timestamp: datetime
     txn_type: str 
 
-    asset_id: str 
-    qty: float
-    price: float
+    asset_id: str | None
+    qty: float | None
+    price: float | None
 
     ccy: str 
-    cash_amt: float
-    fee_amt: float
+    cash_amt: float | None
+    fee_amt: float | None
 
     batch_id: str 
 

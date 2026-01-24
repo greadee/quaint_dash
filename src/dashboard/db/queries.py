@@ -7,10 +7,10 @@ sql query repository
 
 UPSERT_PORTFOLIO = """
 INSERT INTO portfolio (portfolio_id, portfolio_name, created_at, updated_at, base_ccy)
-VALUES (?, ?, now(), now(), ?)
+VALUES (?, ?, ?, ?, COALESCE(?, 'CAD'))
 ON CONFLICT (portfolio_id) DO UPDATE SET
   portfolio_name = excluded.portfolio_name,
-  base_ccy = excluded.base_ccy,
+  base_ccy = COALESCE(excluded.base_ccy, portfolo.base_ccy),
   updated_at = now();
 """
 
@@ -67,35 +67,6 @@ WHERE asset_id = ?;
 
 #               transaction queries
 
-INSERT_TXN = """
-INSERT INTO txn (
-  portfolio_id, 
-  time_stamp, 
-  txn_type, 
-  asset_id, 
-  qty, 
-  price, 
-  ccy, 
-  cash_amt, 
-  fee_amt, 
-  batch_id
-)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-RETURNING txn_id;
-"""
-
-GET_NEXT_BATCH = """ 
-WITH next_batch AS (
-  SELECT COALESCE(MAX(batch_id), 0) + 1 AS batch_id
-  FROM import_batch
-  WHERE portfolio_id = ?
-)
-INSERT INTO import_batch (portfolio_id, batch_id, batch_type)
-SELECT ?, next_batch.batch_id, ?
-FROM next_batch
-RETURNING batch_id;
-"""
-
 INSERT_TXN_BATCH = """
 INSERT INTO txn (
   portfolio_id, 
@@ -120,7 +91,7 @@ SELECT
     n.cash_amt,
     n.fee_amt, 
     ? As batch_id
-FROM norm_txn_csv n
+FROM norm_txn n
 JOIN portfolio p
   ON p.portfolio_name = n.portfolio_name
   """
@@ -143,17 +114,32 @@ WHERE portfolio_id = ?
 ORDER BY time_stamp, txn_id;
 """
 
+# import batch queries
+
+GET_NEXT_BATCH_ID = """
+SELECT
+  last_value + increment_by AS next_batch_id
+FROM duckdb_sequences
+WHERE sequence_name = 'seq_batch_id';
+"""
+
+INSERT_IMPORT_BATCH = """
+INSERT INTO import_batch (batch_type) 
+VALUES (?) 
+RETURNING import_time;
+"""
+
 #               validation queries
 
 STAGE_TXN_CSV = """
-DROP TABLE IF EXISTS stg_txn_csv;
-CREATE TEMP TABLE stg_txn_csv AS
+DROP TABLE IF EXISTS stg_txn;
+CREATE TEMP TABLE stg_txn AS
 SELECT * FROM read_csv_auto(
   ?,
   delim=?,
   header=true,
   columns={
-    'portfolio_name': 'VARCHAR',
+    'portfolio_id': 'VARCHAR',
     'time_stamp': 'VARCHAR',
     'txn_type': 'VARCHAR',
     'asset_id': 'VARCHAR',
@@ -166,11 +152,27 @@ SELECT * FROM read_csv_auto(
 );
 """
 
-NORMALIZE_TXN_CSV = """
-DROP TABLE IF EXISTS norm_txn_csv;
-CREATE TEMP TABLE norm_txn_csv AS
+STAGE_TXN_MANUAL = """
+DROP TABLE IF EXISTS stg_txn;
+CREATE TEMP TABLE stg_txn (
+    portfolio_name TEXT,
+    time_stamp TEXT,
+    txn_type TEXT,
+    asset_id TEXT,
+    qty TEXT,
+    price TEXT,
+    ccy TEXT,
+    cash_amt TEXT,
+    fee_amt TEXT
+);
+INSERT INTO stg_txn VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+"""
+
+NORMALIZE_TXN = """
+DROP TABLE IF EXISTS norm_stg_txn;
+CREATE TEMP TABLE norm_stg_txn AS
 SELECT 
-  TRIM(portfolio_name) AS portfolio_name,
+  TRIM(portfolio_id) AS portfolio_id,
 
   try_cast(TRIM(time_stamp) AS TIMESTAMP) AS time_stamp,
 
@@ -203,76 +205,77 @@ SELECT
     WHEN try_cast(TRIM(fee_amt) AS DOUBLE) IS NULL THEN -1
     ELSE CAST(TRIM(fee_amt) AS DOUBLE)
   END AS fee_amt
-FROM stg_txn_csv;
+FROM stg_txn;
 """
+
 
 # Validation suite
 
-CHECK_BAD_NAME = """
+VALIDATE_STAGED_NAME = """
 SELECT COUNT(*) 
 FROM norm_txn_csv
 WHERE portfolio_name IS NULL 
   OR portfolio_name = ''
 """
 
-CHECK_BAD_TIMESTAMP = """
+VALIDATE_STAGED_TIMESTAMP = """
 SELECT COUNT(*)
 FROM norm_txn_csv
 WHERE time_stamp IS NULL;
 """
 
-CHECK_BAD_TYPE = """
+VALIDATE_STAGED_TYPE = """
 SELECT COUNT(*)
 FROM norm_txn_csv
 WHERE txn_type IS NULL
   OR txn_type NOT IN ('contribution','withdrawal','dividend','interest','buy','sell');
 """
 
-CHECK_BAD_ASSET = """
+VALIDATE_STAGED_ASSET = """
 SELECT COUNT(*)
 FROM norm_txn_csv
 WHERE asset_id IS NULL
   AND txn_type IN ('buy', 'sell', 'dividend')
 """
 
-CHECK_BAD_QTY = """
+VALIDATE_STAGED_QTY = """
 SELECT COUNT(*)
 FROM norm_txn_csv
 WHERE qty = -1;
 """
 
-CHECK_BAD_PRICE= """
+VALIDATE_STAGED_PRICE= """
 SELECT COUNT(*)
 FROM norm_txn_csv
 WHERE price = -1;
 """
 
-CHECK_BAD_CCY = """
+VALIDATE_STAGED_CCY = """
 SELECT COUNT(*)
 FROM norm_txn_csv
 WHERE ccy IS NULL 
   OR length(ccy) <> 3;
 """
 
-CHECK_BAD_CASH = """
+VALIDATE_STAGED_CASH = """
 SELECT COUNT(*)
 FROM norm_txn_csv
 WHERE cash_amt = -1;
 """
 
-CHECK_BAD_FEE = """
+VALIDATE_STAGED_FEE = """
 SELECT COUNT(*)
 FROM norm_txn_csv
 WHERE fee_amt = -1;
 """
 
 VALIDATE_TXN_SUITE = [
-    CHECK_BAD_NAME,
-    CHECK_BAD_TIMESTAMP,
-    CHECK_BAD_TYPE,
-    CHECK_BAD_ASSET,
-    CHECK_BAD_QTY,
-    CHECK_BAD_PRICE,
-    CHECK_BAD_CCY,
-    CHECK_BAD_CASH,
-    CHECK_BAD_FEE]
+    VALIDATE_STAGED_NAME,
+    VALIDATE_STAGED_TIMESTAMP,
+    VALIDATE_STAGED_TYPE,
+    VALIDATE_STAGED_ASSET,
+    VALIDATE_STAGED_QTY,
+    VALIDATE_STAGED_PRICE,
+    VALIDATE_STAGED_CCY,
+    VALIDATE_STAGED_CASH,
+    VALIDATE_STAGED_FEE]

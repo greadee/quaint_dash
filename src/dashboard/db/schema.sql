@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS portfolio (
     portfolio_name TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT now(), 
     updated_at TIMESTAMP DEFAULT now(),
-    base_ccy TEXT NOT NULL DEFAULT 'CAD',
+    base_ccy TEXT NOT NULL DEFAULT 'CAD'
 );
 
 CREATE TABLE IF NOT EXISTS asset (
@@ -47,17 +47,16 @@ CREATE TABLE IF NOT EXISTS txn (
     FOREIGN KEY (asset_id) REFERENCES asset(asset_id)
 );
 
+CREATE SEQUENCE IF NOT EXISTS seq_batch_id;
+
 CREATE TABLE IF NOT EXISTS import_batch (
-    portfolio_id BIGINT NOT NULL, 
-    batch_id BIGINT NOT NULL, 
+    batch_id BIGINT PRIMARY KEY DEFAULT nextval('seq_batch_id'), 
     batch_type TEXT NOT NULL, -- manual-entry, csv-import, broker-ingest
     import_time TIMESTAMP NOT NULL DEFAULT NOW(),
 
-    PRIMARY KEY (portfolio_id, batch_id)
 );
 
 --CREATE INDEX IF NOT EXISTS portfolioTxn_by_time ON txn(portfolio_id, time_stamp);
 CREATE INDEX IF NOT EXISTS portolioTxn_by_asset ON txn(portfolio_id, asset_id);
-CREATE UNIQUE INDEX IF NOT EXISTS unq_batch_id ON txn(portfolio_id, batch_id);
 
 COMMIT; 
