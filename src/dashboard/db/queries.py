@@ -208,7 +208,6 @@ SELECT
 FROM stg_txn;
 """
 
-
 # Validation suite
 
 VALIDATE_STAGED_NAME = """

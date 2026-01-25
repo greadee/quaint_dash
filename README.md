@@ -1,11 +1,11 @@
 # Investment Dashboard Project
 
-Phase 0: Project and CLI setup.
+### Phase 0: Project and CLI setup.
 
-Phase 1: Data Modelling and CLI refinement
+### Phase 1: Data Modelling and CLI refinement
     - DB schema, queries
     - Domain models and storage layer
-    - CSV import transaction by batch and manually
+    - Normalized and validated  transaction import for csv and manual entry
     - Need: See TODO.md
 
 ## Run 
