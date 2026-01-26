@@ -1,6 +1,6 @@
 
 from datetime import datetime
-from dashboard.services.import_csv import TxnImporterCSV
+from dashboard.services.importer import TxnImporterCSV
 from dashboard.db.db_conn import DB, init_db
 from dashboard.models.storage import PortfolioManager
 
@@ -91,7 +91,7 @@ def cli_loop():
                 portfolio_name = args[1]
             except IndexError:
                 print("Missing required number of arguments (2) for command open-portfolio.")
-            except: 
+            except Exception: 
                 print("Unknown error.")
 
             portfolio_store = manager.open_portfolio_by_name(portfolio_name)
@@ -103,7 +103,7 @@ def cli_loop():
                 csv_path = args[1]
             except IndexError:
                 print("Missing required number of arguments (2) for command import-transaction-batch.")
-            except: 
+            except Exception: 
                 print("Unknown error.")
             import_data = importer.import_csv(csv_path)
             

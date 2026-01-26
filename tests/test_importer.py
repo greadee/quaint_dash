@@ -120,7 +120,7 @@ def test_import_mul_port_batch(test_manager: PortfolioManager):
         "SELECT qty, price FROM txn WHERE portfolio_name = ? AND asset_id = ?", ["test 1", "AVUV"],
         ).fetchone()[0]
     for val in qty_price_tuple:
-        assert type(val) == float
+        assert type(val) is float
     
     qty_price_tuple = test_manager.conn.execute( 
         "SELECT qty, price FROM txn WHERE portfolio_name = ? AND cash_amt = ?", ["test 2", 1919.0],
@@ -131,7 +131,7 @@ def test_import_mul_port_batch(test_manager: PortfolioManager):
         "SELECT cash_amt, fee_amt FROM txn WHERE portfolio_name = ? AND asset_id = ?", ["test 2", 1919.0],
         ).fetchone()[0]
     for amt in amt_tuple: 
-        assert type(amt) == float
+        assert type(amt) is float
     
 
 def test_manual_txn_upd(test_manager: PortfolioManager):

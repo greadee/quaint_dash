@@ -232,7 +232,7 @@ class TxnImporterCSV(TxnImporter):
         Ensures that the staged transaction table derived from the csv file has all required columns
         """
         conn = self.manager.conn
-        cols = [r[0] for r in conn.execute(f"DESCRIBE stg_txn").fetchall()]
+        cols = [r[0] for r in conn.execute("DESCRIBE stg_txn").fetchall()]
         missing = [c for c in REQUIRED_CSV_COLUMNS if c not in cols]
         if missing:
             raise ValueError(f"CSV missing required columns: {missing}. Found columns: {cols}")
@@ -254,7 +254,7 @@ class TxnImporterCSV(TxnImporter):
         conn = self.manager.conn
         imp = ImportData
    
-        portfolio_name_in_batch = list(r[0] for r in conn.execute(f"SELECT DISTINCT portfolio_name FROM norm_txn_csv").fetchall())
+        portfolio_name_in_batch = list(r[0] for r in conn.execute("SELECT DISTINCT portfolio_name FROM norm_stg_txn").fetchall())
 
         n_txn_before = conn.execute("SELECT COUNT(*) FROM txn").fetchone()[0]
 

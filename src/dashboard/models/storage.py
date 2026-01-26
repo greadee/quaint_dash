@@ -4,7 +4,6 @@ db wrapper
 - PortfolioManager: opens DB and finds/creates portfolios.
 - PortfolioStore: works with one portfolio_id.
 """
-from datetime import datetime
 from dashboard.db.db_conn import DB, init_db
 from dashboard.db import queries as qry
 from dashboard.models.domain import Portfolio, Txn
