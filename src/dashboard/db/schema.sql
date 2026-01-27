@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS portfolio (
     portfolio_name TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT now(), 
     updated_at TIMESTAMP DEFAULT now(),
-    base_ccy TEXT NOT NULL DEFAULT 'CAD'
+    base_ccy TEXT DEFAULT 'CAD'
 );
 
 CREATE TABLE IF NOT EXISTS asset (
@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS txn (
     txn_type TEXT NOT NULL,
 
     -- for asset transactions
-    asset_id TEXT,              -- 
+    asset_id TEXT,              
     qty DOUBLE PRECISION,
     price DOUBLE PRECISION,
     
@@ -44,7 +44,8 @@ CREATE TABLE IF NOT EXISTS txn (
     batch_id BIGINT NOT NULL,
 
     FOREIGN KEY (portfolio_id) REFERENCES portfolio(portfolio_id),
-    FOREIGN KEY (asset_id) REFERENCES asset(asset_id)
+    -- require FK: asset_id in Phase 2 when we ingest asset data
+    --FOREIGN KEY (asset_id) REFERENCES asset(asset_id)
 );
 
 CREATE SEQUENCE IF NOT EXISTS seq_batch_id;

@@ -1,0 +1,5 @@
+portfolio_name,time_stamp,txn_type,asset_id,qty,price,ccy,cash_amt,fee_amt
+test 1,2026-01-03 10:00:00,buy,AVUV,5,600,USD,,
+test 2,2026-01-03 11:00:00,buy,MSFT,3,400,USD,,1
+test 1,2026-01-04 09:00:00,dividend,MSFT,3,1,USD,,1
+test 2,2026-01-04 09:27:27,withdrawal,,,,CAD,1919,1,

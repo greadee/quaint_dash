@@ -4,6 +4,7 @@ db wrapper
 - PortfolioManager: opens DB and finds/creates portfolios.
 - PortfolioStore: works with one portfolio_id.
 """
+from datetime import datetime
 from dashboard.db.db_conn import DB, init_db
 from dashboard.db import queries as qry
 from dashboard.models.domain import Portfolio, Txn
@@ -23,14 +24,28 @@ class PortfolioManager:
         """
         init_db(self.db)
 
+    def check_new_portfolio_id(self, name: str):
+        id, created = self.conn.execute(qry.CHECK_NEW_PORTFOLIO_ID, [name],).fetchone()
+        return id, created
+    
     def upsert_portfolio(self, name: str, base_ccy: str = "CAD"):
         """
-        Updates or creates a portfolio based on a name.
+        User initiated version: Updates or creates a portfolio based on a name.
         - Uses MAX(id)+1 for new portfolios and returns created = true
         - Searches db for given name and returns created = false if found
         """
-        id, created = self.conn.execute(qry.CHECK_NEW_PORTFOLIO_ID, [name],).fetchone()
-        self.conn.execute(qry.UPSERT_PORTFOLIO, [id, name, base_ccy],)
+        id, created = self.check_new_portfolio_id(name)
+        self.conn.execute(qry.UPSERT_PORTFOLIO_USER, [id, name, base_ccy],)
+        return created
+    
+    def _upsert_portfolio_import(self, id: int, name: str, created_at: datetime, updated_at: datetime):
+        """
+        Import initiated version: Updates or creates a portfolio based on a name.
+        - Uses MAX(id)+1 for new portfolios and returns created = true
+        - Searches db for given name and returns created = false if found
+        """
+        _, created = self.check_new_portfolio_id(name)
+        self.conn.execute(qry.UPSERT_PORTFOLIO_IMPORT, [id, name, created_at, updated_at],)
         return created
     
     def list_portfolios(self):

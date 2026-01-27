@@ -1,9 +1,8 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path 
 from dashboard.models.storage import PortfolioManager
-from dashboard.models.domain import Txn
 from dashboard.db import queries as qry
 
 REQUIRED_CSV_COLUMNS = [
@@ -17,6 +16,22 @@ REQUIRED_CSV_COLUMNS = [
     "cash_amt",
     "fee_amt"
 ]
+
+@dataclass    
+class TestTxn:
+    portfolio_id: int
+    portfolio_name: str  
+    time_stamp: datetime
+    txn_type: str 
+
+    asset_id: str | None
+    qty: float | None
+    price: float | None
+
+    ccy: str 
+    cash_amt: float | None
+    fee_amt: float | None
+
 
 @dataclass(frozen=True)
 class PortfolioImportData:
@@ -74,8 +89,8 @@ class TxnImporter(ABC):
                                           returns a ImportData object detailing the import batch
     """
     manager: PortfolioManager
-    batch_id: int | None
-    import_time: datetime | None
+    batch_id: int | None = field(default=None, init=False)
+    import_time: datetime | None = field(default=None, init=False)
 
     def run(self):
         """
@@ -87,6 +102,7 @@ class TxnImporter(ABC):
         self._normalize_txn_stage()
         self._validate_txn_stage()
         return self._handle_import()
+    
 
     def _normalize_txn_stage(self):
         """
@@ -149,24 +165,22 @@ class TxnImporterManual(TxnImporter):
               abstract _handle_import() - inserts the validated normalized table into the txn table
                                           returns a ImportData object detailing the import batch
     """
-    txn: Txn
-    create_portfolio: bool
-    create_portfolio_name: str | None
+    txn: TestTxn
+    create_portfolio: bool | None = None
     batch_type: str = "manual-entry"
-
 
     def _append_batch_table(self):
         """
         Appends import batch to database and returns tuple (batch_id, import_time)
         """
-        row = self.manager.conn.execute(qry.INSERT_IMPORT_BATCH, [self.batch_type]).fetchall()
-        return (row['batch_id'], row['import_time'])
+        row = self.manager.conn.execute(qry.INSERT_IMPORT_BATCH, [self.batch_type],).fetchone()
+        return (row[0], row[1])
 
     def _stage_import(self):
         """
         Insert transaction values into staging table as strings for normalization and type casting in database
         """
-        self.manager.conn.execute(qry.STAGE_TXN_MANUAL)
+        self.manager.conn.execute(qry.STAGE_TXN_MANUAL, list(vars(self.txn).values())[1:],)
       
     def _handle_import(self):
         """
@@ -175,26 +189,19 @@ class TxnImporterManual(TxnImporter):
         :param self: Description
         """
         conn = self.manager.conn
-        p_imp = PortfolioImportData
 
-        p_imp.batch_id = self.batch_id
-        fields = list(vars(self.txn).values()).append(self.batch_id)
-        conn.execute(qry.INSERT_TXN_BATCH, fields,)
+        p_id = self.txn.portfolio_id
+        p_name = self.txn.portfolio_name
+        created = self.create_portfolio
+        batch_id = self.batch_id
 
-        p_imp.portfolio_id = Txn.portfolio_id
+        self.manager._upsert_portfolio_import(p_id, p_name, self.import_time, self.import_time)
 
-        if not self.create_portfolio:
-            row = conn.execute(qry.GET_PORTFOLIO_BY_ID, [p_imp.portfolio_id],).fetchone()[0]
-            p_imp.portfolio_name = row['portfolio_name'] 
-            p_imp.created = False
-            conn.execute(qry.UPSERT_PORTFOLIO, [p_imp.portfolio_id, p_imp.portfolio_name, self.import_time],)
+        conn.execute(qry.INSERT_TXN_BATCH, [batch_id],)
 
-        else: 
-            p_imp.portfolio_name = self.create_portfolio_name
-            p_imp.created = True
-            conn.execute(qry.UPSERT_PORTFOLIO, [p_imp.portfolio_id, p_imp.portfolio_name, self.import_time, self.import_time],)
-
-        return ImportData(p_imp.batch_id, "manual-entry", 1, [p_imp])
+        p_imp = PortfolioImportData(p_id, p_name, created, batch_id) 
+    
+        return ImportData(batch_id, "manual-entry", 1, [p_imp])
         
 
 @dataclass
@@ -224,8 +231,8 @@ class TxnImporterCSV(TxnImporter):
         """
         Appends import batch to database and returns tuple (batch_id, import_time)
         """
-        row = self.manager.conn.execute(qry.INSERT_IMPORT_BATCH, [self.batch_type]).fetchall()
-        return (row['batch_id'], row['import_time'])
+        row = self.manager.conn.execute(qry.INSERT_IMPORT_BATCH, [self.batch_type],).fetchone()
+        return (row[0], row[1])
 
     def _validate_csv_cols(self):
         """
@@ -242,7 +249,7 @@ class TxnImporterCSV(TxnImporter):
         Insert transaction csv columns into staging table as strings for normalization and type casting in database
         """
         conn = self.manager.conn
-        conn.execute(qry.STAGE_TXN_CSV, [self.csv_path, self.delim],)
+        conn.execute(qry.STAGE_TXN_CSV, [str(self.csv_path), self.delim],)
         self._validate_csv_cols()
 
     def _handle_import(self): 
@@ -252,32 +259,29 @@ class TxnImporterCSV(TxnImporter):
         :param self: Description
         """
         conn = self.manager.conn
-        imp = ImportData
-   
-        portfolio_name_in_batch = list(r[0] for r in conn.execute("SELECT DISTINCT portfolio_name FROM norm_stg_txn").fetchall())
+        p_aff = []
+
+        portfolios_aff = list(r[0] for r in conn.execute("SELECT DISTINCT portfolio_name FROM norm_stg_txn").fetchall())
 
         n_txn_before = conn.execute("SELECT COUNT(*) FROM txn").fetchone()[0]
 
-        for p_name in portfolio_name_in_batch:
-            p_imp = PortfolioImportData
-            p_imp.portfolio_name = p_name
-            p_imp.created = self.store.upsert_portfolio(p_name)
+        for p_name in portfolios_aff:
+            
+            batch_id = self.batch_id
 
-            portfolio_obj = self.store.open_portfolio_by_name(p_name).load_portfolio()
-            p_imp.portfolio_id = portfolio_obj.portfolio_id
-            batch_id = self._get_batch_id_for_stage
+            p_id, create = self.manager.check_new_portfolio_id(p_name)
+            self.manager._upsert_portfolio_import(p_id, p_name, self.import_time, self.import_time)
+
+            p_imp = PortfolioImportData(p_id, p_name, create, batch_id)
+            p_aff.append(p_imp)
             
-            p_imp.batch_id = batch_id
-            imp.portfolios_affected.append(p_imp)
-            
-            if not p_imp.created:
-                conn.execute(qry.UPSERT_PORTFOLIO, [p_imp.portfolio_id, p_imp.portfolio_name, self.import_time],)
-            else:
-                conn.execute(qry.UPSERT_PORTFOLIO, [p_imp.portfolio_id, p_imp.portfolio_name, self.import_time, self.import_time],)
 
         conn.execute(qry.INSERT_TXN_BATCH, [self.batch_id],)
         
         n_txn_after = conn.execute("SELECT COUNT(*) FROM txn").fetchone()[0]
-        imp.inserted_rows  = n_txn_after - n_txn_before
+        inserted_rows  = n_txn_after - n_txn_before
     
-        return imp
+        return ImportData(batch_id, self.batch_type, inserted_rows, p_aff)
+
+
+    

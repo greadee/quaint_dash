@@ -11,7 +11,7 @@ from datetime import datetime
 class Txn:
     txn_id: int 
     portfolio_id: str  
-    timestamp: datetime
+    time_stamp: datetime
     txn_type: str 
 
     asset_id: str | None

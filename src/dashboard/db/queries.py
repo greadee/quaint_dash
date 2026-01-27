@@ -5,13 +5,20 @@ sql query repository
 
 #               portfolio queries
 
-UPSERT_PORTFOLIO = """
-INSERT INTO portfolio (portfolio_id, portfolio_name, created_at, updated_at, base_ccy)
-VALUES (?, ?, ?, ?, COALESCE(?, 'CAD'))
+UPSERT_PORTFOLIO_USER = """
+INSERT INTO portfolio (portfolio_id, portfolio_name, base_ccy)
+VALUES (?, ?, UPPER(?))
 ON CONFLICT (portfolio_id) DO UPDATE SET
   portfolio_name = excluded.portfolio_name,
-  base_ccy = COALESCE(excluded.base_ccy, portfolo.base_ccy),
-  updated_at = now();
+  base_ccy = excluded.base_ccy
+"""
+
+UPSERT_PORTFOLIO_IMPORT = """
+INSERT INTO portfolio (portfolio_id, portfolio_name, created_at, updated_at)
+VALUES (?, ?, ?, ?)
+ON CONFLICT (portfolio_id) DO UPDATE SET
+  portfolio_name = excluded.portfolio_name,
+  updated_at = excluded.updated_at;
 """
 
 GET_PORTFOLIO_BY_NAME = """
@@ -47,6 +54,12 @@ SELECT
 FROM m
 LEFT JOIN portfolio p
   ON p.portfolio_name = ?;
+"""
+
+CHECK_PORTFOLIO_EXISTS = """
+SELECT portfolio_id IS NULL 
+FROM portfolio
+WHERE portfolio_name = ?
 """
 
 #               asset queries
@@ -91,9 +104,9 @@ SELECT
     n.cash_amt,
     n.fee_amt, 
     ? As batch_id
-FROM norm_txn n
+FROM norm_stg_txn n
 JOIN portfolio p
-  ON p.portfolio_name = n.portfolio_name
+  ON p.portfolio_name = n.portfolio_name;
   """
 
 LIST_TXNS_FOR_PORTFOLIO = """
@@ -116,17 +129,10 @@ ORDER BY time_stamp, txn_id;
 
 # import batch queries
 
-GET_NEXT_BATCH_ID = """
-SELECT
-  last_value + increment_by AS next_batch_id
-FROM duckdb_sequences
-WHERE sequence_name = 'seq_batch_id';
-"""
-
 INSERT_IMPORT_BATCH = """
-INSERT INTO import_batch (batch_type) 
-VALUES (?) 
-RETURNING import_time;
+INSERT INTO import_batch (batch_type, import_time) 
+VALUES (?, now()) 
+RETURNING batch_id, import_time;
 """
 
 #               validation queries
@@ -139,7 +145,7 @@ SELECT * FROM read_csv_auto(
   delim=?,
   header=true,
   columns={
-    'portfolio_id': 'VARCHAR',
+    'portfolio_name': 'VARCHAR',
     'time_stamp': 'VARCHAR',
     'txn_type': 'VARCHAR',
     'asset_id': 'VARCHAR',
@@ -172,7 +178,7 @@ NORMALIZE_TXN = """
 DROP TABLE IF EXISTS norm_stg_txn;
 CREATE TEMP TABLE norm_stg_txn AS
 SELECT 
-  TRIM(portfolio_id) AS portfolio_id,
+  TRIM(portfolio_name) AS portfolio_name,
 
   try_cast(TRIM(time_stamp) AS TIMESTAMP) AS time_stamp,
 
@@ -212,59 +218,59 @@ FROM stg_txn;
 
 VALIDATE_STAGED_NAME = """
 SELECT COUNT(*) 
-FROM norm_txn_csv
+FROM norm_stg_txn
 WHERE portfolio_name IS NULL 
   OR portfolio_name = ''
 """
 
 VALIDATE_STAGED_TIMESTAMP = """
 SELECT COUNT(*)
-FROM norm_txn_csv
+FROM norm_stg_txn
 WHERE time_stamp IS NULL;
 """
 
 VALIDATE_STAGED_TYPE = """
 SELECT COUNT(*)
-FROM norm_txn_csv
+FROM norm_stg_txn
 WHERE txn_type IS NULL
   OR txn_type NOT IN ('contribution','withdrawal','dividend','interest','buy','sell');
 """
 
 VALIDATE_STAGED_ASSET = """
 SELECT COUNT(*)
-FROM norm_txn_csv
+FROM norm_stg_txn
 WHERE asset_id IS NULL
   AND txn_type IN ('buy', 'sell', 'dividend')
 """
 
 VALIDATE_STAGED_QTY = """
 SELECT COUNT(*)
-FROM norm_txn_csv
+FROM norm_stg_txn
 WHERE qty = -1;
 """
 
 VALIDATE_STAGED_PRICE= """
 SELECT COUNT(*)
-FROM norm_txn_csv
+FROM norm_stg_txn
 WHERE price = -1;
 """
 
 VALIDATE_STAGED_CCY = """
 SELECT COUNT(*)
-FROM norm_txn_csv
+FROM norm_stg_txn
 WHERE ccy IS NULL 
   OR length(ccy) <> 3;
 """
 
 VALIDATE_STAGED_CASH = """
 SELECT COUNT(*)
-FROM norm_txn_csv
+FROM norm_stg_txn
 WHERE cash_amt = -1;
 """
 
 VALIDATE_STAGED_FEE = """
 SELECT COUNT(*)
-FROM norm_txn_csv
+FROM norm_stg_txn
 WHERE fee_amt = -1;
 """
 
