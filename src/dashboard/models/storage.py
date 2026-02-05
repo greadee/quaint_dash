@@ -48,12 +48,15 @@ class PortfolioManager:
         self.conn.execute(qry.UPSERT_PORTFOLIO_IMPORT, [id, name, created_at, updated_at],)
         return created
     
-    def list_portfolios(self):
+    def list_portfolios(self, N:int|None):
         """
         Returns all portfolio rows from the database
         """
-        return self.conn.execute(qry.LIST_PORTFOLIOS).fetchall()
-    
+        rows = self.conn.execute(qry.LIST_PORTFOLIOS).fetchall()
+        if not N:
+            return rows
+        else:
+            return rows[:N]
 
     def open_portfolio_by_id(self, id: int):
         """
@@ -61,10 +64,10 @@ class PortfolioManager:
         If not exists, raises a ValueError
         If exists, returns a PortfolioStore object for the portfolio that was found
         """
-        row = self.conn.execute(qry.GET_PORTFOLIO_BY_ID, [id],).fetchone()[0]
-        if not row:
+        name = self.conn.execute(qry.GET_PORTFOLIO_BY_ID, [id],).fetchone()[0]
+        if not name:
             raise ValueError(f"Portfolio not found: {id}")
-        return PortfolioStore(self.db, id, row['portfolio_name'])
+        return PortfolioStore(self.db, id, name)
 
     def open_portfolio_by_name(self, name: str):
         """
@@ -72,10 +75,10 @@ class PortfolioManager:
         If not exists, raises a ValueError
         If exists, returns a PortfolioStore object for the portfolio that was found        
         """
-        row = self.conn.execute(qry.GET_PORTFOLIO_BY_NAME, [name],).fetchone()[0]
-        if not row:
+        id = self.conn.execute(qry.GET_PORTFOLIO_BY_NAME, [name],).fetchone()[0]
+        if not id:
             raise ValueError(f"Portfolio not found: {name}")
-        return PortfolioStore(self.db, row['portfolio_id'], name)
+        return PortfolioStore(self.db, id, name)
     
     def upsert_asset(self, asset_id: str, asset_type: str, asset_subtype: str, ccy: str):
         """
@@ -104,11 +107,15 @@ class PortfolioStore():
             raise ValueError(f"Portfolio not found: {self.portfolio_name}")
         return Portfolio(*row)
     
-    def list_txns(self):
+    def list_txns(self, N:int|None):
         """
         list transactions for a portfolio. 
         """
         rows = self.conn.execute(qry.LIST_TXNS_FOR_PORTFOLIO, [self.portfolio_id]).fetchall()
-        return [Txn(*row) for row in rows]
+        if not N:
+            return rows 
+        else: 
+            return rows[:N]
+        
     
     

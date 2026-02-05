@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path 
-from dashboard.models.storage import PortfolioManager
+from dashboard.models.storage import PortfolioManager, PortfolioStore
 from dashboard.db import queries as qry
 
 REQUIRED_CSV_COLUMNS = [
@@ -222,7 +222,6 @@ class TxnImporterCSV(TxnImporter):
      abstract _handle_import()     - inserts the validated normalized table into the txn table
                                      returns a ImportData object detailing the import batch
     """
-
     csv_path: Path
     delim: str = ","
     batch_type: str = "csv-import"
