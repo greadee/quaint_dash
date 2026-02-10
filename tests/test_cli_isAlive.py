@@ -1,3 +1,7 @@
+"""root/tests/
+cli smoke test
+"""
+
 from dashboard.cli import cli_loop
 
 def test_cli_isAlive(monkeypatch, capsys):
@@ -8,10 +12,13 @@ def test_cli_isAlive(monkeypatch, capsys):
     '''
     inputs = iter(["exit"])
     monkeypatch.setattr("builtins.input", lambda _: next(inputs))
-
-    cli_loop()
+    
+    try:
+        cli_loop()
+    except SystemExit: # allow for reading sys.out after SystemExit
+        pass
 
     out = capsys.readouterr().out
 
-    assert "Portfolio Dashboard" in out 
+    assert "=== Dashboard ===" in out 
     assert "Goodbye." in out

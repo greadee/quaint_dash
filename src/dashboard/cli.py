@@ -1,7 +1,11 @@
-
+"""~/
+program entry point
+- dispatches commands to DashboardView -> DashboardManager
+- handles ValueErrors raised by DashboardView and or DashboardManager
+"""
 from dashboard.db.db_conn import DB, init_db
-from dashboard.models.storage import PortfolioManager
-from dashboard.models.cli_view import View, DashboardView, PortfolioView
+from dashboard.models.storage import DashboardManager
+from dashboard.models.cli_view import View, DashboardView
 
 def cli_loop():
     """
@@ -27,14 +31,18 @@ def cli_loop():
     """
     db = DB("tests/tmp/test_db.db")
     init_db(db)
-    manager = PortfolioManager(db)
+    manager = DashboardManager(db)
     view: View = DashboardView(manager)
 
     while True:
         view.default_display()
         line = input(view.prompt_input())
         if not line: continue 
-        next_view = view.handle_input(line)
+        try:
+            next_view = view.handle_input(line)
+        except ValueError as e:
+                print(e)
+                next_view = view
 
-        if isinstance(next_view, PortfolioView):
-            view = next_view
+        if isinstance(next_view, View):
+            view = next_view 

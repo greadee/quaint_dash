@@ -1,9 +1,17 @@
+"""~/models/
+dispatched by cli to handle user commands and communicate with Manager/Importer instances
+
+_NoExitParser: argparse.ArgumentParser object that raises ValueError instead of SystemError
+View: abstract base class for CLI Views
+DashboardView: abstract parent of PortfolioView
+PortfolioView: abstract child of DashboardView
+"""
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 import argparse
 import shlex
-from dashboard.models.storage import PortfolioManager, PortfolioStore
-from dashboard.services.importer import TxnImporterManual, TxnImporterCSV
+from dashboard.models.storage import DashboardManager, PortfolioManager
+from dashboard.services.importer import TxnImporterManual, TxnImporterCSV, tTestTxn
 
 class _NoExitParser(argparse.ArgumentParser):
     """
@@ -12,7 +20,6 @@ class _NoExitParser(argparse.ArgumentParser):
     """
     def error(self, message):
         """
-        Called by argparse objects when encountering invalid input.
         Convert argparse error into an exception so the CLI can continue after error.
         """
     
@@ -44,7 +51,7 @@ class View(ABC):
     The CLI loop holds a 'View' instance and loops through the following:
     1. call default_display() to show which view we are in and the available commands.
     2. call prompt_input() to display a string prompting user input.
-    * User input is grabbed in cli.py, and passed in as a parameter to handle_input().* 
+        * User input is grabbed in cli.py, and passed in as a parameter to handle_input().* 
     3. call handle_input() on the user input to process the command.
     4. performs the necessary command, and if the command involves switching views, opens the next view.
     
@@ -88,9 +95,9 @@ class DashboardView(View):
     - Owns "dash-level" parsers.
     - Create and return a PortofolioView object when 'open <portfolio_name>' command is called.
 
-    Requires access to PortofolioManager object for the execution of commands on the database.
+    Requires access to DashboardManager object for the execution of commands on the database.
     """
-    access: PortfolioManager
+    access: DashboardManager
     cmds: dict[str, argparse.ArgumentParser] = field(default_factory=dict)
 
     def __post_init__(self):
@@ -106,7 +113,15 @@ class DashboardView(View):
         Print the default header/help for the view.
         """
         print("\n=== Dashboard ===")
-        print("Commands: list [n], create <name>, open <name>, import <csv_path>, help, quit")
+        print("""   
+            Commands: 
+                list <item-type> [item-filter] [n], 
+                create <portfolio-name>, 
+                open <portfolio-name>, 
+                import <csv-path>, 
+                help [command-name], 
+                quit/exit
+              """)
 
     def prompt_input(self):
         """
@@ -136,6 +151,7 @@ class DashboardView(View):
         cmd, args = tokens[0], tokens[1:]
 
         if cmd in ("quit", "exit"):
+            print("Goodbye.")
             raise SystemExit
 
         if cmd == "help":
@@ -153,23 +169,49 @@ class DashboardView(View):
             _print_parse_error(cmd, e)
             return self
 
-        # dispatch
         if cmd == "list":
-            rows = self.access.list_portfolios(ns.n)
+            item_type = ns.item_type
+            if item_type in ["port", "ports", "portfolio", "portfolios"]:
+                rows = self.access.list_portfolios(ns.n)
+
+            elif item_type in ["txn", "txns", "transaction", "transactions"]:
+                rows = self.access.list_txns(ns.n)
+            
+            elif item_type in ["pos", "position", "positions"]:
+                self.access.update_positions() # refresh position table
+
+                if getattr(ns, "asset_id", None) is not None: 
+                    rows = self.access.list_positions_by_asset(ns.asset_id, ns.n)
+                elif getattr(ns, "asset_type", None) is not None: 
+                    rows = self.access.list_positions_by_type(ns.asset_type, ns.n)
+                elif getattr(ns, "asset_subtype", None) is not None: 
+                    rows = self.access.list_positions_by_subtype(ns.asset_subtype, ns.n)
+                else:
+                    rows = self.access.list_positions(ns.n)
+            
+            
             if rows is not None:
                 print(rows)
             return self
-
+            
         if cmd == "create":
             self.access.upsert_portfolio(ns.portfolio_name)
             print(f"Upserted portfolio: {ns.portfolio_name}")
             return self
 
         if cmd == "open":
-            store: PortfolioStore = self.access.open_portfolio_by_name(ns.portfolio_name)
+            # Concatenate portfolio_name tokens back into a name that can contain whitespace 
+            for i in range(len(ns.portfolio_name)): 
+                arg = ns.portfolio_name[i] 
+                if not i:
+                    p_name = arg
+                else:
+                    p_name += f" {arg}"
+
+            manager: PortfolioManager = self.access.open_portfolio_by_name(p_name)
             # return a View so cli_loop can switch
             return PortfolioView(
-                portfolio_access=store,
+                portfolio_access=manager,
                 root_access=self.access
             )
         
@@ -180,19 +222,15 @@ class DashboardView(View):
                 print(import_data)
             return self
 
-        # fallback
-        return self
+        return self # fallback
 
     def _handle_help(self, args: list[str]):
         """
         Displays a help message detailing usage over all available commands.
         """
         if not args:
-            print("Available commands:")
-            for k in sorted(list(self.cmds.keys()) + ["help", "quit"]):
-                print(f"  {k}")
-            print("Type: help <command> to see usage.")
-            return
+            self.default_display()
+            return self
 
         cmd = args[0]
         if cmd in self.cmds:
@@ -214,19 +252,46 @@ class DashboardView(View):
         """
         parsers: dict[str, argparse.ArgumentParser] = {}
 
-        p = _NoExitParser(prog="list", add_help=True, description="List portfolios")
-        p.add_argument("n", nargs="?", type=int, default=None,
-                       help="Number of portfolios to display (default: all)")
+        # list cmd parser / subparser
+        p = _NoExitParser(prog="list", add_help=True, description="List transactions or positions (optionally filtered).")
+        subp = p.add_subparsers(dest="item_type", required=True)
+        
+        subp_txn: argparse.ArgumentParser = subp.add_parser("txn", aliases=["txn", "txns", "transaction", "transcations"], 
+                                   help="List transactions.", description="List transactions.", add_help=True)
+        subp_txn.add_argument("-n", "--n", dest="n", type=int, default=None,
+                              help = "Number of transactions to display (default: all).")
+        
+        subp_port: argparse.ArgumentParser = subp.add_parser("port", aliases=["port", "ports", "portfolio", "portfolios"], 
+                                    help="List active portfolios.", description="List active portfolios.", add_help=True)
+        subp_port.add_argument("-n", "--n", dest="n", type=int, default=None,
+                              help = "Number of portfolios to display (default: all).")
+
+        subp_pos: argparse.ArgumentParser = subp.add_parser("pos", aliases = ["pos", "position", "positions"],
+                                    help="List positions (optionally filtered).", 
+                                    description="List positions filtered by asset id/type/subtype or no filter.", add_help=True)
+        subp_pos.add_argument("-n", "--n", dest="n", type=int, default=None,
+                              help = "Number of positions to display (default: all).")
+        pos_arg_group = subp_pos.add_mutually_exclusive_group()
+        
+        # position filter
+        pos_arg_group.add_argument("-asset-id", "--asset-id", dest="asset_id", help="Filter by asset id.")
+        pos_arg_group.add_argument("-asset-type", "--asset-type", dest="asset_type", help="Filter by asset type.")
+        pos_arg_group.add_argument("-asset-subtype", "--asset-subtype", dest="asset_subtype", help="Filter by asset subtype.")
+
         parsers["list"] = p
 
+        # create cmd parser
         p = _NoExitParser(prog="create", add_help=True, description="Create or update a portfolio")
         p.add_argument("portfolio_name", help="Name of portfolio")
         parsers["create"] = p
 
+        # open cmd parser
         p = _NoExitParser(prog="open", add_help=True, description="Open a portfolio")
-        p.add_argument("portfolio_name", help="Name of portfolio")
+        p.add_argument("portfolio_name", nargs='*', help="Name of portfolio")
+
         parsers["open"] = p
 
+        # import cmd parser
         p = _NoExitParser(prog="import", add_help=True, description="Import a CSV transaction batch")
         p.add_argument("csv_path", help="Path to CSV file")
         parsers["import"] = p
@@ -236,8 +301,8 @@ class DashboardView(View):
 
 @dataclass
 class PortfolioView(View):
-    portfolio_access: PortfolioStore
-    root_access: PortfolioManager
+    portfolio_access: PortfolioManager
+    root_access: DashboardManager
     cmds: dict[str, argparse.ArgumentParser] = field(default_factory=dict)
 
     def __post_init__(self):
@@ -253,7 +318,14 @@ class PortfolioView(View):
         Print the default header/help for the view.
         """
         print("\n=== Portfolio ===")
-        print("Commands: list [n], add-transaction, import <csv_path>, back, help, quit")
+        print("""Commands: 
+                list <item-type> [item-filter] [n], 
+                add-transaction, 
+                import <csv_path>, 
+                back, 
+                help [command-name], 
+                quit/exit
+              """)
 
     def prompt_input(self):
         """
@@ -283,6 +355,7 @@ class PortfolioView(View):
         cmd, args = tokens[0], tokens[1:]
 
         if cmd in ("quit", "exit"):
+            print("Goodbye")
             raise SystemExit
 
         if cmd == "back":
@@ -312,24 +385,35 @@ class PortfolioView(View):
             return self
 
         if cmd == "list":
-            rows = self.portfolio_access.list_txns(ns.n)
+            item_type = ns.item_type
+            if item_type in ["txn", "txns", "transaction", "transactions"]:
+                rows = self.portfolio_access.list_txns(ns.n)
+            
+            elif item_type in ["pos", "position", "positions"]:
+                self.root_access.update_positions() # refresh position table
+
+                if getattr(ns, "asset_id", None) is not None: 
+                    rows = self.portfolio_access.list_positions_by_asset(ns.n)
+                elif getattr(ns, "asset_type", None) is not None: 
+                    rows = self.portfolio_access.list_positions_by_type(ns.n)
+                elif getattr(ns, "asset_subtype", None) is not None: 
+                    rows = self.portfolio_access.list_positions_by_subtype(ns.n)
+                else:
+                    rows = self.portfolio_access.list_positions(ns.n)
+
             if rows is not None:
                 print(rows)
             return self
         
-        # fall back
-        return self
+        return self # fall back
 
     def _handle_help(self, args: list[str]):
         """
         Displays a help message detailing usage over all available commands.
         """
         if not args:
-            print("Available commands:")
-            for k in sorted(list(self.cmds.keys()) + ["add-transaction", "back", "help", "quit"]):
-                print(f"  {k}")
-            print("Type: help <command> to see usage.")
-            return
+            self.default_display()
+            return self
 
         cmd = args[0]
         if cmd in self.cmds:
@@ -347,9 +431,7 @@ class PortfolioView(View):
 
     def _prompt_txn_fields(self):
         """
-        You can shape this to whatever your TxnImporterManual expects.
-        The goal is: collect fields interactively and return the structure
-        your importer uses (e.g., dict / list / TestTxn / dataclass).
+        Collect fields interactively and return necessary Txn fields in TestTxn object.
         """
         print("Enter transaction fields (blank to cancel).")
 
@@ -357,7 +439,7 @@ class PortfolioView(View):
         time_stamp = input("time_stamp (YYYY-MM-DD HH:MM:SS): ").strip()
         if not time_stamp:
             print("Cancelled.")
-            return None
+            return self
 
         txn_type = input("txn_type (buy/sell/div/etc): ").strip()
         asset_id = input("asset_id (e.g., AAPL): ").strip()
@@ -367,17 +449,17 @@ class PortfolioView(View):
         cash_amt = input("cash_amt: ").strip()
         fee_amt = input("fee_amt: ").strip()
 
-        return {
-            "portfolio_name": portfolio_name,
-            "time_stamp": time_stamp,
-            "txn_type": txn_type,
-            "asset_id": asset_id,
-            "qty": qty,
-            "price": price,
-            "ccy": ccy,
-            "cash_amt": cash_amt,
-            "fee_amt": fee_amt,
-        }
+        return tTestTxn(
+            self.portfolio_access.portfolio_id,
+            portfolio_name,
+            time_stamp,
+            txn_type,
+            asset_id,
+            qty,
+            price,
+            ccy,
+            cash_amt,
+            fee_amt)
 
     @staticmethod
     def build_port_parsers():
@@ -389,11 +471,33 @@ class PortfolioView(View):
         """
         parsers: dict[str, argparse.ArgumentParser] = {}
 
+        # list cmd parser / subparser
         p = _NoExitParser(prog="list", add_help=True, description="List transactions in this portfolio")
         p.add_argument("n", nargs="?", type=int, default=None,
                        help="Number of txns to display (default: all)")
+        subp = p.add_subparsers(dest="item_type", required=True)
+
+        
+        subp_txn: argparse.ArgumentParser = subp.add_parser("txn", aliases=["txn", "txns", "transaction", "transcations"], 
+                                   help="List transactions.", description="List transactions.", add_help=True)
+        subp_txn.add_argument("-n", "--n", dest="n", type=int, default=None,
+                              help = "Number of transactions to display (default: all).")
+        
+        subp_pos: argparse.ArgumentParser = subp.add_parser("pos", aliases=["pos", "position", "positions"], 
+                                    help="List positions (optionally filtered).", 
+                                    description="List positions filtered by asset id/type/subtype or no filter.", add_help=True)
+        subp_pos.add_argument("-n", "--n", dest="n", type=int, default=None,
+                              help = "Number of positions to display (default: all).")
+        pos_arg_group = subp_pos.add_mutually_exclusive_group()
+        
+        # position filter
+        pos_arg_group.add_argument("-asset-id", "--asset-id", dest="asset_id", help="Filter by asset id.")
+        pos_arg_group.add_argument("-asset-type", "--asset-type", dest="asset_type", help="Filter by asset type.")
+        pos_arg_group.add_argument("-asset-subtype", "--asset-subtype", dest="asset_subtype", help="Filter by asset subtype.")
+
         parsers["list"] = p
 
+        # import cmd parser
         p = _NoExitParser(prog="import", add_help=True, description="Import a CSV transaction batch")
         p.add_argument("csv_path", help="Path to CSV file")
         parsers["import"] = p

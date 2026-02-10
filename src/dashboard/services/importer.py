@@ -1,8 +1,19 @@
+"""~/services/
+dispatch for import csv or manual transaction
+
+TestTxn:
+ImportData:
+PortfolioImportData:
+TxnImporter:
+TxnImporterManual:
+TxnImporterCSV:
+"""
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path 
-from dashboard.models.storage import PortfolioManager, PortfolioStore
+from dashboard.models.storage import DashboardManager
 from dashboard.db import queries as qry
 
 REQUIRED_CSV_COLUMNS = [
@@ -18,7 +29,7 @@ REQUIRED_CSV_COLUMNS = [
 ]
 
 @dataclass    
-class TestTxn:
+class tTestTxn:
     portfolio_id: int
     portfolio_name: str  
     time_stamp: datetime
@@ -69,7 +80,7 @@ class TxnImporter(ABC):
     """
     Transaction import parent class
 
-    attr: manager                       - PortfolioManager object (for PortfolioManager.conn)
+    attr: manager                       - DashboardManager object (for DashboardManager.conn)
 
            batch_id                     - None on instantiation, insertion to the import_batch table sets the batch_id
 
@@ -88,7 +99,7 @@ class TxnImporter(ABC):
      abstract _handle_import()          - inserts the validated normalized table into the txn table
                                           returns a ImportData object detailing the import batch
     """
-    manager: PortfolioManager
+    manager: DashboardManager
     batch_id: int | None = field(default=None, init=False)
     import_time: datetime | None = field(default=None, init=False)
 
@@ -165,7 +176,7 @@ class TxnImporterManual(TxnImporter):
               abstract _handle_import() - inserts the validated normalized table into the txn table
                                           returns a ImportData object detailing the import batch
     """
-    txn: TestTxn
+    txn: tTestTxn
     create_portfolio: bool | None = None
     batch_type: str = "manual-entry"
 

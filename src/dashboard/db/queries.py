@@ -1,9 +1,10 @@
-"""/db/
+"""~/db/
 sql query repository
 """
 
-
+##########
 #               portfolio queries
+##########
 
 UPSERT_PORTFOLIO_USER = """
 INSERT INTO portfolio (portfolio_id, portfolio_name, base_ccy)
@@ -37,10 +38,10 @@ LIST_PORTFOLIOS = """
 SELECT portfolio_id, portfolio_name, created_at, updated_at, base_ccy
 FROM portfolio
 ORDER BY portfolio_id;
-"""
+""" # This query does NOT get subqueried, so we leave the closing ';' inside the query string.
 
 NEXT_PORTFOLIO_ID = """
-SELECT COALESCE(MAX(portfolio_id), 0) + 1 AS next_id FROM portfolio
+SELECT COALESCE(MAX(portfolio_id), 0) + 1 AS next_id FROM portfolio;
 """
 
 CHECK_NEW_PORTFOLIO_ID = """
@@ -62,7 +63,59 @@ FROM portfolio
 WHERE portfolio_name = ?
 """
 
+##########
+#               position queries
+##########
+
+UPDATE_POSITIONS = """
+INSERT INTO position (portfolio_id, asset_id, qty, book_cost, last_updated)
+SELECT
+  t.portfolio_id, 
+  t.asset_id, 
+  SUM(t.qty) AS qty, 
+  SUM(t.price * t.qty) AS book_cost, 
+  now() AS last_updated
+FROM txn t
+WHERE t.txn_type = 'buy' OR t.txn_type = 'sell'
+GROUP BY portfolio_id, asset_id
+ON CONFLICT (portfolio_id, asset_id)
+DO UPDATE SET
+  qty = excluded.qty, 
+  book_cost = excluded.book_cost, 
+  last_updated = excluded.last_updated;
+"""
+
+##
+# List queries are used as main queries as well as subqueries, so we must leave out the closing ';' and add that in when calling the query.
+##
+
+LIST_POSITIONS = """
+SELECT portfolio_id, asset_id, qty, book_cost, last_updated
+FROM position"""
+
+LIST_POSITIONS_BY_ASSET_ID = """
+SELECT portfolio_id, asset_id, qty, book_cost, last_updated
+FROM position
+WHERE asset_id = ?"""
+
+LIST_POSITIONS_BY_ASSET_TYPE = """
+SELECT p.portfolio_id, p.asset_id, p.qty, p.book_cost, p.last_updated
+FROM position p
+JOIN asset a ON 
+  p.asset_id = a.asset_id
+WHERE a.asset_type = ?"""
+
+LIST_POSITIONS_BY_ASSET_SUBTYPE = """
+SELECT p.portfolio_id, asset_id, p.qty, p.book_cost, p.last_updated
+FROM position p
+JOIN asset a ON 
+  p.asset_id = a.asset_id
+WHERE a.asset_subtype = ?"""
+
+
+##########
 #               asset queries
+##########
 
 UPSERT_ASSET = """
 INSERT INTO asset (asset_id, asset_type, asset_subtype, ccy)
@@ -78,7 +131,9 @@ FROM asset
 WHERE asset_id = ?;
 """
 
+##########
 #               transaction queries
+##########
 
 INSERT_TXN_BATCH = """
 INSERT INTO txn (
@@ -107,9 +162,13 @@ SELECT
 FROM norm_stg_txn n
 JOIN portfolio p
   ON p.portfolio_name = n.portfolio_name;
-  """
+"""
 
-LIST_TXNS_FOR_PORTFOLIO = """
+##
+# List queries are used as main queries as well as subqueries, so we must leave out the closing ';' and add that in when calling the query.
+##
+
+LIST_TXNS = """
 SELECT
     txn_id,
     portfolio_id,
@@ -123,11 +182,45 @@ SELECT
     fee_amt,
     batch_id
 FROM txn
-WHERE portfolio_id = ?
-ORDER BY time_stamp, txn_id;
-"""
+ORDER BY time_stamp, txn_id"""
 
-# import batch queries
+LIST_TXNS_BY_TYPE = """
+SELECT
+    txn_id,
+    portfolio_id,
+    time_stamp,
+    txn_type,
+    asset_id,
+    qty,
+    price,
+    ccy,
+    cash_amt,
+    fee_amt,
+    batch_id
+FROM txn
+WHERE txn_type = ?
+ORDER BY time_stamp, txn_id"""
+
+LIST_TXNS_BY_ASSET = """
+SELECT
+    txn_id,
+    portfolio_id,
+    time_stamp,
+    txn_type,
+    asset_id,
+    qty,
+    price,
+    ccy,
+    cash_amt,
+    fee_amt,
+    batch_id
+FROM txn
+WHERE asset_id = ?
+ORDER BY time_stamp, txn_id"""
+
+##########
+#               import batch queries
+##########
 
 INSERT_IMPORT_BATCH = """
 INSERT INTO import_batch (batch_type, import_time) 
@@ -135,7 +228,9 @@ VALUES (?, now())
 RETURNING batch_id, import_time;
 """
 
+##########
 #               validation queries
+##########
 
 STAGE_TXN_CSV = """
 DROP TABLE IF EXISTS stg_txn;
@@ -214,7 +309,9 @@ SELECT
 FROM stg_txn;
 """
 
-# Validation suite
+##########
+#               Validation suite
+##########
 
 VALIDATE_STAGED_NAME = """
 SELECT COUNT(*) 
@@ -273,6 +370,10 @@ SELECT COUNT(*)
 FROM norm_stg_txn
 WHERE fee_amt = -1;
 """
+
+##
+# all queries to be run sequentially from eachother, in the order of how they are written.
+##
 
 VALIDATE_TXN_SUITE = [
     VALIDATE_STAGED_NAME,

@@ -1,4 +1,4 @@
-"""
+"""root/tests/
 Tests the TxnImporter run() procedure for subclasses TxnImporterCSV and TxnImporterManual
 Tests are built in a sequential order, and all operate on the same DB.
 """
@@ -6,8 +6,8 @@ from pathlib import Path
 from datetime import datetime
 import pytest
 from dashboard.db.db_conn import DB, init_db
-from dashboard.models.storage import PortfolioManager
-from dashboard.services.importer import TxnImporterCSV, TxnImporterManual, TestTxn
+from dashboard.models.storage import DashboardManager
+from dashboard.services.importer import TxnImporterCSV, TxnImporterManual, tTestTxn
 
 TMP_FOLDER = "tests/tmp/"
 TEST_IMPORTER_DB = "test_importer.db"
@@ -24,7 +24,7 @@ def test_manager(test_db_path: Path = Path(TMP_FOLDER + TEST_IMPORTER_DB)):
 
     db = DB(test_db_path)
     init_db(db)
-    manager =  PortfolioManager(db)
+    manager =  DashboardManager(db)
 
     try: 
         yield manager
@@ -39,7 +39,7 @@ def test_manager(test_db_path: Path = Path(TMP_FOLDER + TEST_IMPORTER_DB)):
         except Exception:
             pass
 
-def test_import_one_port_batch(test_manager: PortfolioManager):
+def test_import_one_port_batch(test_manager: DashboardManager):
     """
     CSV batch import (single portfolio):
     Enforces: - importer instance has sequential batch id 
@@ -81,7 +81,7 @@ def test_import_one_port_batch(test_manager: PortfolioManager):
     assert max_id == n_txn
 
 
-def test_import_mul_port_batch(test_manager: PortfolioManager):
+def test_import_mul_port_batch(test_manager: DashboardManager):
     """
     CSV batch import (multiple portfolio):
     Enforces: - importer instance has sequential batch id 
@@ -167,7 +167,7 @@ def test_import_mul_port_batch(test_manager: PortfolioManager):
         assert type(amt) is float
     
 
-def test_manual_txn_create(test_manager: PortfolioManager):
+def test_manual_txn_create(test_manager: DashboardManager):
     """
     Manual add (create):
     Enforces: - importer instance has sequential batch id 
@@ -177,7 +177,7 @@ def test_manual_txn_create(test_manager: PortfolioManager):
               - portfolio table both created_at and updated_at is changed to import time
     """
     p_id = 3
-    txn = TestTxn(
+    txn = tTestTxn(
         portfolio_id = p_id,
         portfolio_name="test 3",
         time_stamp=datetime.now(),
@@ -214,7 +214,7 @@ def test_manual_txn_create(test_manager: PortfolioManager):
     assert importer.import_time == time_tuple[0]
     assert importer.import_time == time_tuple[1]
 
-def test_manual_txn_upd(test_manager: PortfolioManager):
+def test_manual_txn_upd(test_manager: DashboardManager):
     """
     Manual add (update):
     Enforces: - importer instance has sequential batch id 
@@ -224,7 +224,7 @@ def test_manual_txn_upd(test_manager: PortfolioManager):
               - portfolio table only updated_at is changed to import time
     """
     p_id = 3
-    txn = TestTxn(
+    txn = tTestTxn(
         portfolio_id = p_id,
         portfolio_name = "test 3",
         time_stamp=datetime.now(),

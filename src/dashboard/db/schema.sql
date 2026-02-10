@@ -1,7 +1,7 @@
---/db/ 
+--~/db/ 
 -- DuckDB schema for investment dashboard defined by:
     -- transactions (Txn) are the only source of truth (append-only ledger)
-    -- positions and cash (and in turn, portfolios) are derived from the ledger.
+    -- positions and cash are derived from the ledger.
     -- portfolio and asset tables for non-transaction derived data. 
 
 BEGIN TRANSACTION;
@@ -20,6 +20,16 @@ CREATE TABLE IF NOT EXISTS asset (
     asset_type TEXT NOT NULL,
     asset_subtype TEXT NOT NULL, 
     ccy TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS position ( 
+    portfolio_id BIGINT, 
+    asset_id TEXT, 
+    qty DOUBLE PRECISION NOT NULL, 
+    book_cost DOUBLE PRECISION NOT NULL,
+    last_updated TIMESTAMP NOT NULL,
+
+    PRIMARY KEY (portfolio_id, asset_id) 
 );
 
 CREATE SEQUENCE IF NOT EXISTS seq_txn_id;

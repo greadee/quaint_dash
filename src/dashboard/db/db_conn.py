@@ -1,4 +1,4 @@
-"""/db/
+"""~/db/
 DuckDB connection class 
 
 - DB: simple class repr. a db connection with one method 
