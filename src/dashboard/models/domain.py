@@ -1,16 +1,40 @@
 """~/models/
 domain models
 
-Txn:
-Asset:
-Portfolio:
-Position:
+    Txn: Single source of truth, main method of position, and portfolio composition calculations.
+    Asset: May be formed as a result of a reference by a txn.
+    Portfolio: Formed as a result of txn imports, represents the metadata of the aggregation of all txn by some portfolio_id.
+    Position: Datatype derived from txn, main method of portfolio composition display
+    ImportData: Metadata return type per portfolio for transaction batch import
+    PortfolioImportData: Metadata return type for transaction batch import
 """
 from dataclasses import dataclass
 from datetime import datetime
 
 @dataclass(frozen=True)
+
 class Txn:
+    """
+    Single source of truth, main method of position, and portfolio composition calculations.
+
+    param - txn_id: sequential id for each transaction.
+          - portfolio_id: in which portfolio the transaction occured.
+          - time_stamp: time of transaction occurence.
+          - txn_type: 'buy', 'sell', 'contribution', 'withdrawal', 'dividend', 'interest'.
+
+      # asset transaction attributes -> if cash transaction, then these are null
+          - asset_id: asset ticker symbol, all uppercase, non-NYSE listings are suffixed with the exchange symbol (BN.TO, PNG.V).
+          - qty: quantity of asset involved in transaction.
+          - price: price of asset at the time of transaction.
+
+      # cash transaction attributes -> if asset transaction, then (ccy, cash_amt) are null and fee_amt can be null
+          - ccy: currency of cash in transaction.
+          - cash_amt: cash value of transaction.
+          - fee_amt: cash value of fees incurred on the transaction.
+
+      # import data -> can only ever be set after the transaction has been recorded in the database
+          - batch_id: sequantial id for each transaction import batch.
+    """
     txn_id: int 
     portfolio_id: str  
     time_stamp: datetime
@@ -26,19 +50,16 @@ class Txn:
 
     batch_id: str 
 
-    def display_str(self):
-        """
-        Print a normalized, padded string representing the object as one row in a list table.
-        """
-        asset = self.asset_id if self.asset_id is not None else "-"
-        qty = f"{self.qty:.4f}" if self.qty is not None else "-"
-        price = f"{self.price:.2f}" if self.price is not None else "-"
-        cash_amt = f"{self.cash_amt:.2f}" if self.cash_amt is not None else "-"
-        fee_amt = f"{self.fee_amt:.2f}" if self.fee_amt is not None else "-"
-        print(f"| {self.txn_id:>14} | {self.portfolio_id:>12} | {self.time_stamp.strftime('%d/%m/%Y, %H:%M:%S'):>20} | {self.txn_type:>16} | {asset:>8} | {qty:>8} | {price:>8} | {self.ccy:>5} | {cash_amt:>10} | {fee_amt:>10} | {self.batch_id:>8} |")
-
 @dataclass(frozen=True)
 class Asset:
+    """
+    Metadata for the assets involved in transactions, and on watchlists.
+
+    param - asset_id: asset ticker symbol, all uppercase, non-NYSE listings are suffixed with the exchange symbol (BN.TO, PNG.V).
+          - asset_type: 'stock', 'etf', ...
+          - asset_subtype: stocks: sector/geo, etf: size/geo, ...
+          - ccy: currency that the asset is domiciled in.
+    """
     asset_id: str
     asset_type: str 
     asset_subtype: str
@@ -46,38 +67,68 @@ class Asset:
 
 @dataclass
 class Portfolio:
+    """
+    Metadata for the aggregation of transactions by the same portfolio_id.
+    
+    param - portfolio_id: sequential id for each portfolio.
+          - portfolio_name: user denoted name for the portfolio.
+          - created_at: time of creation
+          - updated_at: time of last transaction inside of the portfolio.
+          - base_ccy: currency to display portfolio metrics involving cash values.
+    """
     portfolio_id: int
     portfolio_name: str
     created_at: datetime 
     updated_at: datetime
     base_ccy: str = "CAD"
 
-    def display_str(self):
-        """
-        Print a padded string representing the object as one row in a list table.
-        """
-        print(f"| {self.portfolio_id:>12} | {self.portfolio_name:<14} | {self.created_at.strftime('%d/%m/%Y, %H:%M:%S'):20} | {self.updated_at.strftime('%d/%m/%Y, %H:%M:%S'):20} | {self.base_ccy:^5} |")
-
 @dataclass
 class Position:
+    """
+    Metadata for the aggregation of transactions by the same portfolio_id and asset_id.
+
+    param - portfolio_id: sequential id for each portfolio.
+          - asset_id: asset ticker symbol, all uppercase, non-NYSE listings are suffixed with the exchange symbol (BN.TO, PNG.V).
+          - qty: sum total of the quantity attribute of each transaction involved.
+          - book_cost: sum total of the quantity times price attribtue of each transaction involved.
+          - last_updated: time of last transaction inside of portfolio on a specific asset.    
+    """
     portfolio_id: int 
     asset_id: str
     qty: float 
     book_cost: float 
     last_updated: datetime
 
-    def display_str(self):
-        """
-        Print a normalized, padded string representing the object as one row in a list table.
-        """
-        qty = f"{self.qty:.4f}" 
-        book_cost = f"{self.book_cost:.2f}"
 
-        print(f"| {self.portfolio_id:>11} | {self.asset_id:<8} | {qty:>8} | {book_cost:>9} | {self.last_updated.strftime('%d/%m/%Y, %H:%M:%S'):20} |")
+@dataclass(frozen=True)
+class PortfolioImportData:
+    """
+    Metadata return type per portfolio for transaction batch import
 
+    param: portfolio_id - sequential id for each portfolio.
+           portfolio_name - user denoted name for the portfolio.
+           created - whether the portfolio was updated or created
+           batch_id - sequential id for each import batch.
+    """
+    portfolio_id: int 
+    portfolio_name: str 
+    created: bool
+    batch_id: int
 
+@dataclass(frozen=True)
+class ImportData:
+    """
+    Metadata return type for transaction batch import
 
-
+    param: batch_id - sequential id for each import batch.
+           batch_type - imported from: "manual-entry"/"csv-import".
+           inserted_rows - number of rows appended to db.
+           portfolios_affected - portfolio_name for portfolios that had transactions added in the batch.
+    """
+    batch_id: int
+    batch_type: str
+    inserted_rows: int
+    portfolios_affected: list[PortfolioImportData]
 
 
 

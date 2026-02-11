@@ -1,19 +1,19 @@
 """~/services/
+
 dispatch for import csv or manual transaction
 
-TestTxn:
-ImportData:
-PortfolioImportData:
-TxnImporter:
-TxnImporterManual:
-TxnImporterCSV:
+    tTestTxn: Txn object without the batch_id attribute for testing, and validation prior to database storage.
+    TxnImporter: Abstract parent class for importing transactions into the database.
+    TxnImporterManual: Abstract child class for importing manual entries from the user in the CLI.
+    TxnImporterCSV: Abstract child class for importing batches of transactions from csv files.
 """
-
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path 
+from dashboard.models.domain import ImportData, PortfolioImportData
 from dashboard.models.storage import DashboardManager
+from dashboard.services.table_formatter import PortfolioImportDataTableFormatter, ImportDataTableFormatter
 from dashboard.db import queries as qry
 
 REQUIRED_CSV_COLUMNS = [
@@ -44,47 +44,16 @@ class tTestTxn:
     fee_amt: float | None
 
 
-@dataclass(frozen=True)
-class PortfolioImportData:
-    """
-    Metadata return type per portfolio for transaction batch import
-
-    param: portfolio_id - self expl.
-           portfolio_name - self expl.
-           created - whether the portfolio was updated or created
-           batch_id - sequential id
-    """
-    portfolio_id: int 
-    portfolio_name: str 
-    created: bool
-    batch_id: int
-
-
-@dataclass(frozen=True)
-class ImportData:
-    """
-    Metadata return type for transaction batch import
-
-    param: batch_id - sequential id 
-           inserted_rows - # rows appended to db
-           portfolios_affected - portfolio_name for portfolios that had transactions added in the batch.
-    """
-    batch_id: int
-    batch_type: str
-    inserted_rows: int
-    portfolios_affected: list[PortfolioImportData]
-
-
 @dataclass
 class TxnImporter(ABC):
     """
     Transaction import parent class
 
-    attr: manager                       - DashboardManager object (for DashboardManager.conn)
+    attr:     manager                       - DashboardManager object (for DashboardManager.conn)
 
-           batch_id                     - None on instantiation, insertion to the import_batch table sets the batch_id
+              batch_id                     - None on instantiation, insertion to the import_batch table sets the batch_id
 
-           import_time                  - None on instantiation, insertion to the import_batch table sets the datetime object
+              import_time                  - None on instantiation, insertion to the import_batch table sets the datetime object
 
     methods:  run()                     - the only function that is accesible to use in CLI; runs all other functions 
 
@@ -210,10 +179,13 @@ class TxnImporterManual(TxnImporter):
 
         conn.execute(qry.INSERT_TXN_BATCH, [batch_id],)
 
-        p_imp = PortfolioImportData(p_id, p_name, created, batch_id) 
-    
-        return ImportData(batch_id, "manual-entry", 1, [p_imp])
+        p_imp = PortfolioImportData(p_id, p_name, created, batch_id)    
+
+        ImportDataTableFormatter.header()
+        ImportDataTableFormatter(ImportData(batch_id, "manual-entry", 1, [p_imp])).entry()
         
+        PortfolioImportDataTableFormatter.header()
+        PortfolioImportDataTableFormatter(p_imp).entry()
 
 @dataclass
 class TxnImporterCSV(TxnImporter):
@@ -290,8 +262,14 @@ class TxnImporterCSV(TxnImporter):
         
         n_txn_after = conn.execute("SELECT COUNT(*) FROM txn").fetchone()[0]
         inserted_rows  = n_txn_after - n_txn_before
-    
-        return ImportData(batch_id, self.batch_type, inserted_rows, p_aff)
+        
+        ImportDataTableFormatter.header()
+        ImportDataTableFormatter(ImportData(batch_id, self.batch_type, inserted_rows, p_aff)).entry()
+        
+        PortfolioImportDataTableFormatter.header()
+        for p_impData in p_aff:
+            PortfolioImportDataTableFormatter(p_impData).entry()
+
 
 
     

@@ -1,10 +1,10 @@
 """~/models/
 dispatched by cli to handle user commands and communicate with Manager/Importer instances
 
-_NoExitParser: argparse.ArgumentParser object that raises ValueError instead of SystemError
-View: abstract base class for CLI Views
-DashboardView: abstract parent of PortfolioView
-PortfolioView: abstract child of DashboardView
+    _NoExitParser: argparse.ArgumentParser object that raises ValueError instead of SystemError
+    View: abstract base class for CLI Views
+    DashboardView: abstract (in practice) parent of PortfolioView
+    PortfolioView: abstract (in practice) child of DashboardView
 """
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -217,9 +217,7 @@ class DashboardView(View):
         
         if cmd == "import":
             importer = TxnImporterCSV(self.access, ns.csv_path)
-            import_data = importer.run()
-            if import_data is not None:
-                print(import_data)
+            importer.run()
             return self
 
         return self # fallback
@@ -321,7 +319,6 @@ class PortfolioView(View):
         print("""Commands: 
                 list <item-type> [item-filter] [n], 
                 add-transaction, 
-                import <csv_path>, 
                 back, 
                 help [command-name], 
                 quit/exit

@@ -8,6 +8,7 @@ from datetime import datetime
 from dashboard.db.db_conn import DB, init_db
 from dashboard.db import queries as qry
 from dashboard.models.domain import Portfolio, Position, Txn
+from dashboard.services.table_formatter import *
 
 # SHOULD PORTFOLIOMANAGER BE MADE TO EXTEND DASHBOARDMANAGER?
 
@@ -98,11 +99,11 @@ class DashboardManager:
         if not rows: 
             raise ValueError("No portfolios found.")
 
-        print(f'| {"PORTFOLIO ID":^12} | {"PORTFOLIO NAME":^14} | {"CREATED AT":^20} | {"UPDATED AT":^20} | {"CCY":^5} |')
+        PortfolioTableFormatter.header()
 
         to_list = rows if N is None else rows[:N]
         for row in to_list:
-            Portfolio(*row).display_str()
+            PortfolioTableFormatter(Portfolio(*row)).entry()
 
     def list_txns(self, N:int|None):
         """
@@ -116,11 +117,11 @@ class DashboardManager:
         if not rows: 
             raise ValueError("No transactions found.")
 
-        print(f'| {"TRANSACTION ID":^14} | {"PORTFOLIO ID":^12} | {"TIMESTAMP":^20} | {"TRANSACTION TYPE":^16} | {"ASSET ID":^8} | {"QUANTITY":^8} | {"PRICE":^8} | {"CCY":^5} | {"$ IN CASH":^10} | {"$ IN FEES":^10} | {"BATCH ID":^8} |')
+        TxnTableFormatter.header()
 
         to_list = rows if N is None else rows[:N]
         for row in to_list:
-            Txn(*row).display_str()
+            TxnTableFormatter(Txn(*row)).entry()
     
     def list_txns_by_type(self, txn_type:str, N:int|None):
         """
@@ -134,9 +135,11 @@ class DashboardManager:
         if not rows: 
             raise ValueError(f"No transactions found with type: {txn_type}.")
         
+        TxnTableFormatter.header()
+
         to_list = rows if N is None else rows[:N]
         for row in to_list:
-            Txn(*row).display_str()
+            TxnTableFormatter(Txn(*row)).entry()
 
     def list_txns_by_day(self, N:int|None):
         pass
@@ -153,26 +156,29 @@ class DashboardManager:
         if not rows: 
             raise ValueError(f"No transactions found with asset: {asset_id}")
 
+        TxnTableFormatter.header()
+
         to_list = rows if N is None else rows[:N]
         for row in to_list:
-            Txn(*row).display_str() 
+            TxnTableFormatter(Txn(*row)).entry()
 
     def list_positions(self, N:int|None):
         """
         List all positions in database.
         - Instantiates a Position object for each row returned by the db query, or raises a ValueError if the result is empty.
-        - Calls Position method .display_str() to return a string representing a table row.
+        - Casts Position into PositionTableFormatter for display.
         - Optional argument (N) determines how many rows to display.
         Returns None.          
         """
         rows = self.conn.execute(f"{qry.LIST_POSITIONS};").fetchall()
         if not rows: 
             raise ValueError("No positions found.")
-        print(f'|{"PORTFOLIO":^13}|{"ASSET ID":^10}|{"QUANTITY":^10}|{"BOOK COST":^11}|{"LAST UPDATED":^22}|')
         
+        PositionTableFormatter.header()
+
         to_list = rows if N is None else rows[:N]
         for row in to_list:
-            Position(*row).display_str()
+            PositionTableFormatter(Position(*row)).entry()
      
     def list_positions_by_asset(self, asset_id:str, N:None|int):
         """
@@ -186,11 +192,11 @@ class DashboardManager:
         if not rows: 
             raise ValueError(f"No positions found with asset id: {asset_id}")
         
-        print(f'|{"PORTFOLIO":^13}|{"ASSET ID":^10}|{"QUANTITY":^10}|{"BOOK COST":^11}|{"LAST UPDATED":^22}|')
-       
-        to_list = rows if N is None or N is False else rows[:N]
+        PositionTableFormatter.header()
+
+        to_list = rows if N is None else rows[:N]
         for row in to_list:
-            Txn(*row).display_str()
+            PositionTableFormatter(Position(*row)).entry()
     
     def list_positions_by_type(self, asset_type: str, N:int|None):
         """
@@ -204,11 +210,11 @@ class DashboardManager:
         if not rows: 
             raise ValueError(f"No positions found with asset type: {asset_type}")
         
-        print(f'|{"PORTFOLIO":^13}|{"ASSET ID":^10}|{"QUANTITY":^10}|{"BOOK COST":^11}|{"LAST UPDATED":^22}|')
-        
+        PositionTableFormatter.header()
+
         to_list = rows if N is None else rows[:N]
         for row in to_list:
-            Txn(*row).display_str()
+            PositionTableFormatter(Position(*row)).entry()
 
     def list_positions_by_subtype(self, asset_subtype:str, N:int|None):
         """
@@ -222,11 +228,11 @@ class DashboardManager:
         if not rows: 
             raise ValueError(f"No positions found with asset subtype: {asset_subtype}")
         
-        print(f'|{"PORTFOLIO":^13}|{"ASSET ID":^10}|{"QUANTITY":^10}|{"BOOK COST":^11}|{"LAST UPDATED":^22}|')
-        
+        PositionTableFormatter.header()
+
         to_list = rows if N is None else rows[:N]
         for row in to_list:
-            Txn(*row).display_str()
+            PositionTableFormatter(Position(*row)).entry()
 
 class PortfolioManager():
     """
@@ -261,11 +267,11 @@ class PortfolioManager():
         if not rows: 
             raise ValueError(f"No transactions in portfolio: {self.portfolio_name}")
         
-        print(f'| {"TRANSACTION ID":^14} | {"PORTFOLIO ID":^12} | {"TIMESTAMP":^20} | {"TRANSACTION TYPE":^16} | {"ASSET ID":^8} | {"QUANTITY":^8} | {"PRICE":^8} | {"CCY":^5} | {"$ IN CASH":^10} | {"$ IN FEES":^10} | {"BATCH ID":^8} |')
-        
+        TxnTableFormatter.header()
+
         to_list = rows if N is None else rows[:N]
         for row in to_list:
-            Txn(*row).display_str()
+            TxnTableFormatter(Txn(*row)).entry()
     
     def list_txns_by_type(self, txn_type:str, N:int|None):
         """
@@ -280,11 +286,11 @@ class PortfolioManager():
         if not rows: 
             raise ValueError(f"No transactions found with type: {txn_type}.")
         
-        print(f'| {"TRANSACTION ID":^14} | {"PORTFOLIO ID":^12} | {"TIMESTAMP":^20} | {"TRANSACTION TYPE":^16} | {"ASSET ID":^8} | {"QUANTITY":^8} | {"PRICE":^8} | {"CCY":^5} | {"$ IN CASH":^10} | {"$ IN FEES":^10} | {"BATCH ID":^8} |')
-        
+        TxnTableFormatter.header()
+
         to_list = rows if N is None else rows[:N]
         for row in to_list:
-            Txn(*row).display_str()
+            TxnTableFormatter(Txn(*row)).entry()
 
     def list_txns_by_day(self, N:int|None):
         pass
@@ -302,11 +308,11 @@ class PortfolioManager():
         if not rows: 
             raise ValueError(f"No transactions found with asset: {asset_id}")
         
-        print(f'| {"TRANSACTION ID":^14} | {"PORTFOLIO ID":^12} | {"TIMESTAMP":^20} | {"TRANSACTION TYPE":^16} | {"ASSET ID":^8} | {"QUANTITY":^8} | {"PRICE":^8} | {"CCY":^5} | {"$ IN CASH":^10} | {"$ IN FEES":^10} | {"BATCH ID":^8} |')
-        
+        TxnTableFormatter.header()
+
         to_list = rows if N is None else rows[:N]
         for row in to_list:
-            Txn(*row).display_str()
+            TxnTableFormatter(Txn(*row)).entry()
         
     def list_positions(self, N:int|None):
         """
@@ -321,11 +327,11 @@ class PortfolioManager():
         if not rows: 
             raise ValueError(f"No positions in portfolio: {self.portfolio_name}")
         
-        print(f'|{"PORTFOLIO":^13}|{"ASSET ID":^10}|{"QUANTITY":^10}|{"BOOK COST":^11}|{"LAST UPDATED":^22}|')
-        
+        PositionTableFormatter.header()
+
         to_list = rows if N is None else rows[:N]
         for row in to_list:
-            Position(*row).display_str()
+            PositionTableFormatter(Position(*row)).entry()
     
     def list_positions_by_asset(self, asset_id:str, N:int|None):
         """
@@ -340,11 +346,11 @@ class PortfolioManager():
         if not rows: 
             raise ValueError(f"No positions in portfolio: {self.portfolio_name} with asset:{asset_id}.")
         
-        print(f'|{"PORTFOLIO":^13}|{"ASSET ID":^10}|{"QUANTITY":^10}|{"BOOK COST":^11}|{"LAST UPDATED":^22}|')
-        
+        PositionTableFormatter.header()
+
         to_list = rows if N is None else rows[:N]
         for row in to_list:
-            Position(*row).display_str()
+            PositionTableFormatter(Position(*row)).entry()
   
     def list_positions_by_type(self, asset_type:str, N:int|None):
         """
@@ -359,11 +365,11 @@ class PortfolioManager():
         if not rows: 
             raise ValueError(f"No positions in portfolio: {self.portfolio_name} of type: {asset_type}.")
         
-        print(f'|{"PORTFOLIO":^13}|{"ASSET ID":^10}|{"QUANTITY":^10}|{"BOOK COST":^11}|{"LAST UPDATED":^22}|')
-        
+        PositionTableFormatter.header()
+
         to_list = rows if N is None else rows[:N]
         for row in to_list:
-            Position(*row).display_str()
+            PositionTableFormatter(Position(*row)).entry()
     
     def list_positions_by_subtype(self, asset_subtype:str, N:int|None):
         """
@@ -378,11 +384,11 @@ class PortfolioManager():
         if not rows: 
             raise ValueError(f"No positions in portfolio: {self.portfolio_name} of subtype: {asset_subtype}.")
         
-        print(f'|{"PORTFOLIO":^13}|{"ASSET ID":^10}|{"QUANTITY":^10}|{"BOOK COST":^11}|{"LAST UPDATED":^22}|')
-        
+        PositionTableFormatter.header()
+
         to_list = rows if N is None else rows[:N]
         for row in to_list:
-            Position(*row).display_str()
+            PositionTableFormatter(Position(*row)).entry()
         
     
     
