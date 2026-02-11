@@ -8,7 +8,7 @@ from datetime import datetime
 from dashboard.db.db_conn import DB, init_db
 from dashboard.db import queries as qry
 from dashboard.models.domain import Portfolio, Position, Txn
-from dashboard.services.table_formatter import *
+from dashboard.services.table_formatter import TxnTableFormatter, PositionTableFormatter, PortfolioTableFormatter
 
 # SHOULD PORTFOLIOMANAGER BE MADE TO EXTEND DASHBOARDMANAGER?
 

@@ -179,13 +179,16 @@ class TxnImporterManual(TxnImporter):
 
         conn.execute(qry.INSERT_TXN_BATCH, [batch_id],)
 
-        p_imp = PortfolioImportData(p_id, p_name, created, batch_id)    
+        p_imp = PortfolioImportData(p_id, p_name, created, batch_id)   
+        import_data = ImportData(batch_id, "manual-entry", 1, [p_imp]) 
 
         ImportDataTableFormatter.header()
-        ImportDataTableFormatter(ImportData(batch_id, "manual-entry", 1, [p_imp])).entry()
+        ImportDataTableFormatter(import_data).entry()
         
         PortfolioImportDataTableFormatter.header()
         PortfolioImportDataTableFormatter(p_imp).entry()
+
+        return import_data
 
 @dataclass
 class TxnImporterCSV(TxnImporter):
@@ -263,12 +266,16 @@ class TxnImporterCSV(TxnImporter):
         n_txn_after = conn.execute("SELECT COUNT(*) FROM txn").fetchone()[0]
         inserted_rows  = n_txn_after - n_txn_before
         
+        import_data = ImportData(batch_id, self.batch_type, inserted_rows, p_aff)
+
         ImportDataTableFormatter.header()
-        ImportDataTableFormatter(ImportData(batch_id, self.batch_type, inserted_rows, p_aff)).entry()
+        ImportDataTableFormatter(import_data).entry()
         
         PortfolioImportDataTableFormatter.header()
         for p_impData in p_aff:
             PortfolioImportDataTableFormatter(p_impData).entry()
+
+        return import_data
 
 
 

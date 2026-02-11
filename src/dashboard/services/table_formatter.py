@@ -13,7 +13,7 @@ format domain models as a table for display in the CLI.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from dashboard.models.domain import *
+from dashboard.models.domain import Txn, Asset, Portfolio, Position, PortfolioImportData, ImportData
 
 @dataclass 
 class TableFormatter(ABC):
@@ -165,7 +165,8 @@ class PortfolioImportDataTableFormatter:
         """
         Print a padded string representing the PortfolioImportData object as one row in a list table.
         """
-        print(f"| {self.p_impData.portfolio_id:>12} | {self.p_impData.portfolio_name:<14} | {self.p_impData.created:>7} | {self.p_impData.batch_id:>8} |")
+        created = True if self.p_impData or self.p_impData is not None else False
+        print(f"| {self.p_impData.portfolio_id:>12} | {self.p_impData.portfolio_name:<14} | {created:>7} | {self.p_impData.batch_id:>8} |")
 
 @dataclass 
 class ImportDataTableFormatter:

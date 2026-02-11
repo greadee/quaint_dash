@@ -29,7 +29,7 @@ def cli_loop():
         - All parsing and behaviour lives inside of 'View' subclasses.
     View transitions are driven by return values from `handle_input()`, not by direct mutation inside the views.
     """
-    db = DB("tests/tmp/test_db.db")
+    db = DB("data/persistent_db.db")
     init_db(db)
     manager = DashboardManager(db)
     view: View = DashboardView(manager)
@@ -37,7 +37,8 @@ def cli_loop():
     while True:
         view.default_display()
         line = input(view.prompt_input())
-        if not line: continue 
+        if not line: 
+            continue 
         try:
             next_view = view.handle_input(line)
         except ValueError as e:

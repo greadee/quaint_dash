@@ -16,6 +16,7 @@ class DB:
         self.conn = self.connect()
 
     def connect(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         return duckdb.connect(str(self.path))
     
 def init_db(db: DB):

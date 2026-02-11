@@ -9,11 +9,12 @@ from dashboard.db.db_conn import DB, init_db
 from dashboard.models.storage import DashboardManager
 from dashboard.services.importer import TxnImporterCSV, TxnImporterManual, tTestTxn
 
-TMP_FOLDER = "tests/tmp/"
+TEST_DB_FOLDER = "data/test/"
 TEST_IMPORTER_DB = "test_importer.db"
+TMP_FOLDER = "tests/tmp/"
 
 @pytest.fixture(scope="module")
-def test_manager(test_db_path: Path = Path(TMP_FOLDER + TEST_IMPORTER_DB)):
+def test_manager(test_db_path: Path = Path(TEST_DB_FOLDER + TEST_IMPORTER_DB)):
     """
     Create a fresh DB inside the temp folder and initialize schema
     Return a PortfolioManager object for access by other tests via attribute test_manager
