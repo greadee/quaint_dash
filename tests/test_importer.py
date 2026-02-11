@@ -13,6 +13,11 @@ TEST_DB_FOLDER = "data/test/"
 TEST_IMPORTER_DB = "test_importer.db"
 TMP_FOLDER = "tests/tmp/"
 
+@pytest.fixture(autouse=True)
+def ensure_test_dir():
+    Path("data/test").mkdir(parents=True, exist_ok=True)
+    Path("tests/tmp").mkdir(parents=True, exist_ok=True)
+
 @pytest.fixture(scope="module")
 def test_manager(test_db_path: Path = Path(TEST_DB_FOLDER + TEST_IMPORTER_DB)):
     """
