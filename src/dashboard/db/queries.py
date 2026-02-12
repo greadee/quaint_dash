@@ -201,6 +201,23 @@ FROM txn
 WHERE txn_type = ?
 ORDER BY time_stamp, txn_id"""
 
+LIST_TXNS_BY_DAY = """
+SELECT
+    txn_id,
+    portfolio_id,
+    time_stamp,
+    txn_type,
+    asset_id,
+    qty,
+    price,
+    ccy,
+    cash_amt,
+    fee_amt,
+    batch_id
+FROM txn
+WHERE CAST(time_stamp AS DATE) = ?
+ORDER BY time_stamp, txn_id"""
+
 LIST_TXNS_BY_ASSET = """
 SELECT
     txn_id,

@@ -41,7 +41,7 @@ def cli_loop():
             continue 
         try:
             next_view = view.handle_input(line)
-        except ValueError as e:
+        except Exception as e:
                 print(e)
                 next_view = view
 

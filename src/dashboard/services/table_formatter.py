@@ -68,7 +68,7 @@ class TxnTableFormatter:
         price = f"{self.txn.price:.2f}" if self.txn.price is not None else "-"
         cash_amt = f"{self.txn.cash_amt:.2f}" if self.txn.cash_amt is not None else "-"
         fee_amt = f"{self.txn.fee_amt:.2f}" if self.txn.fee_amt is not None else "-"
-        print(f"| {self.txn.txn_id:>14} | {self.txn.portfolio_id:>12} | {self.txn.time_stamp.strftime('%d/%m/%Y, %H:%M:%S'):>20} | {self.txn.txn_type:>16} | {asset:>8} | {qty:>8} | {price:>8} | {self.txn.ccy:>5} | {cash_amt:>10} | {fee_amt:>10} | {self.txn.batch_id:>8} |")
+        print(f"| {self.txn.txn_id:>14} | {self.txn.portfolio_id:>12} | {self.txn.time_stamp.strftime('%m/%d/%Y, %H:%M:%S'):>20} | {self.txn.txn_type:>16} | {asset:>8} | {qty:>8} | {price:>8} | {self.txn.ccy:>5} | {cash_amt:>10} | {fee_amt:>10} | {self.txn.batch_id:>8} |")
 
 @dataclass 
 class AssetTableFormatter:
@@ -112,7 +112,7 @@ class PortfolioTableFormatter:
         """
         Print a padded string representing the Portfolio object as one row in a list table.
         """
-        print(f"| {self.portfolio.portfolio_id:>12} | {self.portfolio.portfolio_name:<14} | {self.portfolio.created_at.strftime('%d/%m/%Y, %H:%M:%S'):20} | {self.portfolio.updated_at.strftime('%d/%m/%Y, %H:%M:%S'):20} | {self.portfolio.base_ccy:^5} |")
+        print(f"| {self.portfolio.portfolio_id:>12} | {self.portfolio.portfolio_name:<14} | {self.portfolio.created_at.strftime('%m/%d/%Y, %H:%M:%S'):20} | {self.portfolio.updated_at.strftime('%d/%m/%Y, %H:%M:%S'):20} | {self.portfolio.base_ccy:^5} |")
 
 @dataclass 
 class PositionTableFormatter:
@@ -139,7 +139,7 @@ class PositionTableFormatter:
         qty = f"{self.position.qty:.4f}" 
         book_cost = f"{self.position.book_cost:.2f}"
 
-        print(f"| {self.position.portfolio_id:>12} | {self.position.asset_id:<8} | {qty:>8} | {book_cost:>9} | {self.position.last_updated.strftime('%d/%m/%Y, %H:%M:%S'):20} |")
+        print(f"| {self.position.portfolio_id:>12} | {self.position.asset_id:<8} | {qty:>8} | {book_cost:>9} | {self.position.last_updated.strftime('%m/%d/%Y, %H:%M:%S'):20} |")
 
 
 @dataclass 

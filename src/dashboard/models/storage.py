@@ -141,8 +141,26 @@ class DashboardManager:
         for row in to_list:
             TxnTableFormatter(Txn(*row)).entry()
 
-    def list_txns_by_day(self, N:int|None):
-        pass
+    def list_txns_by_day(self, date_str: str, N:int|None):
+        # normalize date_str into a datetime object.
+        for fmt in ("%m-%d-%Y", "%m/%d/%Y"):
+            try:
+                date = datetime.strptime(date_str, fmt).date()
+                break
+            except ValueError:
+                continue
+        else:
+            raise AttributeError(f"Date {date_str} invalid. Please enter in (MM-DD-YYYY) or (MM/DD/YYYY) format.")
+        
+        rows = self.conn.execute(f"{qry.LIST_TXNS_BY_DAY};", [date],).fetchall()
+        if not rows: 
+            raise ValueError(f"No transactions found on: {date.strftime('%m/%d/%Y')}.")
+        
+        TxnTableFormatter.header()
+
+        to_list = rows if N is None else rows[:N]
+        for row in to_list:
+            TxnTableFormatter(Txn(*row)).entry()
 
     def list_txns_by_asset(self, asset_id:str, N:int|None):
         """
@@ -281,7 +299,7 @@ class PortfolioManager():
         - Optional argument (N) determines how many rows to display.
         Returns None.        
         """
-        query = f"SELECT * FROM ({qry.LIST_TXNS_BY_TYPE};+++) p WHERE p.portfolio_id = ?;"
+        query = f"SELECT * FROM ({qry.LIST_TXNS_BY_TYPE}) p WHERE p.portfolio_id = ?;"
         rows = self.conn.execute(query [txn_type, self.portfolio_id],).fetchall()
         if not rows: 
             raise ValueError(f"No transactions found with type: {txn_type}.")
@@ -292,8 +310,27 @@ class PortfolioManager():
         for row in to_list:
             TxnTableFormatter(Txn(*row)).entry()
 
-    def list_txns_by_day(self, N:int|None):
-        pass
+    def list_txns_by_day(self, date_str:str, N:int|None):
+         # normalize date_str into a datetime object.
+        for fmt in ("%m-%d-%Y", "%m/%d/%Y"):
+            try:
+                date = datetime.strptime(date_str, fmt).date()
+                break
+            except ValueError:
+                continue
+        else:
+            raise AttributeError(f"Date {date_str} invalid. Please enter in (MM-DD-YYYY) or (MM/DD/YYYY) format.")
+        
+        query = f"SELECT * FROM ({qry.LIST_TXNS_BY_DAY}) d WHERE d.portfolio_id = ?"
+        rows = self.conn.execute(query, [date, self.portfolio_id],).fetchall()
+        if not rows: 
+            raise ValueError(f"No transactions found on: {date.strftime('%m/%d/%Y')}.")
+        
+        TxnTableFormatter.header()
+
+        to_list = rows if N is None else rows[:N]
+        for row in to_list:
+            TxnTableFormatter(Txn(*row)).entry()
 
     def list_txns_by_position(self, asset_id:str, N:int|None):
         """

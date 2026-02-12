@@ -172,26 +172,30 @@ class DashboardView(View):
         if cmd == "list":
             item_type = ns.item_type
             if item_type in ["port", "ports", "portfolio", "portfolios"]:
-                rows = self.access.list_portfolios(ns.n)
+                self.access.list_portfolios(ns.n)
 
             elif item_type in ["txn", "txns", "transaction", "transactions"]:
-                rows = self.access.list_txns(ns.n)
+                if getattr(ns, "txn_type", None) is not None:
+                    self.access.list_txns_by_type(ns.txn_type, ns.n)
+                elif getattr(ns, "date", None) is not None:
+                    self.access.list_txns_by_day(ns.date, ns.n)
+                elif getattr(ns, "asset_id", None) is not None:
+                    self.access.list_txns_by_asset(ns.asset_id, ns.n)
+                else:
+                    self.access.list_txns(ns.n)
             
             elif item_type in ["pos", "position", "positions"]:
                 self.access.update_positions() # refresh position table
 
                 if getattr(ns, "asset_id", None) is not None: 
-                    rows = self.access.list_positions_by_asset(ns.asset_id, ns.n)
+                    self.access.list_positions_by_asset(ns.asset_id, ns.n)
                 elif getattr(ns, "asset_type", None) is not None: 
-                    rows = self.access.list_positions_by_type(ns.asset_type, ns.n)
+                    self.access.list_positions_by_type(ns.asset_type, ns.n)
                 elif getattr(ns, "asset_subtype", None) is not None: 
-                    rows = self.access.list_positions_by_subtype(ns.asset_subtype, ns.n)
+                    self.access.list_positions_by_subtype(ns.asset_subtype, ns.n)
                 else:
-                    rows = self.access.list_positions(ns.n)
+                    self.access.list_positions(ns.n)
             
-            
-            if rows is not None:
-                print(rows)
             return self
             
         if cmd == "create":
@@ -255,10 +259,16 @@ class DashboardView(View):
         subp = p.add_subparsers(dest="item_type", required=True)
         
         subp_txn: argparse.ArgumentParser = subp.add_parser("txn", aliases=["txn", "txns", "transaction", "transcations"], 
-                                   help="List transactions.", description="List transactions.", add_help=True)
+                                   help="List transactions (optionally filtered).", description="List transactions.", add_help=True)
         subp_txn.add_argument("-n", "--n", dest="n", type=int, default=None,
                               help = "Number of transactions to display (default: all).")
-        
+        txn_arg_group = subp_txn.add_mutually_exclusive_group()
+
+        # transaction filter
+        txn_arg_group.add_argument("-txn-type", "--txn-type", dest="txn_type", help="Filter by transaction type.")
+        txn_arg_group.add_argument("-date", "--date", "-day", "--day", dest="date", help="Filter by transaction date.")
+        txn_arg_group.add_argument("-asset-id", "--asset-id", dest="asset_id", help="Filter by asset id.")
+
         subp_port: argparse.ArgumentParser = subp.add_parser("port", aliases=["port", "ports", "portfolio", "portfolios"], 
                                     help="List active portfolios.", description="List active portfolios.", add_help=True)
         subp_port.add_argument("-n", "--n", dest="n", type=int, default=None,
@@ -384,23 +394,30 @@ class PortfolioView(View):
         if cmd == "list":
             item_type = ns.item_type
             if item_type in ["txn", "txns", "transaction", "transactions"]:
-                rows = self.portfolio_access.list_txns(ns.n)
+                if getattr(ns, "txn_type", None) is not None:
+                    self.portfolio_access.list_txns_by_type(ns.n)
+                elif getattr(ns, "date", None) is not None:
+                    try:
+                        self.portfolio_access.list_txns_by_day(ns.date, ns.n)
+                    except AttributeError:
+                        print(f"Date {ns.date} invalid. Please enter in YYYY-MM-DD format.")
+                        return self
+                elif getattr(ns, "position", None) is not None:
+                    self.portfolio_access.list_txns_by_position(ns.position, ns.n)
+                else:
+                    self.portfolio_access.list_txns(ns.n)
             
             elif item_type in ["pos", "position", "positions"]:
                 self.root_access.update_positions() # refresh position table
 
                 if getattr(ns, "asset_id", None) is not None: 
-                    rows = self.portfolio_access.list_positions_by_asset(ns.n)
+                    self.portfolio_access.list_positions_by_asset(ns.n)
                 elif getattr(ns, "asset_type", None) is not None: 
-                    rows = self.portfolio_access.list_positions_by_type(ns.n)
+                    self.portfolio_access.list_positions_by_type(ns.n)
                 elif getattr(ns, "asset_subtype", None) is not None: 
-                    rows = self.portfolio_access.list_positions_by_subtype(ns.n)
+                    self.portfolio_access.list_positions_by_subtype(ns.n)
                 else:
-                    rows = self.portfolio_access.list_positions(ns.n)
-
-            if rows is not None:
-                print(rows)
-            return self
+                    self.portfolio_access.list_positions(ns.n)
         
         return self # fall back
 
@@ -479,6 +496,13 @@ class PortfolioView(View):
                                    help="List transactions.", description="List transactions.", add_help=True)
         subp_txn.add_argument("-n", "--n", dest="n", type=int, default=None,
                               help = "Number of transactions to display (default: all).")
+        txn_arg_group = subp_txn.add_mutually_exclusive_group()
+
+        # transaction filter
+        txn_arg_group.add_argument("-txn-type", "--txn-type", dest="txn_type", help="Filter by transaction type.")
+        txn_arg_group.add_argument("-date", "--date", "-day", "--day", dest="date", help="Filter by transaction date.")
+        txn_arg_group.add_argument("-asset-id", "--asset-id", dest="asset_id", help="Filter by asset id.")
+
         
         subp_pos: argparse.ArgumentParser = subp.add_parser("pos", aliases=["pos", "position", "positions"], 
                                     help="List positions (optionally filtered).", 
