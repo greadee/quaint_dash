@@ -157,7 +157,7 @@ class PortfolioImportDataTableFormatter:
         """
         Print formatted row header for PortfolioImportData objectss.
         """
-        print(f'\n| {"PORTFOLIO ID":^12} | {"PORTFOLIO NAME":^14} | {"CREATED":^7} | {"BATCH ID":^8}|')
+        print(f'\n| {"PORTFOLIO ID":^12} | {"PORTFOLIO NAME":^14} | {"CREATED":^7} | {"BATCH ID":^8} |')
  
 
     @abstractmethod 

@@ -395,12 +395,12 @@ class PortfolioView(View):
             item_type = ns.item_type
             if item_type in ["txn", "txns", "transaction", "transactions"]:
                 if getattr(ns, "txn_type", None) is not None:
-                    self.portfolio_access.list_txns_by_type(ns.n)
+                    self.portfolio_access.list_txns_by_type(ns.txn_type, ns.n)
                 elif getattr(ns, "date", None) is not None:
                     try:
                         self.portfolio_access.list_txns_by_day(ns.date, ns.n)
-                    except AttributeError:
-                        print(f"Date {ns.date} invalid. Please enter in YYYY-MM-DD format.")
+                    except AttributeError as e:
+                        print(e)
                         return self
                 elif getattr(ns, "position", None) is not None:
                     self.portfolio_access.list_txns_by_position(ns.position, ns.n)
@@ -411,11 +411,11 @@ class PortfolioView(View):
                 self.root_access.update_positions() # refresh position table
 
                 if getattr(ns, "asset_id", None) is not None: 
-                    self.portfolio_access.list_positions_by_asset(ns.n)
+                    self.portfolio_access.list_positions_by_asset(ns.asset_id, ns.n)
                 elif getattr(ns, "asset_type", None) is not None: 
-                    self.portfolio_access.list_positions_by_type(ns.n)
+                    self.portfolio_access.list_positions_by_type(ns.asset_type, ns.n)
                 elif getattr(ns, "asset_subtype", None) is not None: 
-                    self.portfolio_access.list_positions_by_subtype(ns.n)
+                    self.portfolio_access.list_positions_by_subtype(ns.aseet_subtype, ns.n)
                 else:
                     self.portfolio_access.list_positions(ns.n)
         

@@ -90,9 +90,9 @@ class DashboardManager:
     def list_portfolios(self, N:int|None):
         """
         List all portfolios in database.
-        Instantiates a Portfolio object for each row returned by the db query.
-        Calls Portfolio method .display_str() to return a string representing a table row.
-        Optional argument (N) determines how many rows to display.
+        - Instantiates a Portfolio object for each row returned by the db query.
+        - Calls Formatter class to return a string representing a table row.
+        - Optional argument (N) determines how many rows to display.
         Returns None.        
         """
         rows = self.conn.execute(qry.LIST_PORTFOLIOS).fetchall()
@@ -108,9 +108,9 @@ class DashboardManager:
     def list_txns(self, N:int|None):
         """
         List all transactions in database.
-        Instantiates a Txn object for each row returned by the db query.
-        Calls Txn method .display_str() to return a string representing a table row.
-        Optional argument (N) determines how many rows to display.
+        - Instantiates a Txn object for each row returned by the db query.
+        - Calls Formatter class to return a string representing a table row.
+        - Optional argument (N) determines how many rows to display.
         Returns None.        
         """
         rows = self.conn.execute(f"{qry.LIST_TXNS};").fetchall()
@@ -123,12 +123,17 @@ class DashboardManager:
         for row in to_list:
             TxnTableFormatter(Txn(*row)).entry()
     
+
+    #############################################################################################################################
+
+    # err - out: "string indices must be integers, not 'tuple'\n"
+
     def list_txns_by_type(self, txn_type:str, N:int|None):
         """
         List all transactions in database filtered by txn_type.
-        Instantiates a Txn object for each row returned by the db query.
-        Calls Txn method .display_str() to return a string representing a table row.
-        Optional argument (N) determines how many rows to display.
+        - Instantiates a Txn object for each row returned by the db query.
+        - Calls Formatter class to return a string representing a table row.
+        - Optional argument (N) determines how many rows to display.
         Returns None.        
         """
         rows = self.conn.execute(f"{qry.LIST_TXNS_BY_TYPE};", [txn_type],).fetchall()
@@ -140,6 +145,8 @@ class DashboardManager:
         to_list = rows if N is None else rows[:N]
         for row in to_list:
             TxnTableFormatter(Txn(*row)).entry()
+
+    #############################################################################################################################
 
     def list_txns_by_day(self, date_str: str, N:int|None):
         # normalize date_str into a datetime object.
@@ -165,9 +172,9 @@ class DashboardManager:
     def list_txns_by_asset(self, asset_id:str, N:int|None):
         """
         List all transactions in database filtered by asset_id.
-        Instantiates a Txn object for each row returned by the db query.
-        Calls Txn method .display_str() to return a string representing a table row.
-        Optional argument (N) determines how many rows to display.
+        - Instantiates a Txn object for each row returned by the db query.
+        - Calls Formatter class to return a string representing a table row.
+        - Optional argument (N) determines how many rows to display.
         Returns None.        
         """
         rows = self.conn.execute(f"{qry.LIST_TXNS_BY_ASSET};", [asset_id],).fetchall()
@@ -290,17 +297,17 @@ class PortfolioManager():
         to_list = rows if N is None else rows[:N]
         for row in to_list:
             TxnTableFormatter(Txn(*row)).entry()
-    
+
     def list_txns_by_type(self, txn_type:str, N:int|None):
         """
         List transactions belonging to the Portfolio in PortfolioView filtered by txn_type.
         - Instantiates a Txn object for each row returned by the db query, or raises a ValueError if the result is empty.
-        - Calls Txn method .display_str() to return a string representing a table row.
+        - Calls Formatter class to return a string representing a table row for each row returned.
         - Optional argument (N) determines how many rows to display.
         Returns None.        
         """
         query = f"SELECT * FROM ({qry.LIST_TXNS_BY_TYPE}) p WHERE p.portfolio_id = ?;"
-        rows = self.conn.execute(query [txn_type, self.portfolio_id],).fetchall()
+        rows = self.conn.execute(query, [txn_type, self.portfolio_id],).fetchall()
         if not rows: 
             raise ValueError(f"No transactions found with type: {txn_type}.")
         
@@ -308,9 +315,16 @@ class PortfolioManager():
 
         to_list = rows if N is None else rows[:N]
         for row in to_list:
-            TxnTableFormatter(Txn(*row)).entry()
+            TxnTableFormatter(Txn(*row)).entry()        
 
     def list_txns_by_day(self, date_str:str, N:int|None):
+        """
+        List transactions belonging to the Portfolio in PortfolioView filtered by (timestamp.date()).
+        - Instantiates a Txn object for each row returned by the db query, or raises a ValueError if the result is empty.
+        - Calls Formatter class to return a string representing a table row for each row returned.
+        - Optional argument (N) determines how many rows to display.
+        Returns None.          
+        """
          # normalize date_str into a datetime object.
         for fmt in ("%m-%d-%Y", "%m/%d/%Y"):
             try:
@@ -336,7 +350,7 @@ class PortfolioManager():
         """
         List transactions belonging to the Portfolio in PortfolioView filtered by (portfolio_id, asset_id).
         - Instantiates a Txn object for each row returned by the db query, or raises a ValueError if the result is empty.
-        - Calls Txn method .display_str() to return a string representing a table row.
+        - Calls Formatter class to return a string representing a table row for each row returned.
         - Optional argument (N) determines how many rows to display.
         Returns None.          
         """
@@ -355,7 +369,7 @@ class PortfolioManager():
         """
         List positions belonging to the Portfolio in PortfolioView.
         - Instantiates a Position object for each row returned by the db query, or raises a ValueError if the result is empty.
-        - Calls Position method .display_str() to return a string representing a table row.
+        - Calls Formatter class to return a string representing a table row for each row returned.
         - Optional argument (N) determines how many rows to display.
         Returns None.          
         """
@@ -374,7 +388,7 @@ class PortfolioManager():
         """
         List positions belonging to the Portfolio in PortfolioView filtered by asset_id.
         - Instantiates a Position object for each row returned by the db query, or raises a ValueError if the result is empty.
-        - Calls Position method .display_str() to return a string representing a table row.
+        - Calls Formatter class to return a string representing a table row for each row returned.
         - Optional argument (N) determines how many rows to display.
         Returns None.          
         """
@@ -393,7 +407,7 @@ class PortfolioManager():
         """
         List positions belonging to the Portfolio in PortfolioView filtered by asset_type.
         - Instantiates a Position object for each row returned by the db query, or raises a ValueError if the result is empty.
-        - Calls Position method .display_str() to return a string representing a table row.
+        - Calls Formatter class to return a string representing a table row for each row returned.
         - Optional argument (N) determines how many rows to display.
         Returns None.          
         """
@@ -412,7 +426,7 @@ class PortfolioManager():
         """
         List positions belonging to the Portfolio in PortfolioView filtered by asset_subtype.
         - Instantiates a Position object for each row returned by the db query, or raises a ValueError if the result is empty.
-        - Calls Position method .display_str() to return a string representing a table row.
+        - Calls Formatter class to return a string representing a table row for each row returned.
         - Optional argument (N) determines how many rows to display.
         Returns None.          
         """
