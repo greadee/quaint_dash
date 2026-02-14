@@ -1,0 +1,73 @@
+@startuml
+' Table Foramatters
+'   presentation layer
+
+abstract class TableFormatter {
+  + header() : void
+  + entry() : void
+}
+
+class TxnTableFormatter {
+  - txn : Txn
+  + header() : void
+  + entry() : void
+}
+
+class PositionTableFormatter {
+  - position : Position
+  + header() : void
+  + entry() : void
+}
+
+class PortfolioTableFormatter {
+  - portfolio : Portfolio
+  + header() : void
+  + entry() : void
+}
+
+class AssetTableFormatter {
+  - asset : Asset
+  + header() : void
+  + entry() : void
+}
+
+class ImportDataTableFormatter {
+  - importData : ImportData
+  + header() : void
+  + entry() : void
+}
+
+class PortfolioImportDataTableFormatter {
+  - pImp : PortfolioImportData
+  + header() : void
+  + entry() : void
+}
+
+' Inheritance from base model
+TableFormatter <|-- TxnTableFormatter
+TableFormatter <|-- PositionTableFormatter
+TableFormatter <|-- PortfolioTableFormatter
+TableFormatter <|-- AssetTableFormatter
+TableFormatter <|-- ImportDataTableFormatter
+TableFormatter <|-- PortfolioImportDataTableFormatter
+
+' Formatter formats Domain Model
+TxnTableFormatter --> Txn : formats
+PositionTableFormatter --> Position : formats
+PortfolioTableFormatter --> Portfolio : formats
+AssetTableFormatter --> Asset : formats
+ImportDataTableFormatter --> ImportData : formats
+PortfolioImportDataTableFormatter --> PortfolioImportData : formats
+
+' Views call Formatter to print
+DashboardView ..> TxnTableFormatter : prints
+DashboardView ..> PositionTableFormatter : prints
+DashboardView ..> PortfolioTableFormatter : prints
+
+PortfolioView ..> TxnTableFormatter : prints
+PortfolioView ..> PositionTableFormatter : prints
+
+TxnImporter ..> ImportDataTableFormatter : prints
+TxnImporter ..> PortfolioImportDataTableFormatter : prints
+
+@enduml

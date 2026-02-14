@@ -1,9 +1,8 @@
 @startuml
 skinparam classAttributeIconSize 0
 
-' =====================
-' DATABASE
-' =====================
+' Database models 
+
 class DB {
   - path : Path
   - conn : DuckDBPyConnection
@@ -16,9 +15,8 @@ class init_db {
 
 DB ..> init_db
 
-' =====================
-' DOMAIN MODELS
-' =====================
+' Domain models
+
 class Txn {
   + txn_id : int
   + portfolio_id : str
@@ -61,9 +59,8 @@ class ImportData
 
 ImportData "1" o-- "0..*" PortfolioImportData
 
-' =====================
-' MANAGERS
-' =====================
+' Managers
+
 class DashboardManager {
   - db : DB
   - conn
@@ -89,9 +86,8 @@ DashboardManager --> DB
 PortfolioManager --> DB
 DashboardManager --> PortfolioManager : creates
 
-' =====================
-' IMPORTERS
-' =====================
+' Importers
+
 abstract class TxnImporter {
   - manager : DashboardManager
   - batch_id : int
@@ -107,9 +103,8 @@ TxnImporter <|-- TxnImporterCSV
 
 TxnImporter --> DashboardManager
 
-' =====================
-' CLI VIEWS
-' =====================
+' Viewers
+
 abstract class View {
   + default_display()
   + prompt_input() : str
