@@ -8,6 +8,7 @@ Project emphasizes seperation of concerns, function dependant layered structure,
 I am building this project to help consolidate, and manage my own personal finances, as well as familiarize myself with software engineering practices as I am actively learning in CMPUT 301: Software Engineering at the University of Alberta (W2026).
 <br>
 
+
 ## Setup 
 Open up Command Prompt on Windows, or Terminal on Mac/Linux and:
 #### Grab your own local copy:
@@ -15,28 +16,18 @@ Open up Command Prompt on Windows, or Terminal on Mac/Linux and:
 git clone https://github.com/greadee/quaint-dash.git 
 cd quaint-dash
 ```
-
-#### Build dependencies:
-```
-python -m pip install --upgrade pip
-pip install duckdb
-```
-<br>
-
-### Development Setup
----
 #### Standalone Environment
 ```
-python -m venv venv
-venv\Scripts\activate           # for Windows
-source venv/bin/activate        # for Max/Linux
+python -m venv .venv
+cd .venv\Scripts
+activate
 ```
 #### Build dependencies:
 ```
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
-####  Linting and testing:
+#### (Dev) Linting and testing:
 ```
 ruff check 
 pytest
@@ -48,7 +39,7 @@ pytest
 
 #### Run:
 ```
-python -m dashboard
+dashboard           # or python -m dashboard
 ```
 #### Dashboard Commands: [Dashboard Commands](docs/usage/cmds/dashboard_cmds.md)
 #### Portfolio Commands: [Portfolio Commands](docs/usage/cmds/portfolio_cmds.md)
@@ -88,7 +79,8 @@ python -m dashboard
 
 ![Formatter Class](docs/classes/to-display/formatters_ph1.svg)
 
-
+## License: 
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
 
 

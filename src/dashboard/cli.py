@@ -47,3 +47,6 @@ def cli_loop():
 
         if isinstance(next_view, View):
             view = next_view 
+
+def main():
+     cli_loop()
