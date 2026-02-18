@@ -54,8 +54,21 @@ class Position {
   + last_updated : datetime
 }
 
-class PortfolioImportData
-class ImportData
+' Import Domain classes
+
+class PortfolioImportData {
+  + portfolio_id : int
+  + portfolio_name : str
+  + created : bool
+  + batch_id : int
+}
+
+class ImportData {
+  + batch_id : int
+  + batch_type : str
+  + inserted_rows : int
+  + portfolios_affected : list[PortfolioImportData]
+}
 
 ImportData "1" o-- "0..*" PortfolioImportData
 
@@ -69,7 +82,9 @@ class DashboardManager {
   + open_portfolio_by_name(name:str) : PortfolioManager
   + list_portfolios(N:int)
   + list_txns(N:int)
+  + list_txns_by_*(N:int)
   + list_positions(N:int)
+  + list_positions_by_*(N:int)
 }
 
 class PortfolioManager {
@@ -79,7 +94,9 @@ class PortfolioManager {
   - portfolio_name : str
   + load_portfolio() : Portfolio
   + list_txns(N:int)
+  + list_txns_by_*(N:int)
   + list_positions(N:int)
+  + list_positions_by_*(N:int)
 }
 
 DashboardManager --> DB
@@ -88,20 +105,58 @@ DashboardManager --> PortfolioManager : creates
 
 ' Importers
 
-abstract class TxnImporter {
-  - manager : DashboardManager
-  - batch_id : int
-  - import_time : datetime
-  + run() : ImportData
+class tTestTxn {
+  + portfolio_id : int
+  + portfolio_name : str
+  + time_stamp : datetime
+  + txn_type : str
+  + asset_id : str | None
+  + qty : float | None
+  + price : float | None
+  + ccy : str
+  + cash_amt : float | None
+  + fee_amt : float | None
 }
 
-class TxnImporterManual
-class TxnImporterCSV
+abstract class TxnImporter {
+  - manager : DashboardManager
+  - batch_id : int | None
+  - import_time : datetime | None
+  + run() : ImportData
+  - _normalize_txn_stage() : None
+  - _validate_txn_stage() : None
+  - _handle_validation_fail(query_failure) : None
+  {abstract} - _append_batch_table() : tuple[int, datetime]
+  {abstract} - _stage_import() : None
+  {abstract} - _handle_import() : ImportData
+}
+
+class TxnImporterManual {
+  + txn : tTestTxn
+  + create_portfolio : bool | None
+  + batch_type : str = "manual-entry"
+  - _append_batch_table() : tuple[int, datetime]
+  - _stage_import() : None
+  - _handle_import() : ImportData
+}
+
+class TxnImporterCSV {
+  + csv_path : Path
+  + delim : str = ","
+  + batch_type : str = "csv-import"
+  - _append_batch_table() : tuple[int, datetime]
+  - _validate_csv_cols() : None
+  - _stage_import() : None
+  - _handle_import() : ImportData
+}
 
 TxnImporter <|-- TxnImporterManual
 TxnImporter <|-- TxnImporterCSV
+TxnImporterManual "1..*" *-- "1" tTestTxn
 
-TxnImporter --> DashboardManager
+PortfolioView --> TxnImporterManual : initiates
+DashboardView --> TxnImporterCSV : initiates
+PortfolioView --> tTestTxn : creates test Txn
 
 ' Viewers
 
@@ -113,13 +168,26 @@ abstract class View {
 
 class DashboardView {
   - access : DashboardManager
-  + build_dash_parsers()
+  - cmds : dict[str, argparse.ArgumentParser]
+  + __post_init__() : None
+  + default_display() : None
+  + prompt_input() : str
+  + handle_input(line: str) : View
+  - _handle_help(args: list[str]) : None
+  {static} + build_dash_parsers() : dict[str, argparse.ArgumentParser]
 }
 
 class PortfolioView {
   - portfolio_access : PortfolioManager
   - root_access : DashboardManager
-  + build_port_parsers()
+  - cmds : dict[str, argparse.ArgumentParser]
+  + __post_init__() : None
+  + default_display() : None
+  + prompt_input() : str
+  + handle_input(line: str) : View
+  - _handle_help(args: list[str]) : None
+  - _prompt_txn_fields() : tTestTxn | View
+  {static} + build_port_parsers() : dict[str, argparse.ArgumentParser]
 }
 
 View <|-- DashboardView
