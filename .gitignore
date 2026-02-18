@@ -1,3 +1,11 @@
+# Ensure Data privacy / clean repo
+tmp/
+data/test
+*.db
+venv/
+.venv/
+$null
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -18,6 +26,7 @@ lib/
 lib64/
 parts/
 sdist/
+tmp/
 var/
 wheels/
 share/python-wheels/

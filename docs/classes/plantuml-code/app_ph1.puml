@@ -1,0 +1,132 @@
+@startuml
+skinparam classAttributeIconSize 0
+
+' Database models 
+
+class DB {
+  - path : Path
+  - conn : DuckDBPyConnection
+  + connect() : DuckDBPyConnection
+}
+
+class init_db {
+  + init_db(db: DB)
+}
+
+DB ..> init_db
+
+' Domain models
+
+class Txn {
+  + txn_id : int
+  + portfolio_id : str
+  + time_stamp : datetime
+  + txn_type : str
+  + asset_id : str
+  + qty : float
+  + price : float
+  + ccy : str
+  + cash_amt : float
+  + fee_amt : float
+  + batch_id : str
+}
+
+class Asset {
+  + asset_id : str
+  + asset_type : str
+  + asset_subtype : str
+  + ccy : str
+}
+
+class Portfolio {
+  + portfolio_id : int
+  + portfolio_name : str
+  + created_at : datetime
+  + updated_at : datetime
+  + base_ccy : str
+}
+
+class Position {
+  + portfolio_id : int
+  + asset_id : str
+  + qty : float
+  + book_cost : float
+  + last_updated : datetime
+}
+
+class PortfolioImportData
+class ImportData
+
+ImportData "1" o-- "0..*" PortfolioImportData
+
+' Managers
+
+class DashboardManager {
+  - db : DB
+  - conn
+  + open()
+  + open_portfolio_by_id(id:int) : PortfolioManager
+  + open_portfolio_by_name(name:str) : PortfolioManager
+  + list_portfolios(N:int)
+  + list_txns(N:int)
+  + list_positions(N:int)
+}
+
+class PortfolioManager {
+  - db : DB
+  - conn
+  - portfolio_id : int
+  - portfolio_name : str
+  + load_portfolio() : Portfolio
+  + list_txns(N:int)
+  + list_positions(N:int)
+}
+
+DashboardManager --> DB
+PortfolioManager --> DB
+DashboardManager --> PortfolioManager : creates
+
+' Importers
+
+abstract class TxnImporter {
+  - manager : DashboardManager
+  - batch_id : int
+  - import_time : datetime
+  + run() : ImportData
+}
+
+class TxnImporterManual
+class TxnImporterCSV
+
+TxnImporter <|-- TxnImporterManual
+TxnImporter <|-- TxnImporterCSV
+
+TxnImporter --> DashboardManager
+
+' Viewers
+
+abstract class View {
+  + default_display()
+  + prompt_input() : str
+  + handle_input(line:str) : View
+}
+
+class DashboardView {
+  - access : DashboardManager
+  + build_dash_parsers()
+}
+
+class PortfolioView {
+  - portfolio_access : PortfolioManager
+  - root_access : DashboardManager
+  + build_port_parsers()
+}
+
+View <|-- DashboardView
+View <|-- PortfolioView
+
+DashboardView --> DashboardManager
+PortfolioView --> PortfolioManager
+PortfolioView --> DashboardManager
+
+@enduml

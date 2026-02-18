@@ -5,8 +5,18 @@ build-backend = "hatchling.build"
 [project]
 name = "dashboard"
 version = "0.1.0"
+description = "TUI based portfolio management dashboard"
+readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+license = { text = "MIT" }
+
+authors = [
+  {name = "Connor Proulx", email = "proolux@telus.net"}
+]
+
+dependencies = [
+  "duckdb>=1.0.0"
+]
 
 [project.optional-dependencies]
 dev = [
@@ -15,7 +25,10 @@ dev = [
 ]
 
 [project.scripts]
-dash = "dashboard.cli:main"
+dashboard = "dashboard.cli:main"
+
+[project.urls]
+Home-page = "https://github.com/greadee/quaint_dash"
 
 [tool.ruff]
 line-length = 100
@@ -23,3 +36,5 @@ target-version = "py310"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+
