@@ -69,12 +69,18 @@ dashboard           # or python -m dashboard
 
 ## Diagrams
 
-### Core Components: 
+
+### Database E-R:
+<br>
+
+![Entity Relationship](docs/erd/to-display/erd_ph1.svg)
+
+### App Core Components: 
 <br>
 
 ![Core Components](docs/classes/to-display/app_ph1.svg)
 
-### Display:
+### App Display:
 <br>
 
 ![Formatter Class](docs/classes/to-display/formatters_ph1.svg)

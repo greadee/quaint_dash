@@ -32,6 +32,15 @@ CREATE TABLE IF NOT EXISTS position (
     PRIMARY KEY (portfolio_id, asset_id) 
 );
 
+CREATE SEQUENCE IF NOT EXISTS seq_batch_id;
+
+CREATE TABLE IF NOT EXISTS import_batch (
+    batch_id BIGINT PRIMARY KEY DEFAULT nextval('seq_batch_id'), 
+    batch_type TEXT NOT NULL, -- manual-entry, csv-import, broker-ingest
+    import_time TIMESTAMP NOT NULL DEFAULT NOW(),
+
+);
+
 CREATE SEQUENCE IF NOT EXISTS seq_txn_id;
 
 -- Append-only
@@ -54,17 +63,8 @@ CREATE TABLE IF NOT EXISTS txn (
     batch_id BIGINT NOT NULL,
 
     FOREIGN KEY (portfolio_id) REFERENCES portfolio(portfolio_id),
-    -- require FK: asset_id in Phase 2 when we ingest asset data
-    --FOREIGN KEY (asset_id) REFERENCES asset(asset_id)
-);
-
-CREATE SEQUENCE IF NOT EXISTS seq_batch_id;
-
-CREATE TABLE IF NOT EXISTS import_batch (
-    batch_id BIGINT PRIMARY KEY DEFAULT nextval('seq_batch_id'), 
-    batch_type TEXT NOT NULL, -- manual-entry, csv-import, broker-ingest
-    import_time TIMESTAMP NOT NULL DEFAULT NOW(),
-
+    FOREIGN KEY (asset_id) REFERENCES asset(asset_id),
+    FOREIGN KEY (batch_id) REFERENCES import_batch(batch_id)
 );
 
 --CREATE INDEX IF NOT EXISTS portfolioTxn_by_time ON txn(portfolio_id, time_stamp);
