@@ -1,0 +1,129 @@
+erDiagram
+  PORTFOLIO ||--o{ TXN : contains
+  IMPORT_BATCH ||--o{ TXN : imports
+  PORTFOLIO ||--o{ POSITION : holds
+  ASSET ||--o{ POSITION : held_by
+  ASSET ||--o{ TXN : referenced_by
+  ASSET ||--o{ ASSET_QUOTE_INTRADAY : has_intraday_quotes
+  ASSET ||--o{ ASSET_QUOTE_DAILY : has_daily_quotes
+  ASSET ||--o{ CORPORATE_EVENT : has_events
+  ASSET ||--o{ FINANCIAL_STATEMENT : has_statements
+
+  PORTFOLIO {
+    BIGINT portfolio_id PK
+    TEXT portfolio_name
+    TIMESTAMP created_at
+    TIMESTAMP updated_at
+    TEXT base_ccy
+  }
+
+  POSITION {
+    BIGINT portfolio_id PK, FK
+    TEXT asset_id PK, FK
+    DOUBLE qty
+    DOUBLE book_cost
+    TIMESTAMP last_updated
+  }
+
+  TXN {
+    BIGINT txn_id PK
+    BIGINT portfolio_id FK
+    TIMESTAMP time_stamp
+    TEXT txn_type
+
+    TEXT asset_id FK "nullable"
+    DOUBLE qty "nullable"
+    DOUBLE price "nullable"
+
+    TEXT ccy
+    DOUBLE cash_amt
+    DOUBLE fee_amt
+
+    BIGINT batch_id FK
+  }
+
+  IMPORT_BATCH {
+    BIGINT batch_id PK
+    TEXT batch_type
+    TIMESTAMP import_time
+  }
+
+  %% Added tables
+  ASSET {
+    TEXT asset_id PK
+    TEXT asset_type
+    TEXT ccy
+    TEXT name
+
+    TEXT sector "nullable"
+    TEXT industry "nullable"
+    TEXT country "nullable"
+    TEXT region "nullable"
+    DOUBLE mkt_cap "nullable"
+    BIGINT shares_outstanding "nullable"
+
+    BOOLEAN track
+    TIMESTAMP created_at
+    TIMESTAMP updated_at
+  }
+
+  ASSET_QUOTE_INTRADAY {
+    TEXT asset_id PK, FK
+    TIMESTAMP time_stamp PK
+    DOUBLE price "nullable"
+    BIGINT volume "nullable"
+    TEXT ing_source
+    TIMESTAMP ing_at
+  }
+
+  ASSET_QUOTE_DAILY {
+    TEXT asset_id PK, FK
+    DATE date PK
+    DOUBLE open "nullable"
+    DOUBLE high "nullable"
+    DOUBLE low "nullable"
+    DOUBLE close "nullable"
+    DOUBLE adj_close "nullable"
+    BIGINT volume "nullable"
+    TEXT ing_source
+    TIMESTAMP ing_at
+  }
+
+  CORPORATE_EVENT {
+    TEXT asset_id PK, FK
+    TEXT event_type PK
+    TIMESTAMP event_time_utc PK
+    TIMESTAMP event_time_local "nullable"
+    TEXT exchange_tz "nullable"
+
+    INTEGER year
+    INTEGER quarter
+    BOOLEAN confirmed "nullable"
+    TEXT description "nullable"
+
+    TIMESTAMP created_at
+    TIMESTAMP updated_at
+    TEXT source
+  }
+
+  FINANCIAL_STATEMENT {
+    TEXT asset_id PK, FK
+    TEXT statement_type PK
+    INTEGER year PK
+    INTEGER quarter PK
+    DATE period_end_date "nullable"
+    DATE report_date "nullable"
+    JSON data_json "nullable"
+    TEXT source
+    TIMESTAMP ingested_at_utc
+  }
+
+  INGESTION_RUN {
+    BIGINT run_id PK
+    TEXT job_name
+    TIMESTAMP started_at
+    TIMESTAMP ended_at "nullable"
+    TEXT status
+    BIGINT rows_written
+    TEXT source "nullable"
+  }

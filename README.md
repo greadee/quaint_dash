@@ -73,7 +73,7 @@ dashboard           # or python -m dashboard
 ### Database E-R:
 <br>
 
-![Entity Relationship](docs/erd/to-display/erd_ph1.svg)
+![Entity Relationship](docs/erd/to-display/erd_ph2.svg)
 
 ### App Core Components: 
 <br>
