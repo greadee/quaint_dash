@@ -1,0 +1,43 @@
+erDiagram
+  PORTFOLIO ||--o{ TXN : contains
+  IMPORT_BATCH ||--o{ TXN : imports
+  PORTFOLIO ||--o{ POSITION : holds
+
+  PORTFOLIO {
+    BIGINT portfolio_id PK
+    TEXT portfolio_name
+    TIMESTAMP created_at
+    TIMESTAMP updated_at
+    TEXT base_ccy
+  }
+
+  POSITION {
+    BIGINT portfolio_id PK, FK
+    TEXT asset_id PK
+    DOUBLE qty
+    DOUBLE book_cost
+    TIMESTAMP last_updated
+  }
+
+  TXN {
+    BIGINT txn_id PK
+    BIGINT portfolio_id FK
+    TIMESTAMP time_stamp
+    TEXT txn_type
+
+    TEXT asset_id FK "nullable"
+    DOUBLE qty "nullable"
+    DOUBLE price "nullable"
+
+    TEXT ccy 
+    DOUBLE cash_amt 
+    DOUBLE fee_amt 
+
+    BIGINT batch_id  FK
+  }
+
+  IMPORT_BATCH {
+    BIGINT batch_id PK
+    TEXT batch_type
+    TIMESTAMP import_time
+  }
