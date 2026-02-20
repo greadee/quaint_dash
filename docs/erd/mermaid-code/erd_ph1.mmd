@@ -1,9 +1,7 @@
 erDiagram
   PORTFOLIO ||--o{ TXN : contains
   IMPORT_BATCH ||--o{ TXN : imports
-  ASSET ||--o{ TXN : "traded"
   PORTFOLIO ||--o{ POSITION : holds
-  ASSET ||--o{ POSITION : "held in"
 
   PORTFOLIO {
     BIGINT portfolio_id PK
@@ -13,16 +11,9 @@ erDiagram
     TEXT base_ccy
   }
 
-  ASSET {
-    TEXT asset_id PK
-    TEXT asset_type
-    TEXT asset_subtype
-    TEXT ccy
-  }
-
   POSITION {
     BIGINT portfolio_id PK, FK
-    TEXT asset_id PK, FK
+    TEXT asset_id PK
     DOUBLE qty
     DOUBLE book_cost
     TIMESTAMP last_updated

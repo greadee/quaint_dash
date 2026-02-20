@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS txn (
     batch_id BIGINT NOT NULL,
 
     FOREIGN KEY (portfolio_id) REFERENCES portfolio(portfolio_id),
-    FOREIGN KEY (asset_id) REFERENCES asset(asset_id),
+    --FOREIGN KEY (asset_id) REFERENCES asset(asset_id), -- phase 2
     FOREIGN KEY (batch_id) REFERENCES import_batch(batch_id)
 );
 
