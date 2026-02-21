@@ -25,21 +25,10 @@ CREATE TABLE IF NOT EXISTS position (
     PRIMARY KEY (portfolio_id, asset_id) 
 );
 
-CREATE SEQUENCE IF NOT EXISTS seq_batch_id;
-
-CREATE TABLE IF NOT EXISTS import_batch (
-    batch_id BIGINT PRIMARY KEY DEFAULT nextval('seq_batch_id'), 
-    batch_type TEXT NOT NULL, -- manual-entry, csv-import, broker-ingest
-    import_time TIMESTAMP NOT NULL DEFAULT NOW(),
-);
-
---CREATE INDEX IF NOT EXISTS portfolioTxn_by_time ON txn(portfolio_id, time_stamp);
-CREATE INDEX IF NOT EXISTS portolioTxn_by_asset ON txn(portfolio_id, asset_id);
-
 CREATE TABLE IF NOT EXISTS asset (
     asset_id TEXT PRIMARY KEY, 
     asset_type TEXT NOT NULL,
-    ccy TEXT NOT NULL
+    ccy TEXT NOT NULL,
     name TEXT NOT NULL,
 
     -- for tickers 
@@ -55,6 +44,44 @@ CREATE TABLE IF NOT EXISTS asset (
     updated_at TIMESTAMP NOT NULL DEFAULT now(),
 );
 
+CREATE SEQUENCE IF NOT EXISTS seq_batch_id;
+
+CREATE TABLE IF NOT EXISTS import_batch (
+    batch_id BIGINT PRIMARY KEY DEFAULT nextval('seq_batch_id'), 
+    batch_type TEXT NOT NULL, -- manual-entry, csv-import, broker-ingest
+    import_time TIMESTAMP NOT NULL DEFAULT NOW(),
+);
+
+CREATE SEQUENCE IF NOT EXISTS seq_txn_id;
+
+-- Append-only
+CREATE TABLE IF NOT EXISTS txn (
+    txn_id BIGINT PRIMARY KEY DEFAULT nextval('seq_txn_id'),
+    portfolio_id BIGINT NOT NULL, 
+    time_stamp TIMESTAMP NOT NULL DEFAULT NOW(),
+    txn_type TEXT NOT NULL,
+
+    -- for asset transactions
+    asset_id TEXT,              
+    qty DOUBLE PRECISION,
+    price DOUBLE PRECISION,
+    
+    -- cash data per transaction needed for assets too.
+    ccy TEXT,
+    cash_amt DOUBLE PRECISION,
+    fee_amt DOUBLE PRECISION DEFAULT 0.0,
+
+    batch_id BIGINT NOT NULL,
+
+    FOREIGN KEY (portfolio_id) REFERENCES portfolio(portfolio_id),
+    FOREIGN KEY (asset_id) REFERENCES asset(asset_id), -- no constraint if cash transaction
+    FOREIGN KEY (batch_id) REFERENCES import_batch(batch_id)
+);
+
+
+--CREATE INDEX IF NOT EXISTS portfolioTxn_by_time ON txn(portfolio_id, time_stamp);
+CREATE INDEX IF NOT EXISTS portolioTxn_by_asset ON txn(portfolio_id, asset_id);
+
 -- Main source of asset truth for intraday
 -- Ingestion via Websocket streaming for intraday quotes
 CREATE TABLE IF NOT EXISTS asset_quote_intraday (
@@ -66,7 +93,7 @@ CREATE TABLE IF NOT EXISTS asset_quote_intraday (
     ing_source TEXT NOT NULL, 
     ing_at TIMESTAMP NOT NULL, 
 
-    PRIMARY KEY (asset_id, time_stamp)
+    PRIMARY KEY (asset_id, time_stamp),
     FOREIGN KEY(asset_id) REFERENCES asset(asset_id)
 );
 
@@ -86,7 +113,7 @@ CREATE TABLE IF NOT EXISTS asset_quote_daily (
     ing_source TEXT NOT NULL, 
     ing_at TIMESTAMP NOT NULL, 
 
-    PRIMARY KEY (asset_id, date)
+    PRIMARY KEY (asset_id, date),
     FOREIGN KEY(asset_id) REFERENCES asset(asset_id)
 );
 
@@ -137,32 +164,6 @@ CREATE TABLE IF NOT EXISTS ingestion_run (
     status TEXT NOT NULL, -- 'success', 'failed', 'partial', 'skipped'
     rows_written BIGINT NOT NULL DEFAULT 0,
     source TEXT, -- 'finnhub', 'fmp'
-);
-
-CREATE SEQUENCE IF NOT EXISTS seq_txn_id;
-
--- Append-only
-CREATE TABLE IF NOT EXISTS txn (
-    txn_id BIGINT PRIMARY KEY DEFAULT nextval('seq_txn_id'),
-    portfolio_id BIGINT NOT NULL, 
-    time_stamp TIMESTAMP NOT NULL DEFAULT NOW(),
-    txn_type TEXT NOT NULL,
-
-    -- for asset transactions
-    asset_id TEXT,              
-    qty DOUBLE PRECISION,
-    price DOUBLE PRECISION,
-    
-    -- cash data per transaction needed for assets too.
-    ccy TEXT,
-    cash_amt DOUBLE PRECISION,
-    fee_amt DOUBLE PRECISION DEFAULT 0.0,
-
-    batch_id BIGINT NOT NULL,
-
-    FOREIGN KEY (portfolio_id) REFERENCES portfolio(portfolio_id),
-    FOREIGN KEY (asset_id) REFERENCES asset(asset_id), -- no constraint if cash transaction
-    FOREIGN KEY (batch_id) REFERENCES import_batch(batch_id)
 );
 
 COMMIT; 

@@ -10,8 +10,7 @@ Design Decisions: [ADR's](../adr/adr_ph2.md)
     - Need to figure out whether or not historical data ingestion should be automatic if we can expect that watchlist items are frequently added and removed.
    - WatchlistView and WatchlistManager
 ### Tasks: 
-- Database schema and diagram
-    - Add a schema diagram for phase 0+1 for sake of documentation
+- Initialize asset tables on transaction import 
 - Ingest metadata sync upon watchlist, portfolio add (FMP)
     - Scheduler
 - Ingest biweekly earnings calendar update (FMP)

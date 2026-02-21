@@ -19,8 +19,7 @@ cd quaint-dash
 #### Standalone Environment
 ```
 python -m venv .venv
-cd .venv\Scripts
-activate
+.venv\Scripts\activate
 ```
 #### Build dependencies:
 ```
