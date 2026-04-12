@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS asset (
     asset_id TEXT PRIMARY KEY, 
     asset_type TEXT NOT NULL,
     ccy TEXT NOT NULL,
-    name TEXT NOT NULL,
+    name TEXT,
 
     -- for tickers 
     sector TEXT, 

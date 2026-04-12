@@ -9,8 +9,10 @@ Design Decisions: [ADR's](../adr/adr_ph2.md)
     - Websocket data is not a concern.
     - Need to figure out whether or not historical data ingestion should be automatic if we can expect that watchlist items are frequently added and removed.
    - WatchlistView and WatchlistManager
+   
 ### Tasks: 
 - Initialize asset tables on transaction import 
+- Refactor position table (and in turn ER diagram) to have created_at, and updated_at like portfolios and assets instead of last_updated
 - Ingest metadata sync upon watchlist, portfolio add (FMP)
     - Scheduler
 - Ingest biweekly earnings calendar update (FMP)

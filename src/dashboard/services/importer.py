@@ -81,6 +81,7 @@ class TxnImporter(ABC):
         self._stage_import()
         self._normalize_txn_stage()
         self._validate_txn_stage()
+        self._initialize_imported_assets()
         return self._handle_import()
     
 
@@ -105,6 +106,14 @@ class TxnImporter(ABC):
             # ideally, each query in the validation suite should yield a count of 0
             if result:
                 self._handle_validation_fail(q)
+
+    def _initialize_imported_assets(self):
+        """
+        Initializes any distinct staged asset ids into the asset table
+        before transaction rows are inserted.
+        """
+        conn = self.manager.conn
+        conn.execute(qry.INITIALIZE_IMPORTED_ASSETS)
             
     def _handle_validation_fail(self, query_failure):
         """

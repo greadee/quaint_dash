@@ -131,6 +131,27 @@ FROM asset
 WHERE asset_id = ?;
 """
 
+INITIALIZE_IMPORTED_ASSETS = """
+INSERT INTO asset (
+  asset_id,
+  asset_type,
+  ccy,
+  created_at,
+  updated_at
+)
+SELECT DISTINCT
+  n.asset_id,
+  'unknown' AS asset_type,
+  COALESCE(NULLIF(n.ccy, ''), 'CAD') AS ccy,
+  now() AS created_at,
+  now() AS updated_at
+FROM norm_stg_txn n
+WHERE n.asset_id IS NOT NULL
+ON CONFLICT (asset_id) DO UPDATE SET
+  ccy = COALESCE(excluded.ccy, asset.ccy),
+  updated_at = now();
+"""
+
 ##########
 #               transaction queries
 ##########

@@ -10,8 +10,6 @@ from dashboard.db import queries as qry
 from dashboard.models.domain import Portfolio, Position, Txn
 from dashboard.services.table_formatter import TxnTableFormatter, PositionTableFormatter, PortfolioTableFormatter
 
-# SHOULD PORTFOLIOMANAGER BE MADE TO EXTEND DASHBOARDMANAGER?
-
 class DashboardManager:
     """
     Creates and opens portfolios (multiple)
