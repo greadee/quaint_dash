@@ -68,21 +68,22 @@ WHERE portfolio_name = ?
 ##########
 
 UPDATE_POSITIONS = """
-INSERT INTO position (portfolio_id, asset_id, qty, book_cost, last_updated)
+INSERT INTO position (portfolio_id, asset_id, qty, book_cost, created_at, updated_at)
 SELECT
-  t.portfolio_id, 
-  t.asset_id, 
-  SUM(t.qty) AS qty, 
-  SUM(t.price * t.qty) AS book_cost, 
-  now() AS last_updated
+  t.portfolio_id,
+  t.asset_id,
+  SUM(t.qty) AS qty,
+  SUM(t.price * t.qty) AS book_cost,
+  now() AS created_at,
+  now() AS updated_at
 FROM txn t
 WHERE t.txn_type = 'buy' OR t.txn_type = 'sell'
 GROUP BY portfolio_id, asset_id
 ON CONFLICT (portfolio_id, asset_id)
 DO UPDATE SET
-  qty = excluded.qty, 
-  book_cost = excluded.book_cost, 
-  last_updated = excluded.last_updated;
+  qty = excluded.qty,
+  book_cost = excluded.book_cost,
+  updated_at = excluded.updated_at;
 """
 
 ##
@@ -90,26 +91,24 @@ DO UPDATE SET
 ##
 
 LIST_POSITIONS = """
-SELECT portfolio_id, asset_id, qty, book_cost, last_updated
+SELECT portfolio_id, asset_id, qty, book_cost, created_at, updated_at
 FROM position"""
 
 LIST_POSITIONS_BY_ASSET_ID = """
-SELECT portfolio_id, asset_id, qty, book_cost, last_updated
+SELECT portfolio_id, asset_id, qty, book_cost, created_at, updated_at
 FROM position
 WHERE asset_id = ?"""
 
 LIST_POSITIONS_BY_ASSET_TYPE = """
-SELECT p.portfolio_id, p.asset_id, p.qty, p.book_cost, p.last_updated
+SELECT p.portfolio_id, p.asset_id, p.qty, p.book_cost, p.created_at, p.updated_at
 FROM position p
-JOIN asset a ON 
-  p.asset_id = a.asset_id
+JOIN asset a ON p.asset_id = a.asset_id
 WHERE a.asset_type = ?"""
 
 LIST_POSITIONS_BY_ASSET_SUBTYPE = """
-SELECT p.portfolio_id, asset_id, p.qty, p.book_cost, p.last_updated
+SELECT p.portfolio_id, p.asset_id, p.qty, p.book_cost, p.created_at, p.updated_at
 FROM position p
-JOIN asset a ON 
-  p.asset_id = a.asset_id
+JOIN asset a ON p.asset_id = a.asset_id
 WHERE a.asset_subtype = ?"""
 
 
@@ -135,6 +134,7 @@ INITIALIZE_IMPORTED_ASSETS = """
 INSERT INTO asset (
   asset_id,
   asset_type,
+  asset_subtype,
   ccy,
   created_at,
   updated_at
@@ -142,6 +142,7 @@ INSERT INTO asset (
 SELECT DISTINCT
   n.asset_id,
   'unknown' AS asset_type,
+  'unknown' AS asset_subtype,
   COALESCE(NULLIF(n.ccy, ''), 'CAD') AS ccy,
   now() AS created_at,
   now() AS updated_at

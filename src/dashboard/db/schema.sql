@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS position (
     asset_id TEXT, 
     qty DOUBLE PRECISION NOT NULL, 
     book_cost DOUBLE PRECISION NOT NULL,
-    last_updated TIMESTAMP NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
 
     PRIMARY KEY (portfolio_id, asset_id) 
 );
@@ -28,6 +29,7 @@ CREATE TABLE IF NOT EXISTS position (
 CREATE TABLE IF NOT EXISTS asset (
     asset_id TEXT PRIMARY KEY, 
     asset_type TEXT NOT NULL,
+    asset_subtype TEXT NOT NULL,
     ccy TEXT NOT NULL,
     name TEXT,
 

@@ -93,11 +93,12 @@ class Position:
           - book_cost: sum total of the quantity times price attribtue of each transaction involved.
           - last_updated: time of last transaction inside of portfolio on a specific asset.    
     """
-    portfolio_id: int 
+    portfolio_id: int
     asset_id: str
-    qty: float 
-    book_cost: float 
-    last_updated: datetime
+    qty: float
+    book_cost: float
+    created_at: datetime
+    updated_at: datetime
 
 
 @dataclass(frozen=True)

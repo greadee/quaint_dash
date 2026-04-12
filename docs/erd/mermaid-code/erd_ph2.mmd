@@ -22,7 +22,8 @@ erDiagram
     TEXT asset_id PK, FK
     DOUBLE qty
     DOUBLE book_cost
-    TIMESTAMP last_updated
+    TIMESTAMP created_at
+    TIMESTAMP updated_at
   }
 
   TXN {
@@ -52,6 +53,7 @@ erDiagram
   ASSET {
     TEXT asset_id PK
     TEXT asset_type
+    TEXT asset_subtype
     TEXT ccy
     TEXT name
 
