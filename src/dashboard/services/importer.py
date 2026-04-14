@@ -110,10 +110,12 @@ class TxnImporter(ABC):
     def _initialize_imported_assets(self):
         """
         Initializes any distinct staged asset ids into the asset table
-        before transaction rows are inserted.
+        and creates metadata sync rows for the scheduler before
+        transaction rows are inserted.
         """
         conn = self.manager.conn
         conn.execute(qry.INITIALIZE_IMPORTED_ASSETS)
+        conn.execute(qry.INITIALIZE_IMPORTED_ASSET_METADATA_SYNC)
             
     def _handle_validation_fail(self, query_failure):
         """

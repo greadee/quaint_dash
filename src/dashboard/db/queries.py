@@ -118,14 +118,16 @@ WHERE a.asset_subtype = ?"""
 
 UPSERT_ASSET = """
 INSERT INTO asset (asset_id, asset_type, asset_subtype, ccy)
-VALUES ( ?, ?, ?, ?)
+VALUES (?, ?, ?, ?)
 ON CONFLICT(asset_id) DO UPDATE SET
-  asset_type = asset_type,
-  ccy = ccy;
+  asset_type = excluded.asset_type,
+  asset_subtype = excluded.asset_subtype,
+  ccy = excluded.ccy,
+  updated_at = now();
 """
 
 GET_ASSET = """
-SELECT asset_id, asset_type, ccy
+SELECT asset_id, asset_type, asset_subtype, ccy
 FROM asset
 WHERE asset_id = ?;
 """
@@ -136,6 +138,7 @@ INSERT INTO asset (
   asset_type,
   asset_subtype,
   ccy,
+  track,
   created_at,
   updated_at
 )
@@ -144,13 +147,34 @@ SELECT DISTINCT
   'unknown' AS asset_type,
   'unknown' AS asset_subtype,
   COALESCE(NULLIF(n.ccy, ''), 'CAD') AS ccy,
+  TRUE AS track,
   now() AS created_at,
   now() AS updated_at
 FROM norm_stg_txn n
 WHERE n.asset_id IS NOT NULL
 ON CONFLICT (asset_id) DO UPDATE SET
-  ccy = COALESCE(excluded.ccy, asset.ccy),
   updated_at = now();
+"""
+
+INITIALIZE_IMPORTED_ASSET_METADATA_SYNC = """
+INSERT INTO asset_metadata_sync (
+  asset_id,
+  source,
+  sync_status,
+  next_retry_at,
+  created_at,
+  updated_at
+)
+SELECT DISTINCT
+  n.asset_id,
+  'fmp' AS source,
+  'pending' AS sync_status,
+  now() AS next_retry_at,
+  now() AS created_at,
+  now() AS updated_at
+FROM norm_stg_txn n
+WHERE n.asset_id IS NOT NULL
+ON CONFLICT (asset_id) DO NOTHING;
 """
 
 ##########

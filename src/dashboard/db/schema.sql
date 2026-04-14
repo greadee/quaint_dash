@@ -28,8 +28,8 @@ CREATE TABLE IF NOT EXISTS position (
 
 CREATE TABLE IF NOT EXISTS asset (
     asset_id TEXT PRIMARY KEY, 
-    asset_type TEXT NOT NULL,
-    asset_subtype TEXT NOT NULL,
+    asset_type TEXT,
+    asset_subtype TEXT,
     ccy TEXT NOT NULL,
     name TEXT,
 
@@ -44,6 +44,21 @@ CREATE TABLE IF NOT EXISTS asset (
     track BOOLEAN NOT NULL DEFAULT TRUE, -- untracked assets can just sit idle for now
     created_at TIMESTAMP NOT NULL DEFAULT now(),
     updated_at TIMESTAMP NOT NULL DEFAULT now(),
+);
+
+CREATE TABLE IF NOT EXISTS asset_metadata_sync (
+    asset_id TEXT PRIMARY KEY,
+    source TEXT NOT NULL DEFAULT 'fmp',
+    sync_status TEXT NOT NULL DEFAULT 'pending', -- pending, running, synced, failed, stale
+    last_attempted_at TIMESTAMP,
+    last_succeeded_at TIMESTAMP,
+    next_retry_at TIMESTAMP,
+    attempt_count BIGINT NOT NULL DEFAULT 0,
+    last_error TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    FOREIGN KEY(asset_id) REFERENCES asset(asset_id)
 );
 
 CREATE SEQUENCE IF NOT EXISTS seq_batch_id;

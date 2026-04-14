@@ -353,7 +353,7 @@ class PortfolioManager():
         Returns None.          
         """
         query = f"SELECT * FROM ({qry.LIST_TXNS_BY_ASSET}) p WHERE p.portfolio_id = ?;"
-        rows = self.conn.execute(query [asset_id, self.portfolio_id],).fetchall()
+        rows = self.conn.execute(query, [asset_id, self.portfolio_id],).fetchall()
         if not rows: 
             raise ValueError(f"No transactions found with asset: {asset_id}")
         
