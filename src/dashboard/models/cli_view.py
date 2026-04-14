@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 import argparse
 import shlex
 from dashboard.models.storage import DashboardManager, PortfolioManager
-from dashboard.services.importer import TxnImporterManual, TxnImporterCSV, tTestTxn
+from src.dashboard.services.txn_importer import TxnImporterManual, TxnImporterCSV, tTestTxn
 
 class _NoExitParser(argparse.ArgumentParser):
     """

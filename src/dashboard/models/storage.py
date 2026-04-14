@@ -420,7 +420,7 @@ class PortfolioManager():
         for row in to_list:
             PositionTableFormatter(Position(*row)).entry()
     
-    def list_positions_by_subtype(self, asset_subtype:str, N:int|None):
+    def list_positions_by_size(self, asset_size:str, N:int|None):
         """
         List positions belonging to the Portfolio in PortfolioView filtered by asset_subtype.
         - Instantiates a Position object for each row returned by the db query, or raises a ValueError if the result is empty.
@@ -428,8 +428,8 @@ class PortfolioManager():
         - Optional argument (N) determines how many rows to display.
         Returns None.          
         """
-        query = f"SELECT * FROM ({qry.LIST_POSITIONS_BY_ASSET_SUBTYPE}) p WHERE p.portfolio_id = ?;"
-        rows =  self.conn.execute(query, [asset_subtype, self.portfolio_id],).fetchall()
+        query = f"SELECT * FROM ({qry.LIST_POSITIONS_BY_ASSET_SIZE}) p WHERE p.portfolio_id = ?;"
+        rows =  self.conn.execute(query, [asset_size, self.portfolio_id],).fetchall()
         if not rows: 
             raise ValueError(f"No positions in portfolio: {self.portfolio_name} of subtype: {asset_subtype}.")
         

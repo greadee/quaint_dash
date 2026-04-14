@@ -105,11 +105,11 @@ FROM position p
 JOIN asset a ON p.asset_id = a.asset_id
 WHERE a.asset_type = ?"""
 
-LIST_POSITIONS_BY_ASSET_SUBTYPE = """
+LIST_POSITIONS_BY_ASSET_SIZE = """
 SELECT p.portfolio_id, p.asset_id, p.qty, p.book_cost, p.created_at, p.updated_at
 FROM position p
 JOIN asset a ON p.asset_id = a.asset_id
-WHERE a.asset_subtype = ?"""
+WHERE a.size = ?"""
 
 
 ##########
@@ -117,17 +117,16 @@ WHERE a.asset_subtype = ?"""
 ##########
 
 UPSERT_ASSET = """
-INSERT INTO asset (asset_id, asset_type, asset_subtype, ccy)
-VALUES (?, ?, ?, ?)
+INSERT INTO asset (asset_id, asset_type, ccy)
+VALUES (?, ?, ?)
 ON CONFLICT(asset_id) DO UPDATE SET
   asset_type = excluded.asset_type,
-  asset_subtype = excluded.asset_subtype,
   ccy = excluded.ccy,
   updated_at = now();
 """
 
 GET_ASSET = """
-SELECT asset_id, asset_type, asset_subtype, ccy
+SELECT asset_id, asset_type, ccy
 FROM asset
 WHERE asset_id = ?;
 """
@@ -136,7 +135,6 @@ INITIALIZE_IMPORTED_ASSETS = """
 INSERT INTO asset (
   asset_id,
   asset_type,
-  asset_subtype,
   ccy,
   track,
   created_at,
@@ -144,8 +142,7 @@ INSERT INTO asset (
 )
 SELECT DISTINCT
   n.asset_id,
-  'unknown' AS asset_type,
-  'unknown' AS asset_subtype,
+  'stock' AS asset_type,
   COALESCE(NULLIF(n.ccy, ''), 'CAD') AS ccy,
   TRUE AS track,
   now() AS created_at,
@@ -448,3 +445,79 @@ VALIDATE_TXN_SUITE = [
     VALIDATE_STAGED_CCY,
     VALIDATE_STAGED_CASH,
     VALIDATE_STAGED_FEE]
+
+
+## 
+#     asset metadata ingestion
+##
+
+LIST_IMPORTED_STAGE_ASSET_IDS = """
+SELECT DISTINCT asset_id
+FROM norm_stg_txn
+WHERE asset_id IS NOT NULL
+ORDER BY asset_id;
+"""
+
+UPSERT_ASSET_METADATA = """
+UPDATE asset
+SET
+  asset_type = COALESCE(?, asset_type),
+  ccy = COALESCE(?, ccy),
+  name = COALESCE(?, name),
+  sector = COALESCE(?, sector),
+  industry = COALESCE(?, industry),
+  size = COALESCE(?, size),
+  country = COALESCE(?, country),
+  region = COALESCE(?, region),
+  description = COALESCE(?, description),
+  market_beta = COALESCE(?, market_beta),
+  mkt_cap = COALESCE(?, mkt_cap),
+  shares_outstanding = COALESCE(?, shares_outstanding),
+  updated_at = now()
+WHERE asset_id = ?;
+"""
+
+MARK_ASSET_METADATA_SYNC_RUNNING = """
+UPDATE asset_metadata_sync
+SET
+  sync_status = 'running',
+  last_attempted_at = now(),
+  attempt_count = attempt_count + 1,
+  updated_at = now()
+WHERE asset_id = ?;
+"""
+
+MARK_ASSET_METADATA_SYNC_SUCCESS = """
+UPDATE asset_metadata_sync
+SET
+  sync_status = 'synced',
+  last_succeeded_at = now(),
+  last_error = NULL,
+  updated_at = now()
+WHERE asset_id = ?;
+"""
+
+MARK_ASSET_METADATA_SYNC_FAILED = """
+UPDATE asset_metadata_sync
+SET
+  sync_status = 'failed',
+  last_error = ?,
+  updated_at = now()
+WHERE asset_id = ?;
+"""
+
+GET_ASSET_METADATA_SYNC = """
+SELECT
+  asset_id,
+  source,
+  sync_status,
+  last_attempted_at,
+  last_succeeded_at,
+  next_retry_at,
+  attempt_count,
+  last_error,
+  created_at,
+  updated_at
+FROM asset_metadata_sync
+WHERE asset_id = ?;
+"""
