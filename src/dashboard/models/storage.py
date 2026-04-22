@@ -239,17 +239,17 @@ class DashboardManager:
         for row in to_list:
             PositionTableFormatter(Position(*row)).entry()
 
-    def list_positions_by_subtype(self, asset_subtype:str, N:int|None):
+    def list_positions_by_asset_size(self, asset_size:str, N:int|None):
         """
-        List all positions in database filtered by asset_subtype.
+        List all positions in database filtered by asset_size.
         - Instantiates a Position object for each row returned by the db query, or raises a ValueError if the result is empty.
         - Calls Position method .display_str() to return a string representing a table row.
         - Optional argument (N) determines how many rows to display.
         Returns None.          
         """
-        rows = self.conn.execute(f"{qry.LIST_POSITIONS_BY_ASSET_SUBTYPE};", [asset_subtype],).fetchall()
+        rows = self.conn.execute(f"{qry.LIST_POSITIONS_BY_ASSET_SIZE};", [asset_size],).fetchall()
         if not rows: 
-            raise ValueError(f"No positions found with asset subtype: {asset_subtype}")
+            raise ValueError(f"No positions found with asset subtype: {asset_size}")
         
         PositionTableFormatter.header()
 
@@ -422,7 +422,7 @@ class PortfolioManager():
     
     def list_positions_by_size(self, asset_size:str, N:int|None):
         """
-        List positions belonging to the Portfolio in PortfolioView filtered by asset_subtype.
+        List positions belonging to the Portfolio in PortfolioView filtered by asset_size.
         - Instantiates a Position object for each row returned by the db query, or raises a ValueError if the result is empty.
         - Calls Formatter class to return a string representing a table row for each row returned.
         - Optional argument (N) determines how many rows to display.
@@ -431,7 +431,7 @@ class PortfolioManager():
         query = f"SELECT * FROM ({qry.LIST_POSITIONS_BY_ASSET_SIZE}) p WHERE p.portfolio_id = ?;"
         rows =  self.conn.execute(query, [asset_size, self.portfolio_id],).fetchall()
         if not rows: 
-            raise ValueError(f"No positions in portfolio: {self.portfolio_name} of subtype: {asset_subtype}.")
+            raise ValueError(f"No positions in portfolio: {self.portfolio_name} of subtype: {asset_size}.")
         
         PositionTableFormatter.header()
 

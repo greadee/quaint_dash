@@ -6,10 +6,6 @@ Asset data ingestion from FMP for assets registered in the local database
     AssetImporter: fetches metadata for one or more asset ids and updates
     both asset and asset_metadata_sync tables
 """
-
-from dotenv import load_dotenv
-load_dotenv()
-
 from dataclasses import dataclass
 from typing import Iterable, Any
 import json
@@ -20,6 +16,9 @@ import urllib.error
 
 from dashboard.models.storage import DashboardManager
 from dashboard.db import queries as qry
+
+from dotenv import load_dotenv
+load_dotenv()
 
 
 @dataclass
