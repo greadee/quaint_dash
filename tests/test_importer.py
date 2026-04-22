@@ -8,7 +8,7 @@ from datetime import datetime
 import pytest
 from dashboard.db.db_conn import DB, init_db
 from dashboard.models.storage import DashboardManager
-from dashboard.services.importer import TxnImporterCSV, TxnImporterManual, tTestTxn
+from dashboard.services.txn_importer import TxnImporterCSV, TxnImporterManual, tTestTxn
 
 TEST_DB_FOLDER = "data/test/"
 TEST_IMPORTER_DB = "test_importer.db"
@@ -103,7 +103,7 @@ def test_import_one_port_batch(test_manager: DashboardManager):
     ).fetchall()
     assert len(asset_rows) == 1
     assert asset_rows[0][0] == "BN.TO"
-    assert asset_rows[0][1] == "unknown"
+    assert asset_rows[0][1] == "stock"
     assert asset_rows[0][2] == "CAD"
 
     # cash contribution should not create an asset row
@@ -358,7 +358,7 @@ def test_manual_txn_upd(test_manager: DashboardManager):
     ).fetchone()
     assert asset_row is not None
     assert asset_row[0] == "TSM"
-    assert asset_row[1] == "unknown"
+    assert asset_row[1] == "stock"
     assert asset_row[2] == "USD"
 
     # db: portfolio update assertion

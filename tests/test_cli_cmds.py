@@ -154,8 +154,8 @@ def popl_dash(tmp_path) -> DashboardView:
     several txns across different days/types/assets via TxnImporterManual.
     """
     # not used elsewhere
-    from dashboard.services.importer import TxnImporterManual
-    from dashboard.services.importer import tTestTxn 
+    from dashboard.services.txn_importer import TxnImporterManual
+    from dashboard.services.txn_importer import tTestTxn 
 
     db_path = tmp_path / "test_popl.db"
     db = DB(db_path)
