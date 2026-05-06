@@ -3,6 +3,8 @@
     -- transactions (Txn) are the only source of truth (append-only ledger)
     -- positions and cash are derived from the ledger.
     -- portfolio and asset tables for non-transaction derived data. 
+    -- ingestion domain A: daily quotes, dividends, splits, ingestion jobs and sync state
+    -- ingestion domain B: fundamentals seperate (later)
 
 BEGIN TRANSACTION;
 
@@ -38,8 +40,9 @@ CREATE TABLE IF NOT EXISTS asset (
     industry TEXT,
     country TEXT, 
     region TEXT, 
-    mkt_cap DOUBLE PRECISION, -- derived from shares_outstanding and asset_quote_intraday table
-    shares_outstanding BIGINT, -- periodically polled for
+    size TEXT, -- large, mid, small, micro
+    mkt_cap DOUBLE PRECISION,
+    market_beta DOUBLE PRECISION,
 
     track BOOLEAN NOT NULL DEFAULT TRUE, -- untracked assets can just sit idle for now
     created_at TIMESTAMP NOT NULL DEFAULT now(),
@@ -99,6 +102,10 @@ CREATE TABLE IF NOT EXISTS txn (
 --CREATE INDEX IF NOT EXISTS portfolioTxn_by_time ON txn(portfolio_id, time_stamp);
 CREATE INDEX IF NOT EXISTS portolioTxn_by_asset ON txn(portfolio_id, asset_id);
 
+--------------------------
+--      ingestion domain a
+-------------------------
+
 -- Main source of asset truth for intraday
 -- Ingestion via Websocket streaming for intraday quotes
 CREATE TABLE IF NOT EXISTS asset_quote_intraday (
@@ -133,6 +140,91 @@ CREATE TABLE IF NOT EXISTS asset_quote_daily (
     PRIMARY KEY (asset_id, date),
     FOREIGN KEY(asset_id) REFERENCES asset(asset_id)
 );
+
+CREATE TABLE IF NOT EXISTS dividend_event (
+    asset_id TEXT NOT NULL,
+    ex_date DATE NOT NULL,
+    payment_date DATE,
+    record_date DATE,
+    declaration_date DATE,
+    dividend_per_share DOUBLE PRECISION,
+    currency TEXT,
+    source TEXT NOT NULL DEFAULT 'fmp',
+    as_of_ts TIMESTAMP NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (asset_id, ex_date),
+    FOREIGN KEY(asset_id) REFERENCES asset(asset_id)
+);
+
+CREATE TABLE IF NOT EXISTS split_event (
+    asset_id TEXT NOT NULL,
+    ex_date DATE NOT NULL,
+    split_from BIGINT,
+    split_to BIGINT,
+    source TEXT NOT NULL DEFAULT 'fmp',
+    as_of_ts TIMESTAMP NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (asset_id, ex_date),
+    FOREIGN KEY(asset_id) REFERENCES asset(asset_id)
+);
+
+----------------------------------
+-- ingestion domain a jobs 
+----------------------------------
+
+CREATE SEQUENCE IF NOT EXISTS seq_ingestion_job_id START 1;
+
+CREATE TABLE IF NOT EXISTS ingestion_job (
+    job_id BIGINT PRIMARY KEY DEFAULT nextval('seq_ingestion_job_id'),
+
+    asset_id TEXT NOT NULL,
+    domain TEXT NOT NULL,              -- market, fundamentals
+    job_type TEXT NOT NULL,            -- backfill, refresh
+    dataset TEXT NOT NULL,             -- price_daily, dividends, splits
+
+    status TEXT NOT NULL DEFAULT 'pending', -- pending, running, done, failed
+    priority INTEGER NOT NULL DEFAULT 0,
+
+    requested_start_date DATE,
+    requested_end_date DATE,
+
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT,
+
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    FOREIGN KEY(asset_id) REFERENCES asset(asset_id)
+);
+
+CREATE INDEX IF NOT EXISTS ingestion_job_pending_idx
+ON ingestion_job(domain, status, priority, created_at);
+
+CREATE TABLE IF NOT EXISTS asset_sync_state (
+    asset_id TEXT NOT NULL,
+    domain TEXT NOT NULL,              -- market, fundamentals
+    dataset TEXT NOT NULL,             -- price_daily, dividends, splits
+
+    backfill_status TEXT NOT NULL DEFAULT 'not_started',
+    backfill_start_date DATE,
+    backfill_end_date DATE,
+
+    last_successful_date DATE,
+    last_attempted_at TIMESTAMP,
+    last_successful_at TIMESTAMP,
+    last_error TEXT,
+
+    needs_repair BOOLEAN NOT NULL DEFAULT FALSE,
+
+    PRIMARY KEY (asset_id, domain, dataset),
+    FOREIGN KEY(asset_id) REFERENCES asset(asset_id)
+);
+
+
+-------------------------------
+-- ingestion domain b
+-------------------------------
+
 
 CREATE TABLE IF NOT EXISTS corporate_event (
     asset_id TEXT NOT NULL,
@@ -172,6 +264,9 @@ CREATE TABLE IF NOT EXISTS financial_statement (
     PRIMARY KEY(asset_id, statement_type, year, quarter),
     FOREIGN KEY(asset_id) REFERENCES asset(asset_id)
 );
+
+
+-- default ingestion run log
 
 CREATE TABLE IF NOT EXISTS ingestion_run (
     run_id BIGINT PRIMARY KEY,
