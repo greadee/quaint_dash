@@ -11,7 +11,7 @@ from urllib.parse import urlencode
 from urllib.request import urlopen
 import json
 
-from .models import PriceDailyRow, DividendEventRow, SplitEventRow
+from dashboard.ingestion.market.models import PriceDailyRow, DividendEventRow, SplitEventRow
 
 
 class FMPMarketProvider:

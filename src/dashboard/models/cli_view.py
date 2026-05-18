@@ -13,6 +13,7 @@ import shlex
 from dashboard.models.storage import DashboardManager, PortfolioManager
 from dashboard.services.txn_importer import TxnImporterManual, TxnImporterCSV, tTestTxn
 
+
 class _NoExitParser(argparse.ArgumentParser):
     """
     'argparse.ArgumentParser' normally calls sys.exit() on parse errors (unknown / missing arg)
@@ -118,7 +119,13 @@ class DashboardView(View):
                 list <item-type> [item-filter] [n], 
                 create <portfolio-name>, 
                 open <portfolio-name>, 
-                import <csv-path>, 
+                import <csv-path>,
+
+                market-backfill-enqueue <asset-id|all> [--years N] [--prices-only],
+                market-backfill-run [--max-jobs N],
+                market-refresh-enqueue <asset-id|all> [--prices-only],
+                market-refresh-run [--max-jobs N],
+
                 help [command-name], 
                 quit/exit
               """)
@@ -223,6 +230,45 @@ class DashboardView(View):
             importer = TxnImporterCSV(self.access, ns.csv_path)
             importer.run()
             return self
+        
+          if cmd == "market-backfill-enqueue":
+            asset_id = None if ns.target.lower() == "all" else ns.target
+            include_dividends = not ns.prices_only
+            include_splits = not ns.prices_only
+
+            n_jobs = self.access.enqueue_market_backfill(
+                asset_id=asset_id,
+                years=ns.years,
+                include_dividends=include_dividends,
+                include_splits=include_splits,
+            )
+
+            print(f"Enqueued {n_jobs} market backfill job(s).")
+            return self
+
+        if cmd == "market-backfill-run":
+            n_done = self.access.run_market_backfill_jobs(max_jobs=ns.max_jobs)
+            print(f"Processed {n_done} market backfill job(s).")
+            return self
+
+        if cmd == "market-refresh-enqueue":
+            asset_id = None if ns.target.lower() == "all" else ns.target
+            include_dividends = not ns.prices_only
+            include_splits = not ns.prices_only
+
+            n_jobs = self.access.enqueue_market_refresh(
+                asset_id=asset_id,
+                include_dividends=include_dividends,
+                include_splits=include_splits,
+            )
+
+            print(f"Enqueued {n_jobs} market refresh job(s).")
+            return self
+
+        if cmd == "market-refresh-run":
+            n_done = self.access.run_market_refresh_jobs(max_jobs=ns.max_jobs)
+            print(f"Processed {n_done} market refresh job(s).")
+            return self
 
         return self # fallback
 
@@ -285,7 +331,6 @@ class DashboardView(View):
         pos_arg_group.add_argument("-asset-id", "--asset-id", dest="asset_id", help="Filter by asset id.")
         pos_arg_group.add_argument("-asset-type", "--asset-type", dest="asset_type", help="Filter by asset type.")
         pos_arg_group.add_argument("-asset-subtype", "--asset-subtype", dest="asset_subtype", help="Filter by asset subtype.")
-
         parsers["list"] = p
 
         # create cmd parser
@@ -303,6 +348,29 @@ class DashboardView(View):
         p = _NoExitParser(prog="import", add_help=True, description="Import a CSV transaction batch")
         p.add_argument("csv_path", help="Path to CSV file")
         parsers["import"] = p
+
+        # market backfill enqueue parser
+        p = _NoExitParser(prog="market-backfill-enqueue", add_help=True, description="Enqueue Domain A market backfill jobs.",)
+        p.add_argument("target", help="Asset id to backfill, or 'all' for every asset.",)
+        p.add_argument("--years", dest="years", type=int, default=10, help="Number of years of market history to backfill. Default: 10.",)
+        p.add_argument("--prices-only", dest="prices_only", action="store_true", help="Only enqueue daily price jobs. Skip dividends and splits.",)
+        parsers["market-backfill-enqueue"] = p
+
+        # market backfill run parser
+        p = _NoExitParser(prog="market-backfill-run", add_help=True, description="Process queued Domain A market backfill jobs.",)
+        p.add_argument("--max-jobs", dest="max_jobs", type=int, default=1, help="Maximum number of jobs to process in this run. Default: 1.",)
+        parsers["market-backfill-run"] = p
+
+        # market refresh enqueue parser
+        p = _NoExitParser(prog="market-refresh-enqueue", add_help=True, description="Enqueue Domain A market refresh jobs.",)
+        p.add_argument("target", help="Asset id to refresh, or 'all' for every asset.",)
+        p.add_argument("--prices-only", dest="prices_only", action="store_true", help="Only enqueue daily price jobs. Skip dividends and splits.",)
+        parsers["market-refresh-enqueue"] = p
+
+        # market refresh run parser
+        p = _NoExitParser(prog="market-refresh-run", add_help=True, description="Process queued Domain A market refresh jobs.",)
+        p.add_argument("--max-jobs", dest="max_jobs", type=int, default=1, help="Maximum number of jobs to process in this run. Default: 1.",)
+        parsers["market-refresh-run"] = p
 
         return parsers
 
