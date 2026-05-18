@@ -115,7 +115,7 @@ CREATE TABLE IF NOT EXISTS asset_quote_intraday (
     volume BIGINT, 
 
     ing_source TEXT NOT NULL, 
-    ing_at TIMESTAMP NOT NULL, 
+    ing_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (asset_id, time_stamp),
     FOREIGN KEY(asset_id) REFERENCES asset(asset_id)
@@ -135,7 +135,7 @@ CREATE TABLE IF NOT EXISTS asset_quote_daily (
     volume BIGINT, 
 
     ing_source TEXT NOT NULL, 
-    ing_at TIMESTAMP NOT NULL, 
+    ing_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (asset_id, date),
     FOREIGN KEY(asset_id) REFERENCES asset(asset_id)

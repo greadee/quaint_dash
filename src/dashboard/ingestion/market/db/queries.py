@@ -82,15 +82,15 @@ INSERT INTO asset_sync_state (
     last_error,
     needs_repair
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, now(), now(), ?, ?)
 ON CONFLICT (asset_id, domain, dataset)
 DO UPDATE SET
     backfill_status = excluded.backfill_status,
     backfill_start_date = excluded.backfill_start_date,
     backfill_end_date = excluded.backfill_end_date,
     last_successful_date = excluded.last_successful_date,
-    last_attempted_at = CURRENT_TIMESTAMP,
-    last_successful_at = CURRENT_TIMESTAMP,
+    last_attempted_at = now(),
+    last_successful_at = now(),
     last_error = excluded.last_error,
     needs_repair = excluded.needs_repair
 """
@@ -99,7 +99,7 @@ UPDATE_SYNC_STATE_FAILED = """
 UPDATE asset_sync_state
 SET
     backfill_status = ?,
-    last_attempted_at = CURRENT_TIMESTAMP,
+    last_attempted_at = now(),
     last_error = ?,
     needs_repair = TRUE
 WHERE asset_id = ?
@@ -127,8 +127,8 @@ DO NOTHING
 """
 
 LATEST_PRICE_DATE = """
-SELECT MAX(price_date)
-FROM price_daily
+SELECT MAX("date")
+FROM asset_quote_daily
 WHERE asset_id = ?
 """
 
@@ -145,29 +145,29 @@ WHERE asset_id = ?
 """
 
 UPSERT_PRICE_DAILY = """
-INSERT INTO price_daily (
+INSERT INTO asset_quote_daily (
     asset_id,
-    price_date,
-    open_price,
-    high_price,
-    low_price,
-    close_price,
-    adj_close_price,
+    "date",
+    "open",
+    "high",
+    "low",
+    "close",
+    adj_close,
     volume,
-    source,
-    as_of_ts
+    ing_source,
+    ing_at
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-ON CONFLICT (asset_id, price_date)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, now())
+ON CONFLICT (asset_id, "date")
 DO UPDATE SET
-    open_price = excluded.open_price,
-    high_price = excluded.high_price,
-    low_price = excluded.low_price,
-    close_price = excluded.close_price,
-    adj_close_price = excluded.adj_close_price,
+    "open" = excluded."open",
+    "high" = excluded."high",
+    "low" = excluded."low",
+    "close" = excluded."close",
+    adj_close = excluded.adj_close,
     volume = excluded.volume,
-    source = excluded.source,
-    as_of_ts = CURRENT_TIMESTAMP
+    ing_source = excluded.ing_source,
+    ing_at = now()
 """
 
 UPSERT_DIVIDEND_EVENT = """
