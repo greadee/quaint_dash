@@ -9,6 +9,7 @@ from dashboard.db.db_conn import DB, init_db
 from dashboard.db import queries as qry
 from dashboard.models.domain import Portfolio, Position, Txn
 from dashboard.services.table_formatter import TxnTableFormatter, PositionTableFormatter, PortfolioTableFormatter
+from dashboard.ingestion.market.service import MarketIngestionService
 
 class DashboardManager:
     """
@@ -256,6 +257,84 @@ class DashboardManager:
         to_list = rows if N is None else rows[:N]
         for row in to_list:
             PositionTableFormatter(Position(*row)).entry()
+
+
+    #######################################################################
+    ##              daily ingestion and historical backfill
+    #######################################################################
+
+     def enqueue_market_backfill(
+        self,
+        asset_id: str | None = None,
+        years: int = 10,
+        include_dividends: bool = True,
+        include_splits: bool = True,
+    ) -> int:
+        """
+        Enqueue Domain A market backfill jobs.
+
+        If asset_id is None, enqueue jobs for all tracked assets.
+        """
+        service = MarketIngestionService(self.conn)
+
+        if asset_id is None:
+            job_ids = service.enqueue_backfill_all(
+                years=years,
+                include_dividends=include_dividends,
+                include_splits=include_splits,
+            )
+        else:
+            job_ids = service.enqueue_backfill_one(
+                asset_id=asset_id.upper().strip(),
+                years=years,
+                include_dividends=include_dividends,
+                include_splits=include_splits,
+            )
+
+        return len(job_ids)
+
+    def enqueue_market_refresh(
+        self,
+        asset_id: str | None = None,
+        include_dividends: bool = True,
+        include_splits: bool = True,
+    ) -> int:
+        """
+        Enqueue Domain A market refresh jobs.
+
+        If asset_id is None, enqueue jobs for all tracked assets.
+        """
+        service = MarketIngestionService(self.conn)
+
+        if asset_id is None:
+            job_ids = service.enqueue_refresh_all(
+                include_dividends=include_dividends,
+                include_splits=include_splits,
+            )
+        else:
+            job_ids = service.enqueue_refresh_one(
+                asset_id=asset_id.upper().strip(),
+                include_dividends=include_dividends,
+                include_splits=include_splits,
+            )
+
+        return len(job_ids)
+
+    def run_market_backfill_jobs(self, max_jobs: int = 1) -> int:
+        """
+        Process queued Domain A market backfill jobs.
+        """
+        service = MarketIngestionService(self.conn)
+        return service.process_backfill_jobs(max_jobs=max_jobs)
+
+    def run_market_refresh_jobs(self, max_jobs: int = 1) -> int:
+        """
+        Process queued Domain A market refresh jobs.
+        """
+        service = MarketIngestionService(self.conn)
+        return service.process_refresh_jobs(max_jobs=max_jobs)
+
+
 
 class PortfolioManager():
     """
