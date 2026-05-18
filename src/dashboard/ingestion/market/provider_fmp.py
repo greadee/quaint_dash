@@ -9,6 +9,7 @@ from datetime import date, datetime
 from typing import Any, Optional
 from urllib.parse import urlencode
 from urllib.request import urlopen
+from dotenv import load_dotenv
 import json
 
 from dashboard.ingestion.market.models import PriceDailyRow, DividendEventRow, SplitEventRow
@@ -22,7 +23,10 @@ class FMPMarketProvider:
     BASE_URL = "https://financialmodelingprep.com/stable"
 
     def __init__(self, api_key: Optional[str] = None) -> None:
+        load_dotenv()
+
         self.api_key = api_key or os.getenv("FMP_API_KEY")
+
         if not self.api_key:
             raise ValueError("missing FMP api key; set FMP_API_KEY")
 
