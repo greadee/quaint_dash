@@ -263,7 +263,7 @@ class DashboardManager:
     ##              daily ingestion and historical backfill
     #######################################################################
 
-     def enqueue_market_backfill(
+    def enqueue_market_backfill(
         self,
         asset_id: str | None = None,
         years: int = 10,

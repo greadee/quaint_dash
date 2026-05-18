@@ -202,7 +202,6 @@ class DashboardView(View):
                     self.access.list_positions_by_subtype(ns.asset_subtype, ns.n)
                 else:
                     self.access.list_positions(ns.n)
-            
             return self
             
         if cmd == "create":
@@ -231,7 +230,7 @@ class DashboardView(View):
             importer.run()
             return self
         
-          if cmd == "market-backfill-enqueue":
+        if cmd == "market-backfill-enqueue":
             asset_id = None if ns.target.lower() == "all" else ns.target
             include_dividends = not ns.prices_only
             include_splits = not ns.prices_only
