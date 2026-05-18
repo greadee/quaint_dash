@@ -4,7 +4,7 @@ repository helpers and SQL queries for Domain A market ingestion
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from typing import Optional
 
 from dashboard.ingestion.market.constants import (
