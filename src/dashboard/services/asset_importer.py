@@ -171,18 +171,20 @@ class AssetImporter:
         Infer company size from market capitalization.
 
         mega - <500B
-        large - 10B -> 500B
-        mid   - 1B -> 10B
-        small - 100M -> 1B
-        micro - >100M
+        large - 100B -> 500B
+        mid   - 10B -> 100B
+        small - 10B -> 2B
+        micro - 100M -> 2B
         """
         if market_cap is None:
             return None
         if market_cap >= 500_000_000_000:
             return "mega"
-        if market_cap >= 10_000_000_000:
+        if market_cap >= 100_000_000_000:
             return "large"
-        if market_cap >= 1_000_000_000:
+        if market_cap >= 10_000_000_000:
+            return "mid"
+        if market_cap >= 2_000_000_000:
             return "small"
         if market_cap >= 100_000_000:
             return "micro"
