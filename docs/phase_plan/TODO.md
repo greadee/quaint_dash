@@ -10,16 +10,18 @@ Design Decisions: [ADR's](../adr/adr_ph2.md)
     - Need to figure out whether or not historical data ingestion should be automatic if we can expect that watchlist items are frequently added and removed.
    - WatchlistView and WatchlistManager
 
-### Tasks: 
+### Completed:
 - Ingest metadata sync upon watchlist, portfolio add (FMP)
-    - Scheduler
+- Ingest historical price history backfill upon CLI cmd (yfinance)
+
+### Tasks: 
+- Metadata refresh cmd and scheduler
+- Price history backfill scheduler
 - Ingest biweekly earnings calendar update (FMP)
     - Scheduler
 - Ingest core index composition 3x intraday (FMP)
     - Scheduler
 - Ingest ticker earnings data sync on calendar event finished (FMP)
-    - Scheduler
-- Ingest ticker historical backfill up to 10 years (Finnhub)
     - Scheduler
 - Stream ticker data (price, vol, mkt cap) for positions (Finnhub)
     - Open stream on dash open and is market day

@@ -62,3 +62,45 @@
 - Allows for timezone interchangeability for other dashboard users
 - Start with a basic Mon-Fri open schedule, and adjust to a more accurate calendar source for handling of holidays and half-days
 
+## ADR-017: Price History vs Live Market Data Separation
+
+**Decision:** Separate historical OHLCV/dividend/split ingestion from forward-looking live market ingestion both conceptually and structurally.
+
+**Context:** 
+The original `market` ingestion naming became ambiguous once the system expanded to include:
+- historical OHLCV backfill
+- dividend/split backfill
+- websocket streaming
+- future fundamentals ingestion
+
+**Rationale:** 
+- Historical ingestion is batch-oriented and archival in nature
+- Live websocket ingestion is event-driven and latency-sensitive
+- Historical backfill and live streaming will evolve independently
+- Fundamentals ingestion should remain isolated from OHLCV ingestion
+- Clearer separation of concerns improves maintainability
+
+**Implementation Notes:** 
+- Rename `dashboard.ingestion.market` to `dashboard.ingestion.price_history`
+- Remove refresh job concepts from historical OHLCV ingestion
+- Reserve websocket ingestion for forward-looking live quote updates
+
+## ADR-018: Migration of Historical OHLCV Backfill from FMP to Yahoo Finance
+
+**Decision:** Replace FMP historical OHLCV/dividend/split backfill endpoints with Yahoo Finance (`yfinance`) for Domain A historical price ingestion.
+
+**Context:** 
+The previous FMP historical endpoint returned legacy endpoint deprecation errors and became unreliable for free-tier historical backfill.
+
+**Rationale:** 
+- Yahoo Finance provides free OHLCV/dividend/split history
+- International tickers (`BN.TO`, `FFH.TO`, etc.) work reliably
+- No API key or rate-limit management required
+- Existing ingestion architecture already isolates provider logic
+- FMP remains more useful for future fundamentals ingestion
+
+**Implementation Notes:** 
+- Replace `FMPMarketProvider` with `YahooPriceProvider`
+- Install `yfinance` dependency
+- Continue using existing ingestion workers/repositories/queues unchanged
+- Use Yahoo Finance only for historical OHLCV/dividend/split ingestion
