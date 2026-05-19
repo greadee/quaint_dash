@@ -32,6 +32,13 @@ def cli_loop():
     db = DB("data/persistent_db.db")
     init_db(db)
     manager = DashboardManager(db)
+    try: 
+         n = manager.refresh_due_asset_metadata(max_assets=5)
+         if n:
+              print(f"Auto-refreshed metadata for {n} asset(s).")
+    except Exception as e:
+         print(f"Metadata scheduler skipped: {e}")
+         
     view: View = DashboardView(manager)
 
     while True:

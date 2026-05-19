@@ -11,7 +11,7 @@ Design Decisions: [ADR's](../adr/adr_ph2.md)
    - WatchlistView and WatchlistManager
 
 ### Completed:
-- Ingest metadata sync upon watchlist, portfolio add (FMP)
+- Ingest metadata sync upon portfolio add (FMP)
 - Ingest historical price history backfill upon CLI cmd (yfinance)
 
 ### Tasks: 

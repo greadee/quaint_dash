@@ -333,6 +333,52 @@ class DashboardManager:
         """
         service = PriceHistoryIngestionService(self.conn)
         return service.process_refresh_jobs(max_jobs=max_jobs)
+    
+    def refresh_asset_metadata(self, asset_id: str | None = None) -> int:
+        from dashboard.services.asset_importer import AssetImporter
+
+        importer = AssetImporter(self)
+
+        if asset_id is None:
+            rows = self.conn.execute("""
+                SELECT asset_id
+                FROM asset
+                WHERE track = TRUE
+                ORDER BY asset_id
+            """).fetchall()
+            asset_ids = [r[0] for r in rows]
+        else:
+            asset_ids = [asset_id.upper().strip()]
+
+        synced = importer.import_asset_ids(asset_ids)
+        return len(synced)
+
+
+def refresh_due_asset_metadata(self, max_assets: int = 5) -> int:
+    from dashboard.services.asset_importer import AssetImporter
+
+    rows = self.conn.execute("""
+        SELECT asset_id
+        FROM asset_metadata_sync
+        WHERE sync_status IN ('pending', 'stale', 'failed')
+           OR last_succeeded_at IS NULL
+           OR last_succeeded_at < now() - INTERVAL 30 DAY
+        ORDER BY
+            CASE sync_status
+                WHEN 'pending' THEN 1
+                WHEN 'failed' THEN 2
+                WHEN 'stale' THEN 3
+                ELSE 4
+            END,
+            last_attempted_at NULLS FIRST
+        LIMIT ?
+    """, [max_assets]).fetchall()
+
+    asset_ids = [r[0] for r in rows]
+
+    importer = AssetImporter(self)
+    synced = importer.import_asset_ids(asset_ids)
+    return len(synced)
 
 
 

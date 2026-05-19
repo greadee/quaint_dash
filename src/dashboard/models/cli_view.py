@@ -268,6 +268,12 @@ class DashboardView(View):
             n_done = self.access.run_market_refresh_jobs(max_jobs=ns.max_jobs)
             print(f"Processed {n_done} market refresh job(s).")
             return self
+        
+        if cmd == "asset-metadata-refresh":
+            asset_id = None if ns.target.lower() == "all" else ns.target
+            n = self.access.refresh_asset_metadata(asset_id)
+            print(f"Refreshed metadata for {n} asset(s).")
+            return self
 
         return self # fallback
 
@@ -370,6 +376,11 @@ class DashboardView(View):
         p = _NoExitParser(prog="market-refresh-run", add_help=True, description="Process queued Domain A market refresh jobs.",)
         p.add_argument("--max-jobs", dest="max_jobs", type=int, default=1, help="Maximum number of jobs to process in this run. Default: 1.",)
         parsers["market-refresh-run"] = p
+
+        # metadata refresh run parser
+        p = _NoExitParser(prog="asset-metadata-refresh", add_help=True, description="Refresh FMP asset metadata for one asset or all assets.",)
+        p.add_argument("target", help="Asset id, or 'all'")
+        parsers["asset-metadata-refresh"] = p
 
         return parsers
 
