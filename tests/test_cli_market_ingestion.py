@@ -19,8 +19,6 @@ These tests mock the FMP provider, so they do not consume API calls.
 from __future__ import annotations
 
 from datetime import date
-from pathlib import Path
-
 import pytest
 
 from dashboard.db.db_conn import DB, init_db
