@@ -18,7 +18,6 @@ import pytest
 from dashboard.db.db_conn import DB, init_db
 from dashboard.models.storage import DashboardManager
 from dashboard.ingestion.price_history.models import PriceDailyRow
-from dashboard.ingestion.price_history.service import PriceHistoryIngestionService
 
 
 class FakeAssetImporter:
