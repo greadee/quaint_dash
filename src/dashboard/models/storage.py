@@ -353,34 +353,82 @@ class DashboardManager:
         synced = importer.import_asset_ids(asset_ids)
         return len(synced)
 
+    def refresh_due_asset_metadata(self, max_assets: int = 5) -> int:
+        from dashboard.services.asset_importer import AssetImporter
 
-def refresh_due_asset_metadata(self, max_assets: int = 5) -> int:
-    from dashboard.services.asset_importer import AssetImporter
+        rows = self.conn.execute("""
+            SELECT asset_id
+            FROM asset_metadata_sync
+            WHERE sync_status IN ('pending', 'stale', 'failed')
+            OR last_succeeded_at IS NULL
+            OR last_succeeded_at < now() - INTERVAL 30 DAY
+            ORDER BY
+                CASE sync_status
+                    WHEN 'pending' THEN 1
+                    WHEN 'failed' THEN 2
+                    WHEN 'stale' THEN 3
+                    ELSE 4
+                END,
+                last_attempted_at NULLS FIRST
+            LIMIT ?
+        """, [max_assets]).fetchall()
 
-    rows = self.conn.execute("""
-        SELECT asset_id
-        FROM asset_metadata_sync
-        WHERE sync_status IN ('pending', 'stale', 'failed')
-           OR last_succeeded_at IS NULL
-           OR last_succeeded_at < now() - INTERVAL 30 DAY
-        ORDER BY
-            CASE sync_status
-                WHEN 'pending' THEN 1
-                WHEN 'failed' THEN 2
-                WHEN 'stale' THEN 3
-                ELSE 4
-            END,
-            last_attempted_at NULLS FIRST
-        LIMIT ?
-    """, [max_assets]).fetchall()
+        asset_ids = [r[0] for r in rows]
 
-    asset_ids = [r[0] for r in rows]
+        importer = AssetImporter(self)
+        synced = importer.import_asset_ids(asset_ids)
+        return len(synced)
 
-    importer = AssetImporter(self)
-    synced = importer.import_asset_ids(asset_ids)
-    return len(synced)
+    def schedule_due_price_history_backfills(self, max_assets: int = 3, years: int = 10) -> int:
+        from dashboard.ingestion.price_history.service import PriceHistoryIngestionService
+
+        rows = self.conn.execute("""
+          SELECT a.asset_id
+            FROM asset a
+            LEFT JOIN asset_sync_state s
+            ON s.asset_id = a.asset_id
+            AND s.domain = 'market'
+            AND s.dataset = 'price_daily'
+        WHERE a.track = TRUE
+        AND (
+            s.asset_id IS NULL
+            OR s.backfill_status IN ('not_started', 'failed')
+            OR s.last_successful_date IS NULL
+        )
+        AND NOT EXISTS (
+            SELECT 1
+        FROM ingestion_job j
+        WHERE j.asset_id = a.asset_id
+        AND j.domain = 'market'
+        AND j.dataset = 'price_daily'
+        AND j.job_type = 'backfill'
+        AND j.status IN ('pending', 'running'))
+        ORDER BY a.asset_id
+        LIMIT ?;
+        """, [max_assets]).fetchall()
+
+        service = PriceHistoryIngestionService(self.conn)
+
+        total_jobs = 0
+        for row in rows:
+            asset_id = row[0]
+            total_jobs += len(
+                service.enqueue_backfill_one(
+                    asset_id=asset_id,
+                    years=years,
+                    include_dividends=True,
+                    include_splits=True,
+                )
+            )
+
+        return total_jobs
 
 
+    def run_price_history_backfill_jobs(self, max_jobs: int = 1) -> int:
+        from dashboard.ingestion.price_history.service import PriceHistoryIngestionService
+
+        service = PriceHistoryIngestionService(self.conn)
+        return service.process_backfill_jobs(max_jobs=max_jobs)
 
 class PortfolioManager():
     """

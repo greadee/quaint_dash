@@ -38,7 +38,16 @@ def cli_loop():
               print(f"Auto-refreshed metadata for {n} asset(s).")
     except Exception as e:
          print(f"Metadata scheduler skipped: {e}")
-         
+    
+    try:
+        enqueued = manager.schedule_due_price_history_backfills(max_assets=3, years=10)
+        processed = manager.run_price_history_backfill_jobs(max_jobs=1)
+        if enqueued or processed:
+            print(f"Price history scheduler: enqueued {enqueued}, processed {processed}.")
+    except Exception as e:
+        print(f"Price history scheduler skipped: {e}")
+
+
     view: View = DashboardView(manager)
 
     while True:
