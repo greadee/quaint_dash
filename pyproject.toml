@@ -15,7 +15,8 @@ authors = [
 ]
 
 dependencies = [
-  "duckdb>=1.0.0"
+  "duckdb>=1.0.0",
+  "python-dotenv"
 ]
 
 [project.optional-dependencies]
