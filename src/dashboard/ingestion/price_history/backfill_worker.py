@@ -4,18 +4,18 @@ worker for processing queued market backfill jobs
 
 from __future__ import annotations
 
-from dashboard.ingestion.market.constants import DATASET_DIVIDENDS, DATASET_PRICE_DAILY, DATASET_SPLITS
-from dashboard.ingestion.market.provider_fmp import FMPMarketProvider
-from dashboard.ingestion.market.db.ingestion_repo import MarketIngestionRepository
+from dashboard.ingestion.price_history.constants import DATASET_DIVIDENDS, DATASET_PRICE_DAILY, DATASET_SPLITS
+from dashboard.ingestion.price_history.provider_yahoo import YahooPriceProvider
+from dashboard.ingestion.price_history.db.ingestion_repo import PriceHistoryIngestionRepository
 
 
-class MarketBackfillWorker:
+class PriceHistoryBackfillWorker:
     """
     processes queued Domain A backfill jobs one at a time
     """
 
-    def __init__(self, conn, provider: FMPMarketProvider) -> None:
-        self.repo = MarketIngestionRepository(conn)
+    def __init__(self, conn, provider: YahooPriceProvider) -> None:
+        self.repo = PriceHistoryIngestionRepository(conn)
         self.provider = provider
 
     def run_once(self) -> bool:

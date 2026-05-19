@@ -16,7 +16,8 @@ authors = [
 
 dependencies = [
   "duckdb>=1.0.0",
-  "python-dotenv"
+  "python-dotenv",
+  "yfinance"
 ]
 
 [project.optional-dependencies]

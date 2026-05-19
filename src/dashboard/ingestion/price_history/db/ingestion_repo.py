@@ -7,7 +7,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Optional
 
-from dashboard.ingestion.market.constants import (
+from dashboard.ingestion.price_history.constants import (
     BACKFILL_DONE,
     BACKFILL_FAILED,
     BACKFILL_RUNNING,
@@ -20,10 +20,10 @@ from dashboard.ingestion.market.constants import (
     STATUS_PENDING,
     STATUS_RUNNING,
 )
-from dashboard.ingestion.market.models import DividendEventRow, IngestionJob, PriceDailyRow, SplitEventRow
-import dashboard.ingestion.market.db.queries as qry
+from dashboard.ingestion.price_history.models import DividendEventRow, IngestionJob, PriceDailyRow, SplitEventRow
+import dashboard.ingestion.price_history.db.queries as qry
 
-class MarketIngestionRepository:
+class PriceHistoryIngestionRepository:
     """
     repository for Domain A ingestion tables
     """

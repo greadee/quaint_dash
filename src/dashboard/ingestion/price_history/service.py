@@ -7,27 +7,25 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from dashboard.ingestion.market.jobs_repo import (
+from dashboard.ingestion.price_history.jobs_repo import (
     enqueue_market_backfill_for_all_assets,
     enqueue_market_backfill_jobs,
     enqueue_market_refresh_for_all_assets,
     enqueue_market_refresh_jobs,
 )
-from dashboard.ingestion.market.provider_fmp import FMPMarketProvider
-from dashboard.ingestion.market.db.ingestion_repo import MarketIngestionRepository
-from dashboard.ingestion.market.backfill_worker import MarketBackfillWorker
-from dashboard.ingestion.market.refresh_worker import MarketRefreshWorker
+from dashboard.ingestion.price_history.provider_yahoo import YahooPriceProvider
+from dashboard.ingestion.price_history.db.ingestion_repo import PriceHistoryIngestionRepository
+from dashboard.ingestion.price_history.backfill_worker import PriceHistoryBackfillWorker
 
-
-class MarketIngestionService:
+class PriceHistoryIngestionService:
     """
     service wrapper for Domain A enqueue and processing actions
     """
 
-    def __init__(self, conn, provider: FMPMarketProvider | None = None) -> None:
+    def __init__(self, conn, provider: YahooPriceProvider | None = None) -> None:
         self.conn = conn
-        self.repo = MarketIngestionRepository(conn)
-        self.provider = provider or FMPMarketProvider()
+        self.repo = PriceHistoryIngestionRepository(conn)
+        self.provider = provider or YahooPriceProvider()
 
     def enqueue_backfill_one(
         self,
@@ -94,17 +92,7 @@ class MarketIngestionService:
         )
 
     def process_backfill_jobs(self, max_jobs: int = 1) -> int:
-        worker = MarketBackfillWorker(self.conn, self.provider)
-        completed = 0
-        for _ in range(max_jobs):
-            did_work = worker.run_once()
-            if not did_work:
-                break
-            completed += 1
-        return completed
-
-    def process_refresh_jobs(self, max_jobs: int = 1) -> int:
-        worker = MarketRefreshWorker(self.conn, self.provider)
+        worker = PriceHistoryBackfillWorker(self.conn, self.provider)
         completed = 0
         for _ in range(max_jobs):
             did_work = worker.run_once()

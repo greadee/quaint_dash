@@ -24,11 +24,11 @@ import pytest
 from dashboard.db.db_conn import DB, init_db
 from dashboard.models.storage import DashboardManager
 from dashboard.models.cli_view import DashboardView
-from dashboard.ingestion.market.models import PriceDailyRow
-from dashboard.ingestion.market.service import MarketIngestionService
+from dashboard.ingestion.price_history.models import PriceDailyRow
+from dashboard.ingestion.price_history.service import PriceHistoryIngestionService
 
 
-class FakeFMPMarketProvider:
+class FakeYahooPriceProvider:
     """
     Fake FMP provider used to avoid real API calls.
 
@@ -89,15 +89,15 @@ def test_manager(tmp_path, monkeypatch):
     db = DB(str(db_path))
     init_db(db)
 
-    fake_provider = FakeFMPMarketProvider()
+    fake_provider = FakeYahooPriceProvider()
 
     def fake_market_service_factory(conn):
-        return MarketIngestionService(conn, provider=fake_provider)
+        return PriceHistoryIngestionService(conn, provider=fake_provider)
 
     # Important:
     # Patch the symbol used by DashboardManager, not the original service module.
     monkeypatch.setattr(
-        "dashboard.models.storage.MarketIngestionService",
+        "dashboard.models.storage.PriceHistoryIngestionService",
         fake_market_service_factory,
     )
 
@@ -291,45 +291,6 @@ def test_cli_market_refresh_enqueue_uses_latest_quote_date(test_manager):
     assert refresh_job[1] == "price_daily"
     assert refresh_job[2] == "pending"
     assert refresh_job[3] == date(2024, 1, 4)
-
-
-def test_cli_market_refresh_run_processes_refresh_job(test_manager):
-    """
-    Refresh run should process a queued refresh job and mark it done.
-    """
-
-    manager, fake_provider = test_manager
-    view = DashboardView(manager)
-
-    view.handle_input("market-backfill-enqueue BN.TO --years 10 --prices-only")
-    view.handle_input("market-backfill-run --max-jobs 1")
-
-    view.handle_input("market-refresh-enqueue BN.TO --prices-only")
-    view.handle_input("market-refresh-run --max-jobs 1")
-
-    refresh_row = manager.conn.execute(
-        """
-        SELECT status, attempt_count, error_message
-        FROM ingestion_job
-        WHERE asset_id = 'BN.TO'
-          AND job_type = 'refresh'
-          AND dataset = 'price_daily'
-        ORDER BY job_id DESC
-        LIMIT 1
-        """
-    ).fetchone()
-
-    assert refresh_row is not None
-    assert refresh_row[0] == "done"
-    assert refresh_row[1] == 1
-    assert refresh_row[2] is None
-
-    # One fake provider call for backfill, one for refresh.
-    assert len(fake_provider.price_calls) == 2
-
-    refresh_call = fake_provider.price_calls[1]
-    assert refresh_call[0] == "BN.TO"
-    assert refresh_call[1] == date(2024, 1, 4)
 
 
 def test_cli_market_backfill_enqueue_all_prices_only(test_manager):

@@ -9,7 +9,7 @@ from dashboard.db.db_conn import DB, init_db
 from dashboard.db import queries as qry
 from dashboard.models.domain import Portfolio, Position, Txn
 from dashboard.services.table_formatter import TxnTableFormatter, PositionTableFormatter, PortfolioTableFormatter
-from dashboard.ingestion.market.service import MarketIngestionService
+from dashboard.ingestion.price_history.service import PriceHistoryIngestionService
 
 class DashboardManager:
     """
@@ -275,7 +275,7 @@ class DashboardManager:
 
         If asset_id is None, enqueue jobs for all tracked assets.
         """
-        service = MarketIngestionService(self.conn)
+        service = PriceHistoryIngestionService(self.conn)
 
         if asset_id is None:
             job_ids = service.enqueue_backfill_all(
@@ -304,7 +304,7 @@ class DashboardManager:
 
         If asset_id is None, enqueue jobs for all tracked assets.
         """
-        service = MarketIngestionService(self.conn)
+        service = PriceHistoryIngestionService(self.conn)
 
         if asset_id is None:
             job_ids = service.enqueue_refresh_all(
@@ -324,14 +324,14 @@ class DashboardManager:
         """
         Process queued Domain A market backfill jobs.
         """
-        service = MarketIngestionService(self.conn)
+        service = PriceHistoryIngestionService(self.conn)
         return service.process_backfill_jobs(max_jobs=max_jobs)
 
     def run_market_refresh_jobs(self, max_jobs: int = 1) -> int:
         """
         Process queued Domain A market refresh jobs.
         """
-        service = MarketIngestionService(self.conn)
+        service = PriceHistoryIngestionService(self.conn)
         return service.process_refresh_jobs(max_jobs=max_jobs)
 
 

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from dashboard.ingestion.market.constants import (
+from dashboard.ingestion.price_history.constants import (
     DATASET_DIVIDENDS,
     DATASET_PRICE_DAILY,
     DATASET_SPLITS,
@@ -19,11 +19,11 @@ from dashboard.ingestion.market.constants import (
     PRIORITY_MARKET_REFRESH_PRICE,
     PRIORITY_MARKET_REFRESH_SPLITS,
 )
-from dashboard.ingestion.market.db.ingestion_repo import MarketIngestionRepository
+from dashboard.ingestion.price_history.db.ingestion_repo import PriceHistoryIngestionRepository
 
 
 def enqueue_market_backfill_jobs(
-    repo: MarketIngestionRepository,
+    repo: PriceHistoryIngestionRepository,
     asset_id: str,
     start_date: date,
     end_date: date,
@@ -74,7 +74,7 @@ def enqueue_market_backfill_jobs(
 
 
 def enqueue_market_refresh_jobs(
-    repo: MarketIngestionRepository,
+    repo: PriceHistoryIngestionRepository,
     asset_id: str,
     end_date: date,
     lookback_days_if_empty: int = 30,
@@ -135,7 +135,7 @@ def enqueue_market_refresh_jobs(
 
 
 def enqueue_market_backfill_for_all_assets(
-    repo: MarketIngestionRepository,
+    repo: PriceHistoryIngestionRepository,
     start_date: date,
     end_date: date,
     include_dividends: bool = True,
@@ -160,7 +160,7 @@ def enqueue_market_backfill_for_all_assets(
 
 
 def enqueue_market_refresh_for_all_assets(
-    repo: MarketIngestionRepository,
+    repo: PriceHistoryIngestionRepository,
     end_date: date,
     include_dividends: bool = True,
     include_splits: bool = True,
