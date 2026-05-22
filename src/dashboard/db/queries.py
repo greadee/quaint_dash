@@ -521,3 +521,115 @@ SELECT
 FROM asset_metadata_sync
 WHERE asset_id = ?;
 """
+
+###############################################
+##    trading day calendar queries
+###############################################
+
+UPSERT_TRADING_CALENDAR_DAY = """
+INSERT INTO trading_calendar (
+  market_code,
+  exchange_code,
+  session_date,
+  is_open,
+  is_half_day,
+  open_time_utc,
+  close_time_utc,
+  open_time_local,
+  close_time_local,
+  timezone,
+  holiday_name,
+  source,
+  source_version,
+  created_at,
+  updated_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), now())
+ON CONFLICT (market_code, session_date) DO UPDATE SET
+  exchange_code = excluded.exchange_code,
+  is_open = excluded.is_open,
+  is_half_day = excluded.is_half_day,
+  open_time_utc = excluded.open_time_utc,
+  close_time_utc = excluded.close_time_utc,
+  open_time_local = excluded.open_time_local,
+  close_time_local = excluded.close_time_local,
+  timezone = excluded.timezone,
+  holiday_name = excluded.holiday_name,
+  source = excluded.source,
+  source_version = excluded.source_version,
+  updated_at = now();
+"""
+
+MARK_TRADING_CALENDAR_SYNC_RUNNING = """
+INSERT INTO trading_calendar_sync_state (
+  market_code,
+  exchange_code,
+  source,
+  sync_status,
+  last_attempted_at,
+  attempt_count,
+  created_at,
+  updated_at
+)
+VALUES (?, ?, ?, 'running', now(), 1, now(), now())
+ON CONFLICT (market_code) DO UPDATE SET
+  exchange_code = excluded.exchange_code,
+  source = excluded.source,
+  sync_status = 'running',
+  last_attempted_at = now(),
+  attempt_count = trading_calendar_sync_state.attempt_count + 1,
+  updated_at = now();
+"""
+
+MARK_TRADING_CALENDAR_SYNC_SUCCESS = """
+UPDATE trading_calendar_sync_state
+SET
+  sync_status = 'synced',
+  last_start_date = ?,
+  last_end_date = ?,
+  last_succeeded_at = now(),
+  last_error = NULL,
+  updated_at = now()
+WHERE market_code = ?;
+"""
+
+MARK_TRADING_CALENDAR_SYNC_FAILED = """
+UPDATE trading_calendar_sync_state
+SET
+  sync_status = 'failed',
+  last_error = ?,
+  updated_at = now()
+WHERE market_code = ?;
+"""
+
+GET_TRADING_CALENDAR_DAY = """
+SELECT
+  market_code,
+  exchange_code,
+  session_date,
+  is_open,
+  is_half_day,
+  open_time_utc,
+  close_time_utc,
+  timezone,
+  holiday_name
+FROM trading_calendar
+WHERE market_code = ?
+  AND session_date = ?;
+"""
+
+IS_MARKET_OPEN_DAY = """
+SELECT COALESCE(is_open, FALSE)
+FROM trading_calendar
+WHERE market_code = ?
+  AND session_date = ?;
+"""
+
+LIST_DUE_TRADING_CALENDARS = """
+SELECT market_code
+FROM trading_calendar_sync_state
+WHERE sync_status IN ('pending', 'failed', 'stale')
+   OR last_succeeded_at IS NULL
+   OR last_end_date < ?
+ORDER BY last_attempted_at NULLS FIRST;
+"""

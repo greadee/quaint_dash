@@ -12,11 +12,13 @@ Design Decisions: [ADR's](../adr/adr_ph2.md)
 
 ### Completed:
 - Ingest metadata sync upon portfolio add (FMP)
-- Ingest historical price history backfill upon CLI cmd (yfinance)
+    - CLI test cmd
+    - Scheduler
+- Ingest historical price history backfill (yfinance)
+    - CLI test cmd
+    - Scheduler
 
 ### Tasks: 
-- Metadata refresh cmd and scheduler
-- Price history backfill scheduler
 - Ingest biweekly earnings calendar update (FMP)
     - Scheduler
 - Ingest core index composition 3x intraday (FMP)

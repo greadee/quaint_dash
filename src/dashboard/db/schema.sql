@@ -221,6 +221,56 @@ CREATE TABLE IF NOT EXISTS asset_sync_state (
 );
 
 
+------------------------------
+-- trading day calendar
+------------------------------
+
+CREATE TABLE IF NOT EXISTS trading_calendar (
+    market_code TEXT NOT NULL,        -- US, CAN
+    exchange_code TEXT NOT NULL,      -- XNYS, XTSE
+    session_date DATE NOT NULL,
+
+    is_open BOOLEAN NOT NULL,
+    is_half_day BOOLEAN NOT NULL DEFAULT FALSE,
+
+    open_time_utc TIMESTAMP,
+    close_time_utc TIMESTAMP,
+
+    open_time_local TEXT,
+    close_time_local TEXT,
+    timezone TEXT NOT NULL,
+
+    holiday_name TEXT,
+    source TEXT NOT NULL,             -- pandas_market_calendars
+    source_version TEXT,
+
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (market_code, session_date)
+);
+
+CREATE INDEX IF NOT EXISTS trading_calendar_date_idx
+ON trading_calendar(session_date);
+
+CREATE TABLE IF NOT EXISTS trading_calendar_sync_state (
+    market_code TEXT PRIMARY KEY,
+    exchange_code TEXT NOT NULL,
+    source TEXT NOT NULL,
+
+    last_start_date DATE,
+    last_end_date DATE,
+    last_attempted_at TIMESTAMP,
+    last_succeeded_at TIMESTAMP,
+
+    sync_status TEXT NOT NULL DEFAULT 'pending', -- pending, running, synced, failed, stale
+    attempt_count BIGINT NOT NULL DEFAULT 0,
+    last_error TEXT,
+
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
 -------------------------------
 -- ingestion domain b
 -------------------------------
