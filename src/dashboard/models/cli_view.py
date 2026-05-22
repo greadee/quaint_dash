@@ -274,6 +274,15 @@ class DashboardView(View):
             n = self.access.refresh_asset_metadata(asset_id)
             print(f"Refreshed metadata for {n} asset(s).")
             return self
+        
+        if cmd == "trading-calendar-refresh":
+            market_code = None if ns.target.lower() == "all" else ns.target
+            n = self.access.refresh_trading_calendar(
+                market_code=market_code,
+                year=ns.year,
+            )
+            print(f"Refreshed {n} trading calendar day(s).")
+            return self
 
         return self # fallback
 
@@ -381,6 +390,12 @@ class DashboardView(View):
         p = _NoExitParser(prog="asset-metadata-refresh", add_help=True, description="Refresh FMP asset metadata for one asset or all assets.",)
         p.add_argument("target", help="Asset id, or 'all'")
         parsers["asset-metadata-refresh"] = p
+
+        # trading calendar refreh parser
+        p = _NoExitParser(prog="trading-calendar-refresh", add_help=True, description="Refresh US/CAN trading calendars.",)
+        p.add_argument("target", help="US, CAN, or all")
+        p.add_argument("--year", dest="year", type=int, default=None)
+        parsers["trading-calendar-refresh"] = p
 
         return parsers
 

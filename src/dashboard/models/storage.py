@@ -10,6 +10,9 @@ from dashboard.db import queries as qry
 from dashboard.models.domain import Portfolio, Position, Txn
 from dashboard.services.table_formatter import TxnTableFormatter, PositionTableFormatter, PortfolioTableFormatter
 from dashboard.ingestion.price_history.service import PriceHistoryIngestionService
+from dashboard.ingestion.trading_calendar.service import TradingCalendarIngestionService
+from datetime import date
+
 
 class DashboardManager:
     """
@@ -429,6 +432,45 @@ class DashboardManager:
 
         service = PriceHistoryIngestionService(self.conn)
         return service.process_backfill_jobs(max_jobs=max_jobs)
+    
+    ########################
+    ##          trading calendar 
+    #######################
+
+    def refresh_trading_calendar(
+        self,
+        market_code: str | None = None,
+        year: int | None = None,
+    ) -> int:
+
+        if year is None:
+            year = date.today().year
+
+        start_date = date(year, 1, 1)
+        end_date = date(year + 1, 12, 31)
+
+        service = TradingCalendarIngestionService(self.conn)
+
+        if market_code is None or market_code.lower() == "all":
+            return service.refresh_all(start_date=start_date, end_date=end_date)
+
+        return service.refresh_market(
+            market_code=market_code,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+
+    def is_market_open_day(self, market_code: str, session_date: date) -> bool:
+        from dashboard.ingestion.trading_calendar.service import TradingCalendarIngestionService
+
+        service = TradingCalendarIngestionService(self.conn)
+        return service.is_market_open_day(market_code, session_date)
+
+
+    def should_skip_market_refresh(self, market_code: str, session_date: date) -> bool:
+        return not self.is_market_open_day(market_code, session_date)
+
 
 class PortfolioManager():
     """

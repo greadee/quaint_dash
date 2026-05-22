@@ -32,6 +32,8 @@ def cli_loop():
     db = DB("data/persistent_db.db")
     init_db(db)
     manager = DashboardManager(db)
+    
+    # pre response data refresh
     try: 
          n = manager.refresh_due_asset_metadata(max_assets=5)
          if n:
@@ -47,9 +49,17 @@ def cli_loop():
     except Exception as e:
         print(f"Price history scheduler skipped: {e}")
 
+    try:
+        n = manager.refresh_trading_calendar(market_code="all")
+        if n:
+            print(f"Trading calendar scheduler: refreshed {n} day(s).")
+    except Exception as e:
+        print(f"Trading calendar scheduler skipped: {e}")    
 
     view: View = DashboardView(manager)
 
+
+    # cli response loop
     while True:
         view.default_display()
         line = input(view.prompt_input())
