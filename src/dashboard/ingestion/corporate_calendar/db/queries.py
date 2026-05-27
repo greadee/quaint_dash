@@ -156,26 +156,25 @@ INSERT INTO earnings_calendar_event (
     earnings_date,
     fiscal_year,
     fiscal_quarter,
-    time,
+    "time",
     eps_estimated,
     eps_actual,
     revenue_estimated,
     revenue_actual,
-    source,
-    as_of_ts
+    source
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (asset_id, earnings_date)
 DO UPDATE SET
-    fiscal_year = COALESCE(excluded.fiscal_year, earnings_calendar_event.fiscal_year),
-    fiscal_quarter = COALESCE(excluded.fiscal_quarter, earnings_calendar_event.fiscal_quarter),
-    time = COALESCE(excluded.time, earnings_calendar_event.time),
-    eps_estimated = COALESCE(excluded.eps_estimated, earnings_calendar_event.eps_estimated),
-    eps_actual = COALESCE(excluded.eps_actual, earnings_calendar_event.eps_actual),
-    revenue_estimated = COALESCE(excluded.revenue_estimated, earnings_calendar_event.revenue_estimated),
-    revenue_actual = COALESCE(excluded.revenue_actual, earnings_calendar_event.revenue_actual),
+    fiscal_year = excluded.fiscal_year,
+    fiscal_quarter = excluded.fiscal_quarter,
+    "time" = excluded."time",
+    eps_estimated = excluded.eps_estimated,
+    eps_actual = excluded.eps_actual,
+    revenue_estimated = excluded.revenue_estimated,
+    revenue_actual = excluded.revenue_actual,
     source = excluded.source,
-    as_of_ts = CURRENT_TIMESTAMP
+    as_of_ts = now()
 """
 
 UPSERT_FINANCIAL_STATEMENT = """
@@ -187,17 +186,16 @@ INSERT INTO financial_statement (
     period_end_date,
     report_date,
     data_json,
-    source,
-    ingested_at_utc
+    source
 )
-VALUES (?, ?, ?, ?, ?, ?, CAST(? AS JSON), ?, CURRENT_TIMESTAMP)
+VALUES (?, ?, ?, ?, ?, ?, json(?), ?)
 ON CONFLICT (asset_id, statement_type, year, quarter)
 DO UPDATE SET
     period_end_date = excluded.period_end_date,
     report_date = excluded.report_date,
     data_json = excluded.data_json,
     source = excluded.source,
-    ingested_at_utc = CURRENT_TIMESTAMP
+    ingested_at_utc = now()
 """
 
 SELECT_DUE_EARNINGS_EVENTS = """

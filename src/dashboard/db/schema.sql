@@ -275,6 +275,26 @@ CREATE TABLE IF NOT EXISTS trading_calendar_sync_state (
 -- ingestion domain b
 -------------------------------
 
+CREATE TABLE IF NOT EXISTS earnings_calendar_event (
+    asset_id TEXT NOT NULL,
+    earnings_date DATE NOT NULL,
+
+    fiscal_year INTEGER,
+    fiscal_quarter INTEGER,
+
+    time TEXT,
+
+    eps_estimated DOUBLE,
+    eps_actual DOUBLE,
+    revenue_estimated DOUBLE,
+    revenue_actual DOUBLE,
+
+    source TEXT NOT NULL DEFAULT 'fmp',
+    as_of_ts TIMESTAMP NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (asset_id, earnings_date),
+    FOREIGN KEY(asset_id) REFERENCES asset(asset_id)
+);
 
 CREATE TABLE IF NOT EXISTS corporate_event (
     asset_id TEXT NOT NULL,

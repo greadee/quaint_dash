@@ -11,6 +11,7 @@ from dashboard.models.domain import Portfolio, Position, Txn
 from dashboard.services.table_formatter import TxnTableFormatter, PositionTableFormatter, PortfolioTableFormatter
 from dashboard.ingestion.price_history.service import PriceHistoryIngestionService
 from dashboard.ingestion.trading_calendar.service import TradingCalendarIngestionService
+from dashboard.ingestion.corporate_calendar.service import CorporateCalendarIngestionService
 from datetime import date
 
 
@@ -470,7 +471,45 @@ class DashboardManager:
 
     def should_skip_market_refresh(self, market_code: str, session_date: date) -> bool:
         return not self.is_market_open_day(market_code, session_date)
+    
 
+    #####################################
+    ##      corporate calendar
+    #####################################
+
+
+
+    def schedule_due_corporate_calendar_refresh(self) -> int:
+        service = CorporateCalendarIngestionService(self.conn)
+
+        pending = self.conn.execute("""
+            SELECT COUNT(*)
+            FROM ingestion_job
+            WHERE domain = 'corporate'
+            AND dataset = 'earnings_calendar'
+            AND job_type = 'calendar_refresh'
+            AND status IN ('pending', 'running')
+        """).fetchone()[0]
+
+        if pending > 0:
+            return 0
+
+        latest_success = self.conn.execute("""
+            SELECT MAX(last_successful_at)
+            FROM asset_sync_state
+            WHERE domain = 'corporate'
+            AND dataset = 'earnings_calendar'
+        """).fetchone()[0]
+
+        if latest_success is not None:
+            recently_refreshed = self.conn.execute("""
+                SELECT ? > now() - INTERVAL 1 DAY
+            """, [latest_success]).fetchone()[0]
+
+            if recently_refreshed:
+                return 0
+
+        return len(service.enqueue_calendar_refresh())
 
 class PortfolioManager():
     """
