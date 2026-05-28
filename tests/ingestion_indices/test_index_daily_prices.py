@@ -2,7 +2,7 @@ from datetime import date
 
 from dashboard.ingestion.indices.index_ingestion_service import BenchmarkIndexIngestionService
 
-from tests.fixture_index import (
+from tests.fixtures.fixture_index import (
     EmptyProvider,
     FakeDailyPriceProvider,
     insert_test_index,

@@ -14,8 +14,8 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 
-from tests.fixture_index import create_benchmark_index_tables  # noqa: E402
-from tests.fixture_websocket import create_live_price_tables  # noqa: E402
+from tests.fixtures.fixture_index import create_benchmark_index_tables  # noqa: E402
+from tests.fixtures.fixture_websocket import create_live_price_tables  # noqa: E402
 
 
 @pytest.fixture()

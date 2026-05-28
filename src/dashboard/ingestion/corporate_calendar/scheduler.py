@@ -1,14 +1,5 @@
 """
 scheduler for Domain B corporate calendar ingestion
-
-This module decides WHEN jobs should be created.
-The worker decides HOW a queued job is processed.
-
-Current scheduling rules:
-    1. Refresh the earnings calendar at most once per day.
-    2. After an earnings event date passes, enqueue earnings/fundamental jobs.
-    3. Keep checking recent events for a short window because financial statements
-       can lag the earnings calendar event.
 """
 
 from __future__ import annotations
@@ -35,9 +26,6 @@ from dashboard.ingestion.corporate_calendar.jobs import (
 class CorporateCalendarScheduler:
     """
     Creates corporate ingestion jobs only when they are due.
-
-    This keeps repeated CLI/app-start calls safe. Calling these scheduler methods
-    many times should not flood ingestion_job with duplicate pending work.
     """
 
     def __init__(self, conn) -> None:
@@ -52,15 +40,6 @@ class CorporateCalendarScheduler:
     ) -> list[int]:
         """
         Enqueue calendar refresh jobs if the calendar has not been refreshed recently.
-
-        Suggested cadence:
-            daily
-
-        Date window:
-            today - 7 days through today + 90 days
-
-        The 7-day lookback catches revised actual EPS/revenue values.
-        The 90-day lookahead covers roughly one earnings season.
         """
         pending_count = self._count_open_jobs(
             dataset=DATASET_EARNINGS_CALENDAR,
@@ -91,18 +70,7 @@ class CorporateCalendarScheduler:
         max_assets: int = 25,
     ) -> list[int]:
         """
-        Enqueue earnings/fundamental update jobs for assets with recent earnings events.
-
-        Suggested cadence:
-            daily, after the calendar refresh job has run
-
-        Why this re-checks the last 14 days:
-            EPS actuals may appear quickly, but full statements can lag.
-            Rechecking recent event windows is a simple way to avoid missing late data.
-
-        Duplicate protection:
-            This avoids creating more jobs for the same asset/dataset on the same day
-            if that job is already pending/running/done today.
+        Enqueue earnings/fundamental update jobs for recent earnings events.
         """
         today = date.today()
         start_date = today - timedelta(days=lookback_days)
@@ -167,7 +135,7 @@ class CorporateCalendarScheduler:
 
         return int(row[0])
 
-    def _latest_successful_at(self, dataset: str) -> datetime | None:
+    def _latest_successful_at(self, dataset: str):
         row = self.conn.execute(
             """
             SELECT MAX(last_successful_at)

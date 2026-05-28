@@ -3,7 +3,7 @@ from datetime import date
 from dashboard.ingestion.indices.index_ingestion_service import BenchmarkIndexIngestionService
 from dashboard.ingestion.indices.index_models import IndexConstituent
 
-from tests.fixture_index import FakeConstituentProvider, insert_test_index, insert_test_symbol
+from tests.fixtures.fixture_index import FakeConstituentProvider, insert_test_index, insert_test_symbol
 
 
 def make_constituent(

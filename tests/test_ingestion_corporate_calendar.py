@@ -226,3 +226,97 @@ def test_stage_3_backfill_enqueues_earnings_and_statement_jobs():
     """).fetchall()
 
     assert statuses == [("done", 2)]
+
+def test_scheduler_calendar_refresh_only_runs_when_due():
+    conn = make_conn()
+    service = CorporateCalendarIngestionService(conn, provider=FakeCorporateProvider())
+
+    first_job_ids = service.schedule_calendar_refresh_if_due()
+    assert len(first_job_ids) == 1
+
+    # Pending job already exists, so no duplicate calendar refresh job.
+    second_job_ids = service.schedule_calendar_refresh_if_due()
+    assert len(second_job_ids) == 0
+
+    done = service.process_jobs(max_jobs=1)
+    assert done == 1
+
+    # Just succeeded, so still no duplicate refresh.
+    third_job_ids = service.schedule_calendar_refresh_if_due()
+    assert len(third_job_ids) == 0
+
+def test_scheduler_enqueues_fundamental_updates_after_earnings_event():
+    conn = make_conn()
+    service = CorporateCalendarIngestionService(conn, provider=FakeCorporateProvider())
+
+    conn.execute("""
+        INSERT INTO earnings_calendar_event (
+            asset_id,
+            earnings_date,
+            fiscal_year,
+            fiscal_quarter,
+            source
+        )
+        VALUES ('AAPL', ?, 2026, 1, 'fake')
+    """, [date.today() - timedelta(days=1)])
+
+    job_ids = service.schedule_fundamental_updates_after_events(
+        lookback_days=14,
+        max_assets=10,
+    )
+
+    assert len(job_ids) == 2
+
+    rows = conn.execute("""
+        SELECT dataset, status
+        FROM ingestion_job
+        WHERE domain = 'corporate'
+        ORDER BY dataset
+    """).fetchall()
+
+    assert rows == [
+        ("earnings_actuals", "pending"),
+        ("financial_statements", "pending"),
+    ]
+
+def test_worker_processes_post_event_fundamental_jobs():
+    conn = make_conn()
+    service = CorporateCalendarIngestionService(conn, provider=FakeCorporateProvider())
+
+    conn.execute("""
+        INSERT INTO earnings_calendar_event (
+            asset_id,
+            earnings_date,
+            fiscal_year,
+            fiscal_quarter,
+            source
+        )
+        VALUES ('AAPL', ?, 2026, 1, 'fake')
+    """, [date.today() - timedelta(days=1)])
+
+    job_ids = service.schedule_fundamental_updates_after_events(
+        lookback_days=14,
+        max_assets=10,
+    )
+
+    assert len(job_ids) == 2
+
+    done = service.process_jobs(max_jobs=2)
+    assert done == 2
+
+    eps_actual = conn.execute("""
+        SELECT eps_actual
+        FROM earnings_calendar_event
+        WHERE asset_id = 'AAPL'
+          AND earnings_date = ?
+    """, [date.today() - timedelta(days=1)]).fetchone()[0]
+
+    assert eps_actual == 1.7
+
+    statement_row = conn.execute("""
+        SELECT statement_type, year, quarter
+        FROM financial_statement
+        WHERE asset_id = 'AAPL'
+    """).fetchone()
+
+    assert statement_row == ("income", 2026, 1)

@@ -479,8 +479,6 @@ class DashboardManager:
     ##      corporate calendar
     #####################################
 
-
-
     def schedule_due_corporate_calendar_refresh(self) -> int:
         service = CorporateCalendarIngestionService(self.conn)
 
@@ -512,6 +510,37 @@ class DashboardManager:
                 return 0
 
         return len(service.enqueue_calendar_refresh())
+
+    def schedule_due_corporate_fundamental_updates(
+        self,
+        max_assets: int = 25,
+    ) -> int:
+        """
+        Schedule earnings/fundamental updates for recent earnings events.
+        """
+        from dashboard.ingestion.corporate_calendar.service import (
+            CorporateCalendarIngestionService,
+        )
+
+        service = CorporateCalendarIngestionService(self.conn)
+
+        return len(
+            service.schedule_fundamental_updates_after_events(
+                lookback_days=14,
+                max_assets=max_assets,
+            )
+        )
+
+    def run_corporate_ingestion_jobs(self, max_jobs: int = 1) -> int:
+        """
+        Process queued corporate ingestion jobs.
+        """
+        from dashboard.ingestion.corporate_calendar.service import (
+            CorporateCalendarIngestionService,
+        )
+
+        service = CorporateCalendarIngestionService(self.conn)
+        return service.process_jobs(max_jobs=max_jobs)
     
 
 

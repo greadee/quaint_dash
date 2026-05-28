@@ -16,6 +16,7 @@ from dashboard.ingestion.corporate_calendar.jobs import (
 )
 from dashboard.ingestion.corporate_calendar.provider_fmp import FmpCorporateCalendarProvider
 from dashboard.ingestion.corporate_calendar.worker import CorporateCalendarWorker
+from dashboard.ingestion.corporate_calendar.scheduler import CorporateCalendarScheduler
 
 
 class CorporateCalendarIngestionService:
