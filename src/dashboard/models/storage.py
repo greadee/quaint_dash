@@ -573,7 +573,7 @@ class DashboardManager:
         scheduler = create_index_scheduler(self.conn)
         return scheduler.run_relative_metrics_against_sp500()
     
-    from dashboard.indices.index_service_factory import (
+    from dashboard.ingestion.indices.index_service_factory import (
     create_index_ingestion_service,
     create_index_scheduler,
 )
