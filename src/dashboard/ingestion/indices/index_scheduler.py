@@ -33,16 +33,12 @@ class BenchmarkIndexScheduler:
         end = end_date or date.today()
         start = end - timedelta(days=lookback_days)
 
-        row_count = self.service.ingest_core_daily_prices(
-            start_date=start,
-            end_date=end,
-        )
-
+        row_count = self.service.ingest_core_daily_prices(start, end)
         self.service.compute_core_metrics()
 
         return IndexJobResult(
             job_type="core_daily_refresh",
-            target_count=self._count_core_indices(),
+            target_count=self._count_indices_by_category("core_geo"),
             row_count=row_count,
         )
 
@@ -51,20 +47,18 @@ class BenchmarkIndexScheduler:
         interval: str = "5min",
         now: datetime | None = None,
     ) -> IndexJobResult:
-        current_time = now or datetime.now()
-
-        if not self.market_is_open_fn(current_time):
+        if not self.market_is_open_fn(now or datetime.now()):
             return IndexJobResult(
                 job_type="core_intraday_refresh",
-                target_count=self._count_core_indices(),
+                target_count=self._count_indices_by_category("core_geo"),
                 row_count=0,
             )
 
-        row_count = self.service.ingest_core_intraday_prices(interval=interval)
+        row_count = self.service.ingest_core_intraday_prices(interval)
 
         return IndexJobResult(
             job_type="core_intraday_refresh",
-            target_count=self._count_core_indices(),
+            target_count=self._count_indices_by_category("core_geo"),
             row_count=row_count,
         )
 
@@ -73,24 +67,96 @@ class BenchmarkIndexScheduler:
         snapshot_date: date | None = None,
     ) -> IndexJobResult:
         snap_date = snapshot_date or date.today()
-        row_count = 0
-
-        for index_id in self._core_index_ids():
-            try:
-                row_count += self.service.ingest_composition(index_id, snap_date)
-            except ValueError:
-                continue
+        row_count = self.service.ingest_composition_for_category(
+            index_category="core_geo",
+            snapshot_date=snap_date,
+            continue_on_error=True,
+        )
 
         return IndexJobResult(
             job_type="core_composition_refresh",
-            target_count=self._count_core_indices(),
+            target_count=self._count_indices_by_category("core_geo"),
             row_count=row_count,
         )
+
+    def run_non_core_daily_refresh(
+        self,
+        lookback_days: int = 10,
+        end_date: date | None = None,
+    ) -> IndexJobResult:
+        end = end_date or date.today()
+        start = end - timedelta(days=lookback_days)
+
+        row_count = self.service.ingest_non_core_daily_prices(start, end)
+        self.service.compute_non_core_metrics()
+
+        return IndexJobResult(
+            job_type="non_core_daily_refresh",
+            target_count=self._count_non_core_indices(),
+            row_count=row_count,
+        )
+
+    def run_non_core_intraday_refresh(
+        self,
+        interval: str = "5min",
+        now: datetime | None = None,
+    ) -> IndexJobResult:
+        if not self.market_is_open_fn(now or datetime.now()):
+            return IndexJobResult(
+                job_type="non_core_intraday_refresh",
+                target_count=self._count_non_core_indices(),
+                row_count=0,
+            )
+
+        row_count = self.service.ingest_non_core_intraday_prices(interval)
+
+        return IndexJobResult(
+            job_type="non_core_intraday_refresh",
+            target_count=self._count_non_core_indices(),
+            row_count=row_count,
+        )
+
+    def run_non_core_composition_refresh(
+        self,
+        snapshot_date: date | None = None,
+    ) -> IndexJobResult:
+        snap_date = snapshot_date or date.today()
+        row_count = self.service.ingest_non_core_composition(
+            snapshot_date=snap_date,
+            continue_on_error=True,
+        )
+
+        return IndexJobResult(
+            job_type="non_core_composition_refresh",
+            target_count=self._count_non_core_indices(),
+            row_count=row_count,
+        )
+
+    def run_sector_daily_refresh(
+        self,
+        lookback_days: int = 10,
+        end_date: date | None = None,
+    ) -> IndexJobResult:
+        return self._run_category_daily_refresh("sector", lookback_days, end_date)
+
+    def run_industry_daily_refresh(
+        self,
+        lookback_days: int = 10,
+        end_date: date | None = None,
+    ) -> IndexJobResult:
+        return self._run_category_daily_refresh("industry", lookback_days, end_date)
+
+    def run_theme_daily_refresh(
+        self,
+        lookback_days: int = 10,
+        end_date: date | None = None,
+    ) -> IndexJobResult:
+        return self._run_category_daily_refresh("theme", lookback_days, end_date)
 
     def run_relative_metrics_against_sp500(self) -> IndexJobResult:
         row_count = 0
 
-        for index_id in self._core_index_ids():
+        for index_id in self._all_active_index_ids():
             if index_id == "SP500":
                 continue
 
@@ -100,30 +166,65 @@ class BenchmarkIndexScheduler:
             )
 
         return IndexJobResult(
-            job_type="core_relative_metrics",
-            target_count=max(0, self._count_core_indices() - 1),
+            job_type="all_relative_metrics",
+            target_count=max(0, len(self._all_active_index_ids()) - 1),
             row_count=row_count,
         )
 
-    def _core_index_ids(self) -> list[str]:
+    def _run_category_daily_refresh(
+        self,
+        index_category: str,
+        lookback_days: int,
+        end_date: date | None,
+    ) -> IndexJobResult:
+        end = end_date or date.today()
+        start = end - timedelta(days=lookback_days)
+
+        row_count = self.service.ingest_daily_prices_for_category(
+            index_category=index_category,
+            start_date=start,
+            end_date=end,
+        )
+
+        self.service.compute_metrics_for_category(index_category)
+
+        return IndexJobResult(
+            job_type=f"{index_category}_daily_refresh",
+            target_count=self._count_indices_by_category(index_category),
+            row_count=row_count,
+        )
+
+    def _all_active_index_ids(self) -> list[str]:
         rows = self.conn.execute(
             """
             SELECT index_id
             FROM benchmark_index
-            WHERE is_core = TRUE
-              AND is_active = TRUE
+            WHERE is_active = TRUE
             ORDER BY index_id;
             """
         ).fetchall()
 
         return [row[0] for row in rows]
 
-    def _count_core_indices(self) -> int:
+    def _count_indices_by_category(self, index_category: str) -> int:
         row = self.conn.execute(
             """
             SELECT COUNT(*)
             FROM benchmark_index
-            WHERE is_core = TRUE
+            WHERE index_category = ?
+              AND is_active = TRUE;
+            """,
+            [index_category],
+        ).fetchone()
+
+        return int(row[0])
+
+    def _count_non_core_indices(self) -> int:
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM benchmark_index
+            WHERE index_category IN ('sector', 'industry', 'theme')
               AND is_active = TRUE;
             """
         ).fetchone()

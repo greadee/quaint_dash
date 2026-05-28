@@ -6,63 +6,26 @@ from datetime import date
 from typing import Any
 
 from dashboard.ingestion.indices import index_queries as iq
+from dashboard.ingestion.indices.benchmark_index_universe import ALL_BENCHMARK_INDICES
 from dashboard.ingestion.indices.core_index_universe import CORE_INDICES
 from dashboard.ingestion.indices.index_models import IndexDailyBar, IndexSymbol
 from dashboard.ingestion.indices.index_provider import IndexProvider
+from dashboard.ingestion.indices.sector_industry_index_universe import NON_CORE_BENCHMARK_INDICES
 
 
 class BenchmarkIndexIngestionService:
-    """
-    Service layer for benchmark index ingestion.
-
-    The service owns:
-    - choosing provider symbol rows
-    - provider fallback
-    - database writes
-    - computed metrics
-
-    Providers only fetch and normalize data.
-    """
-
     def __init__(self, conn: Any, provider_registry: dict[str, IndexProvider]):
         self.conn = conn
         self.provider_registry = provider_registry
 
     def seed_core_universe(self) -> int:
-        inserted_or_updated = 0
+        return self._seed_universe(CORE_INDICES)
 
-        for item in CORE_INDICES:
-            self.conn.execute(
-                iq.UPSERT_BENCHMARK_INDEX,
-                [
-                    item["index_id"],
-                    item["index_name"],
-                    item["index_family"],
-                    item["index_category"],
-                    item.get("region"),
-                    item.get("country_code"),
-                    item["currency"],
-                    item.get("is_core", False),
-                    item.get("notes"),
-                ],
-            )
+    def seed_sector_industry_universe(self) -> int:
+        return self._seed_universe(NON_CORE_BENCHMARK_INDICES)
 
-            for symbol in item.get("symbols", []):
-                self.conn.execute(
-                    iq.UPSERT_BENCHMARK_INDEX_SYMBOL,
-                    [
-                        item["index_id"],
-                        symbol["provider"],
-                        symbol["provider_symbol"],
-                        symbol["symbol_purpose"],
-                        symbol.get("is_primary", False),
-                        symbol.get("is_proxy", False),
-                    ],
-                )
-
-            inserted_or_updated += 1
-
-        return inserted_or_updated
+    def seed_all_universes(self) -> int:
+        return self._seed_universe(ALL_BENCHMARK_INDICES)
 
     def ingest_daily_prices(
         self,
@@ -376,27 +339,142 @@ class BenchmarkIndexIngestionService:
 
         return inserted
 
-    def ingest_core_daily_prices(
+    def ingest_core_daily_prices(self, start_date: date, end_date: date) -> int:
+        return self.ingest_daily_prices_for_category("core_geo", start_date, end_date)
+
+    def ingest_core_intraday_prices(self, interval: str = "5min") -> int:
+        return self.ingest_intraday_prices_for_category("core_geo", interval)
+
+    def compute_core_metrics(self) -> int:
+        return self.compute_metrics_for_category("core_geo")
+
+    def ingest_non_core_daily_prices(self, start_date: date, end_date: date) -> int:
+        count = 0
+        for category in ("sector", "industry", "theme"):
+            count += self.ingest_daily_prices_for_category(category, start_date, end_date)
+        return count
+
+    def ingest_non_core_intraday_prices(self, interval: str = "5min") -> int:
+        count = 0
+        for category in ("sector", "industry", "theme"):
+            count += self.ingest_intraday_prices_for_category(category, interval)
+        return count
+
+    def compute_non_core_metrics(self) -> int:
+        count = 0
+        for category in ("sector", "industry", "theme"):
+            count += self.compute_metrics_for_category(category)
+        return count
+
+    def ingest_daily_prices_for_category(
         self,
+        index_category: str,
         start_date: date,
         end_date: date,
     ) -> int:
         count = 0
-        for index_id in self._get_core_index_ids():
+        for index_id in self._get_index_ids_by_category(index_category):
             count += self.ingest_daily_prices(index_id, start_date, end_date)
         return count
 
-    def ingest_core_intraday_prices(self, interval: str = "5min") -> int:
+    def ingest_intraday_prices_for_category(
+        self,
+        index_category: str,
+        interval: str = "5min",
+    ) -> int:
         count = 0
-        for index_id in self._get_core_index_ids():
+        for index_id in self._get_index_ids_by_category(index_category):
             count += self.ingest_intraday_prices(index_id, interval)
         return count
 
-    def compute_core_metrics(self) -> int:
+    def compute_metrics_for_category(self, index_category: str) -> int:
         count = 0
-        for index_id in self._get_core_index_ids():
+        for index_id in self._get_index_ids_by_category(index_category):
             count += self.compute_daily_metrics(index_id)
         return count
+
+    def ingest_composition_for_category(
+        self,
+        index_category: str,
+        snapshot_date: date,
+        continue_on_error: bool = True,
+    ) -> int:
+        count = 0
+
+        for index_id in self._get_index_ids_by_category(index_category):
+            try:
+                count += self.ingest_composition(index_id, snapshot_date)
+            except ValueError:
+                if not continue_on_error:
+                    raise
+
+        return count
+
+    def ingest_non_core_composition(
+        self,
+        snapshot_date: date,
+        continue_on_error: bool = True,
+    ) -> int:
+        count = 0
+
+        for category in ("sector", "industry", "theme"):
+            count += self.ingest_composition_for_category(
+                index_category=category,
+                snapshot_date=snapshot_date,
+                continue_on_error=continue_on_error,
+            )
+
+        return count
+
+    def _seed_universe(self, universe: list[dict[str, Any]]) -> int:
+        inserted_or_updated = 0
+
+        for item in universe:
+            self.conn.execute(
+                iq.UPSERT_BENCHMARK_INDEX,
+                [
+                    item["index_id"],
+                    item["index_name"],
+                    item["index_family"],
+                    item["index_category"],
+                    item.get("region"),
+                    item.get("country_code"),
+                    item["currency"],
+                    item.get("is_core", False),
+                    item.get("notes"),
+                ],
+            )
+
+            for symbol in item.get("symbols", []):
+                self.conn.execute(
+                    iq.UPSERT_BENCHMARK_INDEX_SYMBOL,
+                    [
+                        item["index_id"],
+                        symbol["provider"],
+                        symbol["provider_symbol"],
+                        symbol["symbol_purpose"],
+                        symbol.get("is_primary", False),
+                        symbol.get("is_proxy", False),
+                    ],
+                )
+
+            inserted_or_updated += 1
+
+        return inserted_or_updated
+
+    def _get_index_ids_by_category(self, index_category: str) -> list[str]:
+        rows = self.conn.execute(
+            """
+            SELECT index_id
+            FROM benchmark_index
+            WHERE index_category = ?
+              AND is_active = TRUE
+            ORDER BY index_id;
+            """,
+            [index_category],
+        ).fetchall()
+
+        return [row[0] for row in rows]
 
     def _get_symbols_for_purpose(
         self,
@@ -467,7 +545,11 @@ class BenchmarkIndexIngestionService:
     def _upsert_daily_bars(self, index_id: str, bars: list[IndexDailyBar]) -> int:
         bars = sorted(bars, key=lambda bar: bar.price_date)
 
-        existing_rows = self.conn.execute(iq.GET_DAILY_CLOSES_TO_DATE, [index_id, bars[-1].price_date]).fetchall()
+        existing_rows = self.conn.execute(
+            iq.GET_DAILY_CLOSES_TO_DATE,
+            [index_id, bars[-1].price_date],
+        ).fetchall()
+
         close_by_date = {row[0]: float(row[1]) for row in existing_rows}
 
         inserted = 0
@@ -475,7 +557,10 @@ class BenchmarkIndexIngestionService:
 
         for bar in bars:
             if previous_close is None:
-                previous_close = self._previous_close_from_existing(close_by_date, bar.price_date)
+                previous_close = self._previous_close_from_existing(
+                    close_by_date,
+                    bar.price_date,
+                )
 
             price_return_1d = None
             if previous_close is not None and previous_close > 0:
@@ -562,45 +647,17 @@ class BenchmarkIndexIngestionService:
                     ],
                 )
 
-    def _get_core_index_ids(self) -> list[str]:
-        rows = self.conn.execute(iq.GET_CORE_INDICES).fetchall()
-        return [row[0] for row in rows]
+    def _mark_sync_success(self, index_id: str, job_type: str, success_date: date) -> None:
+        self.conn.execute(iq.UPSERT_SYNC_STATE_SUCCESS, [index_id, job_type, success_date])
 
-    def _mark_sync_success(
-        self,
-        index_id: str,
-        job_type: str,
-        success_date: date,
-    ) -> None:
-        self.conn.execute(
-            iq.UPSERT_SYNC_STATE_SUCCESS,
-            [index_id, job_type, success_date],
-        )
-
-    def _mark_sync_failure(
-        self,
-        index_id: str,
-        job_type: str,
-        exc: Exception,
-    ) -> None:
-        self.conn.execute(
-            iq.UPSERT_SYNC_STATE_FAILURE,
-            [index_id, job_type, str(exc)[:1000]],
-        )
+    def _mark_sync_failure(self, index_id: str, job_type: str, exc: Exception) -> None:
+        self.conn.execute(iq.UPSERT_SYNC_STATE_FAILURE, [index_id, job_type, str(exc)[:1000]])
 
     def _sum_known_weights(self, weights: list[float | None]) -> float | None:
         known = [weight for weight in weights if weight is not None]
+        return sum(known) if known else None
 
-        if not known:
-            return None
-
-        return sum(known)
-
-    def _composition_quality(
-        self,
-        is_proxy: bool,
-        total_weight_pct: float | None,
-    ) -> str:
+    def _composition_quality(self, is_proxy: bool, total_weight_pct: float | None) -> str:
         if is_proxy:
             return "proxy"
 
@@ -612,12 +669,7 @@ class BenchmarkIndexIngestionService:
 
         return "partial"
 
-    def _simple_return(
-        self,
-        closes: list[float],
-        i: int,
-        lookback: int,
-    ) -> float | None:
+    def _simple_return(self, closes: list[float], i: int, lookback: int) -> float | None:
         if i - lookback < 0:
             return None
 
@@ -629,12 +681,7 @@ class BenchmarkIndexIngestionService:
 
         return (current / previous) - 1
 
-    def _ytd_return(
-        self,
-        dates: list[date],
-        closes: list[float],
-        i: int,
-    ) -> float | None:
+    def _ytd_return(self, dates: list[date], closes: list[float], i: int) -> float | None:
         current_year = dates[i].year
 
         start_idx = None
@@ -669,12 +716,7 @@ class BenchmarkIndexIngestionService:
 
         return statistics.stdev(returns) * math.sqrt(252)
 
-    def _average(
-        self,
-        values: list[float],
-        i: int,
-        lookback: int,
-    ) -> float | None:
+    def _average(self, values: list[float], i: int, lookback: int) -> float | None:
         if i - lookback + 1 < 0:
             return None
 
@@ -692,11 +734,7 @@ class BenchmarkIndexIngestionService:
 
         return returns
 
-    def _correlation(
-        self,
-        xs: list[float],
-        ys: list[float],
-    ) -> float | None:
+    def _correlation(self, xs: list[float], ys: list[float]) -> float | None:
         if len(xs) != len(ys) or len(xs) < 2:
             return None
 
@@ -714,11 +752,7 @@ class BenchmarkIndexIngestionService:
 
         return numerator / denominator
 
-    def _beta(
-        self,
-        xs: list[float],
-        ys: list[float],
-    ) -> float | None:
+    def _beta(self, xs: list[float], ys: list[float]) -> float | None:
         if len(xs) != len(ys) or len(xs) < 2:
             return None
 

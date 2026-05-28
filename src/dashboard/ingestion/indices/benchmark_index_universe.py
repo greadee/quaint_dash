@@ -1,0 +1,4 @@
+from dashboard.ingestion.indices.core_index_universe import CORE_INDICES
+from dashboard.ingestion.indices.sector_industry_index_universe import NON_CORE_BENCHMARK_INDICES
+
+ALL_BENCHMARK_INDICES = CORE_INDICES + NON_CORE_BENCHMARK_INDICES

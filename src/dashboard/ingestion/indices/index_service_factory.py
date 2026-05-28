@@ -5,17 +5,15 @@ from dashboard.ingestion.indices.yfinance_index_provider import YFinanceIndexPro
 
 
 def create_index_provider_registry():
-    """
-    Central place for benchmark index providers.
+    fmp_provider = FMPIndexProvider()
 
-    Provider priority is mostly controlled by benchmark_index_symbol rows:
-    - yfinance should usually be primary for prices
-    - FMP should usually be fallback for prices
-    - FMP should be primary for supported constituents
-    """
     return {
         "yfinance": YFinanceIndexProvider(),
-        "fmp": FMPIndexProvider(),
+        "fmp": fmp_provider,
+
+        # Backward compatibility for earlier core proxy rows if any used
+        # provider="etf_proxy".
+        "etf_proxy": fmp_provider,
     }
 
 

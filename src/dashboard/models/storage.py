@@ -573,6 +573,76 @@ class DashboardManager:
         scheduler = create_index_scheduler(self.conn)
         return scheduler.run_relative_metrics_against_sp500()
     
+    from dashboard.indices.index_service_factory import (
+    create_index_ingestion_service,
+    create_index_scheduler,
+)
+
+
+def seed_all_benchmark_indices(self):
+    service = create_index_ingestion_service(self.conn)
+    return service.seed_all_universes()
+
+
+def seed_core_indices(self):
+    service = create_index_ingestion_service(self.conn)
+    return service.seed_core_universe()
+
+
+def seed_sector_industry_indices(self):
+    service = create_index_ingestion_service(self.conn)
+    return service.seed_sector_industry_universe()
+
+
+def refresh_core_index_daily_prices(self, lookback_days: int = 10):
+    scheduler = create_index_scheduler(self.conn)
+    return scheduler.run_core_daily_refresh(lookback_days=lookback_days)
+
+
+def refresh_core_index_intraday_prices(self, interval: str = "5min"):
+    scheduler = create_index_scheduler(self.conn)
+    return scheduler.run_core_intraday_refresh(interval=interval)
+
+
+def refresh_core_index_composition(self):
+    scheduler = create_index_scheduler(self.conn)
+    return scheduler.run_core_composition_refresh()
+
+
+def refresh_non_core_index_daily_prices(self, lookback_days: int = 10):
+    scheduler = create_index_scheduler(self.conn)
+    return scheduler.run_non_core_daily_refresh(lookback_days=lookback_days)
+
+
+def refresh_non_core_index_intraday_prices(self, interval: str = "5min"):
+    scheduler = create_index_scheduler(self.conn)
+    return scheduler.run_non_core_intraday_refresh(interval=interval)
+
+
+def refresh_non_core_index_composition(self):
+    scheduler = create_index_scheduler(self.conn)
+    return scheduler.run_non_core_composition_refresh()
+
+
+def refresh_sector_index_daily_prices(self, lookback_days: int = 10):
+    scheduler = create_index_scheduler(self.conn)
+    return scheduler.run_sector_daily_refresh(lookback_days=lookback_days)
+
+
+def refresh_industry_index_daily_prices(self, lookback_days: int = 10):
+    scheduler = create_index_scheduler(self.conn)
+    return scheduler.run_industry_daily_refresh(lookback_days=lookback_days)
+
+
+def refresh_theme_index_daily_prices(self, lookback_days: int = 10):
+    scheduler = create_index_scheduler(self.conn)
+    return scheduler.run_theme_daily_refresh(lookback_days=lookback_days)
+
+
+def refresh_all_benchmark_relative_metrics(self):
+    scheduler = create_index_scheduler(self.conn)
+    return scheduler.run_relative_metrics_against_sp500()
+    
 
     #######################################
     ##      live prices
