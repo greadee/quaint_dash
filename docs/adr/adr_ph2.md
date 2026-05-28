@@ -104,3 +104,300 @@ The previous FMP historical endpoint returned legacy endpoint deprecation errors
 - Install `yfinance` dependency
 - Continue using existing ingestion workers/repositories/queues unchanged
 - Use Yahoo Finance only for historical OHLCV/dividend/split ingestion
+
+
+## ADR-019: Provider Abstraction Layer for Ingestion
+
+**Decision:** Isolate external data providers behind provider-specific ingestion adapters.
+
+**Context:** 
+Multiple external providers are now used across the ingestion system:
+- Yahoo Finance
+- FMP
+- Finnhub
+
+Provider APIs, rate limits, and endpoint stability may change independently over time.
+
+**Rationale:** 
+- Prevent provider-specific logic from leaking into workers/services
+- Allow providers to be swapped without changing queue/workflow logic
+- Simplify mocking/testing of ingestion pipelines
+- Support future fallback providers
+- Reduce risk from provider deprecations or outages
+
+**Implementation Notes:** 
+- Workers/services depend only on provider interfaces
+- Providers expose normalized methods:
+  - `fetch_price_daily`
+  - `fetch_dividends`
+  - `fetch_splits`
+  - `fetch_asset_metadata`
+- Queue/repository logic remains provider-agnostic
+
+## ADR-020: Automatic Scheduler-Based Ingestion
+
+**Decision:** Run ingestion scheduling automatically during application startup instead of relying on manual CLI execution.
+
+**Context:** 
+Backfill and metadata ingestion should occur continuously over time without requiring manual operator intervention.
+
+**Rationale:** 
+- Reduces operational burden on the user
+- Keeps tracked assets synchronized automatically
+- Avoids requiring external schedulers during early development
+- Easier to test than cron-based orchestration
+- Allows ingestion backlog to drain gradually over multiple app launches
+
+**Implementation Notes:** 
+- Startup scheduler checks:
+  - stale metadata
+  - missing price history
+  - failed backfills
+- Scheduler enqueues a capped number of jobs per startup
+- Workers process a limited number of jobs per run
+- Duplicate pending/running jobs are prevented
+
+## ADR-021: Best-Effort Metadata Ingestion
+
+**Decision:** Asset metadata ingestion failures must not block transaction imports.
+
+**Context:** 
+External provider failures or rate limits should not prevent users from importing transactions into portfolios.
+
+**Rationale:** 
+- Portfolio transaction data is the primary source of truth
+- Metadata can be synchronized asynchronously later
+- External provider availability is not guaranteed
+- Prevents ingestion outages from blocking core functionality
+- Improves resilience of the import pipeline
+
+**Implementation Notes:** 
+- Metadata ingestion runs after transaction import
+- Metadata failures are swallowed and logged
+- Sync state tracked separately in `asset_metadata_sync`
+- Automatic scheduler retries failed/stale metadata later
+
+## ADR-022: Exchange Trading Calendar Ingestion
+
+**Decision:** 
+The system will maintain persisted exchange trading calendars for supported markets.
+
+**Context:** 
+Market refreshes, websocket streaming, and future earnings ingestion require accurate knowledge of:
+- holidays
+- half-days
+- exchange closures
+- active trading sessions
+
+Weekend-only logic is insufficient.
+
+**Rationale:** 
+- Prevents unnecessary ingestion runs
+- Avoids streaming closed markets
+- Supports deterministic scheduling decisions
+- Removes runtime dependency on remote APIs
+- Enables future multi-market expansion
+
+**Implementation Notes:** 
+- Trading calendars stored in `trading_calendar`
+- Sync state tracked in `trading_calendar_sync_state`
+- Initial exchanges:
+  - XNYS (US)
+  - XTSE (CAN)
+- Provider: `pandas_market_calendars`
+- Calendars refreshed yearly
+- Schedulers consult calendar state before ingestion execution
+
+## ADR-023: Session-Aware Market Streaming
+
+**Decision:** 
+Realtime streaming must become exchange-session aware.
+
+**Context:** 
+Streaming markets continuously wastes websocket capacity and ignores:
+- holidays
+- half-days
+- premarket sessions
+- afterhours sessions
+
+US and Canadian exchanges operate on different schedules.
+
+**Rationale:** 
+- Reduces unnecessary websocket usage
+- Prevents invalid market-state assumptions
+- Supports future extended-hours functionality
+- Improves scheduler coordination
+
+**Implementation Notes:** 
+- Streaming checks trading calendar state before startup
+- Supported session states:
+  - regular
+  - premarket
+  - afterhours
+  - half-day
+  - closed
+- Streaming enablement determined per market
+
+## ADR-024: Asset Market Identification Model
+
+**Decision:** 
+Market identity will be exchange-driven rather than ticker-suffix-driven.
+
+**Context:** 
+Ticker suffix inference is unreliable for:
+- ADRs
+- dual listings
+- OTC securities
+- international exchanges
+
+Future ingestion and scheduling require authoritative exchange identity.
+
+**Rationale:** 
+- Improves international scalability
+- Enables accurate session scheduling
+- Supports complex listing structures
+- Removes unreliable ticker parsing assumptions
+
+**Implementation Notes:** 
+- Assets will eventually maintain:
+  - `primary_exchange_code`
+  - `market_code`
+  - `timezone`
+- Trading calendars and schedulers depend on exchange identity
+- Initial supported exchanges:
+  - XNYS
+  - XTSE
+
+  ## ADR-025: Earnings Calendar as Trigger Table
+
+**Decision:** 
+The earnings calendar will be stored and used as a trigger table, not as the final source of truth for fundamentals.
+
+**Context:** 
+The earnings calendar identifies when a company is expected to report or has recently reported earnings.
+
+However, full fundamentals are released through separate earnings and financial statement endpoints.
+
+**Rationale:** 
+- Avoids polling every tracked stock every day
+- Creates an explainable reason for each fundamentals ingestion job
+- Supports post-event retries when financial statements lag
+- Separates event scheduling from fundamental data storage
+
+**Implementation Notes:** 
+- Store calendar rows in:
+  - `earnings_calendar_event`
+- Calendar rows may include:
+  - `earnings_date`
+  - `fiscal_year`
+  - `fiscal_quarter`
+  - `eps_estimated`
+  - `eps_actual`
+  - `revenue_estimated`
+  - `revenue_actual`
+- After an earnings date passes, enqueue:
+  - `earnings_actuals`
+  - `financial_statements`
+
+## ADR-027: Shared Ingestion Job Model for Corporate Data
+
+**Decision:** 
+Corporate calendar and fundamentals ingestion will reuse the shared ingestion job and sync-state model.
+
+**Context:** 
+Market price-history ingestion already uses:
+- `ingestion_job`
+- `asset_sync_state`
+- service layer
+- repository layer
+- worker layer
+
+Corporate ingestion needs the same enqueue, claim, process, success, and failure lifecycle.
+
+**Rationale:** 
+- Keeps ingestion architecture consistent
+- Avoids creating a second scheduling system
+- Makes CLI and future automation easier to maintain
+- Allows all ingestion domains to share status tracking
+
+**Implementation Notes:** 
+- Corporate jobs use:
+  - `domain = 'corporate'`
+- Supported datasets:
+  - `earnings_calendar`
+  - `earnings_actuals`
+  - `financial_statements`
+- Supported job types:
+  - `calendar_refresh`
+  - `earnings_update`
+  - `backfill`
+- Workers must always filter by domain
+
+## ADR-028: Corporate Calendar Refresh Cadence
+
+**Decision:** 
+The earnings calendar will refresh daily using a rolling date window.
+
+**Context:** 
+Earnings dates can change before the event. Actual EPS and revenue values can also appear after the event.
+
+Full financial statements may lag the earnings announcement.
+
+**Rationale:** 
+- Captures changed earnings dates
+- Captures late EPS and revenue updates
+- Reduces unnecessary API calls
+- Provides a predictable daily refresh model
+- Supports free-tier-friendly ingestion
+
+**Implementation Notes:** 
+- Calendar refresh window:
+  - `today - 7 days`
+  - `today + 90 days`
+- Post-event update window:
+  - `today - 14 days`
+  - `today`
+- Scheduler should prevent duplicate jobs when matching jobs are:
+  - pending
+  - running
+  - already created today
+
+## ADR-029: Raw JSON Storage for Financial Statements
+
+**Decision:** 
+Financial statements will initially be stored as raw JSON payloads.
+
+**Context:** 
+FMP statement endpoints return large payloads with many fields.
+
+The dashboard will eventually derive metrics such as:
+- revenue growth
+- margins
+- EPS
+- free cash flow
+- debt
+- cash
+- shares outstanding
+
+Normalizing every field immediately would add schema complexity before the analytics model is finalized.
+
+**Rationale:** 
+- Preserves the original provider response
+- Avoids premature schema design
+- Makes backfills easier
+- Supports future derived metrics
+- Keeps ingestion simple while analytics mature
+
+**Implementation Notes:** 
+- Store statements in:
+  - `financial_statement.data_json`
+- Use statement types:
+  - `income`
+  - `balance`
+  - `cashflow`
+- Use key:
+  - `asset_id`
+  - `statement_type`
+  - `year`
+  - `quarter`
+- Normalized metric tables or views can be added later
