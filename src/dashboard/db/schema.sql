@@ -348,4 +348,25 @@ CREATE TABLE IF NOT EXISTS ingestion_run (
     source TEXT, -- 'finnhub', 'fmp'
 );
 
+CREATE TABLE IF NOT EXISTS ingestion_job (
+    job_id UUID PRIMARY KEY,
+    target_type TEXT NOT NULL,           -- asset, benchmark_index, calendar, earnings
+    target_id TEXT NOT NULL,
+    job_type TEXT NOT NULL,
+
+    status TEXT NOT NULL DEFAULT 'queued', -- queued, running, succeeded, failed
+    priority INTEGER NOT NULL DEFAULT 100,
+
+    due_at TIMESTAMP NOT NULL DEFAULT now(),
+    started_at TIMESTAMP,
+    finished_at TIMESTAMP,
+
+    attempts INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 3,
+    error_message TEXT,
+
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
 COMMIT; 
