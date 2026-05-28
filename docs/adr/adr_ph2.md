@@ -609,3 +609,181 @@ Creating providers directly inside the scheduler or manager would duplicate setu
   - `benchmark_index_symbol.is_primary`
   - `benchmark_index_symbol.is_proxy`
 - Tests can bypass the factory and inject fake providers directly
+
+
+## ADR-035: Non-Core Benchmark Universe
+
+**Decision:** 
+Sector, industry, and theme benchmarks will use the same benchmark index domain as core geographic benchmarks.
+
+**Context:** 
+The dashboard needs comparison data beyond broad market indices.
+
+Non-core benchmarks include:
+- all 11 major sectors
+- semiconductors
+- software
+- cloud
+- cybersecurity
+- AI
+- robotics
+- solar
+- uranium and nuclear
+- biotech
+- medical devices
+- aerospace and defense
+- infrastructure
+- fintech
+- clean energy
+- battery technology
+
+**Rationale:** 
+- Reuses the existing benchmark schema
+- Avoids creating duplicate ingestion systems
+- Keeps analytics consistent across benchmark types
+- Allows the same price, volatility, composition, and exposure logic
+- Makes future benchmark additions configuration-driven
+
+**Implementation Notes:** 
+- Store non-core definitions in:
+  - `sector_industry_index_universe.py`
+- Use:
+  - `index_category = 'sector'`
+  - `index_category = 'industry'`
+  - `index_category = 'theme'`
+- Keep:
+  - `is_core = FALSE`
+- Seed with:
+  - `seed_sector_industry_universe()`
+  - `seed_all_universes()`
+
+
+## ADR-036: ETF Proxy Benchmarks for Sectors and Themes
+
+**Decision:** 
+Sector, industry, and theme benchmarks will initially use liquid ETF proxies.
+
+**Context:** 
+Official sector and industry index data is not always freely available with daily price, intraday price, holdings, and weights.
+
+ETF proxies provide practical benchmark coverage for:
+- sector price movement
+- intraday movement
+- composition
+- sector exposure
+- country exposure
+- industry exposure
+
+**Rationale:** 
+- Enables implementation now
+- Avoids expensive index licensing
+- Supports daily and intraday refreshes
+- Provides holdings for exposure calculations
+- Keeps proxy status explicit
+
+**Implementation Notes:** 
+- Use yfinance first for proxy prices
+- Use FMP for proxy holdings
+- Mark rows with:
+  - `is_proxy = TRUE`
+- Store proxy holdings through:
+  - `benchmark_index_constituent`
+- Store proxy exposure through:
+  - `benchmark_index_exposure_snapshot`
+
+## ADR-037: Unified Benchmark Refresh Methods
+
+**Decision:** 
+The scheduler will support core and non-core benchmark refreshes through category-based methods.
+
+**Context:** 
+Core, sector, industry, and theme benchmarks all need the same refresh types.
+
+Refresh types include:
+- daily price
+- intraday price
+- composition
+- daily metrics
+- relative metrics
+
+**Rationale:** 
+- Reduces duplicated scheduler code
+- Keeps benchmark refresh behavior consistent
+- Allows targeted category refreshes
+- Supports full benchmark refreshes
+- Makes tests easier to write
+
+**Implementation Notes:** 
+- Add scheduler methods:
+  - `run_non_core_daily_refresh`
+  - `run_non_core_intraday_refresh`
+  - `run_non_core_composition_refresh`
+  - `run_sector_daily_refresh`
+  - `run_industry_daily_refresh`
+  - `run_theme_daily_refresh`
+- Category refreshes use:
+  - `benchmark_index.index_category`
+- Intraday refresh still checks market-open state
+
+## ADR-038: FMP ETF Holdings for Proxy Composition
+
+**Decision:** 
+ETF proxy composition will be ingested from FMP ETF holdings where available.
+
+**Context:** 
+The benchmark domain needs composition data for sector and industry benchmarks.
+
+For non-core benchmarks, official constituent feeds may be unavailable or licensed.
+
+**Rationale:** 
+- Provides usable composition snapshots
+- Supports sector and country exposure views
+- Avoids manual holding entry
+- Keeps all composition rows dated
+- Preserves proxy status
+
+**Implementation Notes:** 
+- Fetch proxy holdings through:
+  - FMP ETF holdings endpoint
+- Store snapshot metadata in:
+  - `benchmark_index_composition_snapshot`
+- Store holdings in:
+  - `benchmark_index_constituent`
+- Mark source type as:
+  - `etf_proxy`
+- Mark rows with:
+  - `is_proxy = TRUE`
+
+## ADR-039: Local Metrics for Sector and Industry Benchmarks
+
+**Decision:** 
+Sector, industry, and theme benchmark metrics will be computed locally from stored benchmark prices.
+
+**Context:** 
+Provider performance endpoints may define returns and valuation metrics differently.
+
+The dashboard needs comparable metrics across:
+- core indices
+- sectors
+- industries
+- themes
+
+**Rationale:** 
+- Keeps metric definitions consistent
+- Avoids provider-specific return formulas
+- Supports deterministic testing
+- Avoids additional API calls
+- Reuses existing benchmark metric tables
+
+**Implementation Notes:** 
+- Store price rows in:
+  - `benchmark_index_daily_price`
+- Store computed metrics in:
+  - `benchmark_index_daily_metric`
+- Compute:
+  - returns
+  - volatility
+  - moving averages
+  - drawdown
+- Relative metrics can compare against:
+  - `SP500`
