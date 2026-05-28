@@ -787,3 +787,347 @@ The dashboard needs comparable metrics across:
   - drawdown
 - Relative metrics can compare against:
   - `SP500`
+
+## ADR-040: FMP for Extended-Hours Price Polling
+
+**Decision:** 
+FMP will be used for pre-market and after-hours quote polling when extended-hours streaming is enabled.
+
+**Context:** 
+Finnhub WebSocket is used for regular-session streaming, but extended-hours coverage may not be reliable or available through the same stream.
+
+The dashboard needs optional support for:
+- pre-market prices
+- after-hours prices
+- NYSE/NASDAQ extended-hours tickers
+
+**Rationale:** 
+- FMP provides explicit extended-hours endpoints
+- Avoids assuming Finnhub WebSocket covers all sessions
+- Keeps extended-hours logic provider-specific
+- Supports batch polling across many symbols
+- Allows extended-hours support to be disabled
+
+**Implementation Notes:** 
+- Extended-hours polling uses:
+  - `FmpExtendedHoursClient`
+- Batch quote results are parsed into:
+  - `LivePriceTick`
+- Worker routes sessions:
+  - `pre` -> FMP
+  - `after` -> FMP
+  - `regular` -> Finnhub
+- Extended-hours behavior is controlled by:
+  - `enable_extended_hours`
+  - `--no-extended-hours`
+
+## ADR-041: yfinance as Gap Repair Provider Only
+
+**Decision:** 
+yfinance will not be used as the primary live streaming provider.
+
+**Context:** 
+The project already uses yfinance for market data, but live streaming should be handled by Finnhub and extended-hours polling should be handled by FMP.
+
+yfinance can still be useful for repairing missed intraday or extended-hours gaps.
+
+**Rationale:** 
+- Avoids mixing polling-based repair with live streaming
+- Keeps provider responsibilities clear
+- Reduces dependency on yfinance for real-time behavior
+- Supports historical reconciliation after outages
+- Keeps the worker routing easier to test
+
+**Implementation Notes:** 
+- yfinance is reserved for:
+  - gap repair
+  - missed intraday bars
+  - fallback reconciliation
+- yfinance should not be called by:
+  - regular live stream routing
+  - extended-hours FMP polling
+- Future repair jobs can write to:
+  - intraday price history tables
+  - sync state tables
+
+## ADR-042: Portfolio-First Live Price Subscriptions
+
+**Decision:** 
+Live price streaming will subscribe to tickers from active portfolio positions by default.
+
+**Context:** 
+The dashboard’s most important live prices are the assets the user currently owns.
+
+Watchlist streaming is useful, but it can increase provider usage and is not required for core portfolio valuation.
+
+**Rationale:** 
+- Prioritizes portfolio holdings
+- Avoids unnecessary provider subscriptions
+- Keeps default stream smaller
+- Reduces rate-limit and connection pressure
+- Aligns with portfolio-first project direction
+
+**Implementation Notes:** 
+- Default subscriptions come from non-zero portfolio positions
+- Zero-quantity positions are excluded
+- Subscription resolution is handled by:
+  - `LivePriceSubscriptionResolver`
+- Portfolio assets are selected from:
+  - `position`
+  - `asset`
+- Duplicate symbols are streamed once
+
+## ADR-043: Optional Watchlist Streaming
+
+**Decision:** 
+Watchlist streaming will be available behind an explicit option.
+
+**Context:** 
+The dashboard may eventually support live watchlist monitoring, but watchlist streaming should not be enabled automatically.
+
+Some users may have large watchlists, which could increase provider load.
+
+**Rationale:** 
+- Keeps default streaming focused
+- Prevents unnecessary API usage
+- Allows user-controlled expansion
+- Supports future watchlist dashboards
+- Keeps tests deterministic
+
+**Implementation Notes:** 
+- Watchlist streaming is enabled with:
+  - `--include-watchlist`
+- Programmatic worker option:
+  - `include_watchlist=True`
+- Watchlist assets are selected from:
+  - `watchlist_asset`
+  - `asset`
+- Portfolio and watchlist duplicates are deduplicated by symbol
+
+## ADR-044: Separate Current Price State from Raw Live Ticks
+
+**Decision:** 
+The dashboard will store latest live prices separately from raw tick history.
+
+**Context:** 
+Live streaming produces frequent tick updates.
+
+The dashboard needs:
+- one latest price per asset for display
+- raw tick rows for audit/debugging
+
+These use cases should not share the same table.
+
+**Rationale:** 
+- Keeps dashboard reads simple
+- Prevents expensive latest-price queries
+- Preserves raw provider data for debugging
+- Avoids polluting historical price tables
+- Supports short-retention tick cleanup later
+
+**Implementation Notes:** 
+- Latest dashboard-ready prices are stored in:
+  - `current_asset_price`
+- Raw streamed ticks are stored in:
+  - `live_price_tick`
+- Each saved tick:
+  - inserts into `live_price_tick`
+  - replaces latest row in `current_asset_price`
+- Historical backfills remain separate from live tick storage
+
+## ADR-045: Provider Health Tracking for Live Streaming
+
+**Decision:** 
+Live price providers will record health status during streaming and polling.
+
+**Context:** 
+Live data depends on external providers.
+
+Providers may fail because of:
+- network outages
+- invalid API keys
+- rate limits
+- provider downtime
+- malformed responses
+
+**Rationale:** 
+- Makes failures visible
+- Supports dashboard/provider diagnostics
+- Helps distinguish stale data from working streams
+- Improves operational debugging
+- Enables future retry/backoff policies
+
+**Implementation Notes:** 
+- Provider health is stored in:
+  - `live_price_provider_health`
+- Health rows track:
+  - provider
+  - status
+  - last success time
+  - last error time
+  - last error message
+- Supported provider states:
+  - `healthy`
+  - `degraded`
+  - `down`
+- Worker updates health after:
+  - successful Finnhub stream handling
+  - successful FMP poll
+  - provider exceptions
+
+## ADR-046: Session-Based Live Price Routing
+
+**Decision:** 
+The live price worker will route provider calls based on market session.
+
+**Context:** 
+Different providers are better suited for different market sessions.
+
+The app must distinguish:
+- pre-market
+- regular session
+- after-hours
+- closed market
+
+**Rationale:** 
+- Keeps provider behavior predictable
+- Avoids calling Finnhub when FMP is preferred
+- Avoids extended-hours polling when the market is closed
+- Makes worker routing easy to test
+- Supports future market-specific routing
+
+**Implementation Notes:** 
+- Session classification is handled by:
+  - `MarketSessionClassifier`
+- Routing behavior:
+  - `regular` -> Finnhub WebSocket
+  - `pre` -> FMP extended-hours polling
+  - `after` -> FMP extended-hours polling
+  - `closed` -> no provider call
+- US session windows depend on:
+  - `trading_calendar`
+  - configured extended-hours windows
+- Worker routing is tested through:
+  - `run_once`
+
+## ADR-047: Pure Parser for Finnhub Trade Payloads
+
+**Decision:** 
+Finnhub trade payload parsing will be implemented as a pure helper function.
+
+**Context:** 
+Parser tests should not require a real WebSocket connection.
+
+The original stream module imported the WebSocket dependency during module import, which caused CI failures when the dependency was missing.
+
+**Rationale:** 
+- Keeps parser tests dependency-light
+- Avoids WebSocket imports during test collection
+- Improves CI reliability
+- Makes payload parsing independently testable
+- Keeps stream connection logic separate from message parsing
+
+**Implementation Notes:** 
+- Pure parser function:
+  - `parse_finnhub_trade_payload`
+- Input types:
+  - `str`
+  - `dict`
+- Output type:
+  - `list[LivePriceTick]`
+- Non-trade messages return:
+  - empty list
+- WebSocket dependency is imported lazily inside:
+  - `FinnhubWebSocketClient.stream`
+
+## ADR-048: Live Price Tables Are Operational Data
+
+**Decision:** 
+Live streaming tables will be treated as operational data, not long-term market history.
+
+**Context:** 
+The app already has or will have historical market price ingestion for backfills and refreshes.
+
+Live streaming data serves a different purpose:
+- current dashboard display
+- short-term audit/debugging
+- provider health checks
+
+**Rationale:** 
+- Prevents noisy tick data from polluting historical tables
+- Keeps historical prices cleaner
+- Allows raw tick retention policies
+- Supports different storage lifecycles
+- Keeps backfill/refresh jobs independent from live streaming
+
+**Implementation Notes:** 
+- Operational live tables:
+  - `current_asset_price`
+  - `live_price_tick`
+  - `live_price_provider_health`
+- Historical market tables remain separate
+- Raw live ticks can use short retention
+- Historical repair can be handled later through:
+  - yfinance
+  - FMP
+  - existing market ingestion jobs
+
+## ADR-049: Deduplicated Symbol Subscription Snapshot
+
+**Decision:** 
+Live price subscriptions will deduplicate symbols before provider calls.
+
+**Context:** 
+The same ticker can appear in:
+- multiple portfolios
+- portfolio holdings and watchlists
+- repeated position rows
+
+Streaming the same symbol multiple times wastes provider capacity and complicates tick handling.
+
+**Rationale:** 
+- Avoids duplicate WebSocket subscriptions
+- Reduces provider usage
+- Keeps worker routing simple
+- Prevents repeated current-price updates from duplicate subscriptions
+- Supports cleaner tests
+
+**Implementation Notes:** 
+- Deduplication key:
+  - `symbol`
+- Resolver output:
+  - one subscription per symbol
+- Portfolio subscription source:
+  - `position`
+- Watchlist subscription source:
+  - `watchlist_asset`
+- Tests verify:
+  - duplicate AAPL portfolio/watchlist rows stream once
+
+## ADR-050: Configurable Extended-Hours Streaming
+
+**Decision:** 
+Extended-hours streaming will be configurable via .env and enabled by default for supported providers.
+
+**Context:** 
+Some users may want pre-market and after-hours prices, while others may only want regular-session data.
+
+Extended-hours polling may increase API usage.
+
+**Rationale:** 
+- Gives users control over provider usage
+- Supports NYSE/NASDAQ extended-hours monitoring
+- Allows CI and tests to disable extended-hours behavior
+- Keeps regular-session streaming independent
+- Supports future provider changes
+
+**Implementation Notes:** 
+- CLI disable flag:
+  - `--no-extended-hours`
+- Worker option:
+  - `enable_extended_hours`
+- When disabled:
+  - pre-market does not call FMP
+  - after-hours does not call FMP
+  - closed market does not call providers
+- Tests verify both enabled and disabled routing
