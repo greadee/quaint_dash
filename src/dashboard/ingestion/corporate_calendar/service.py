@@ -74,3 +74,39 @@ class CorporateCalendarIngestionService:
             completed += 1
 
         return completed
+    
+    def schedule_calendar_refresh_if_due(
+        self,
+        lookback_days: int = 7,
+        lookahead_days: int = 90,
+        refresh_interval_hours: int = 24,
+    ) -> list[int]:
+        """
+        Scheduler entry point for refreshing the earnings calendar.
+
+        This is safe to call daily or on app startup.
+        """
+        scheduler = CorporateCalendarScheduler(self.conn)
+
+        return scheduler.schedule_calendar_refresh_if_due(
+            lookback_days=lookback_days,
+            lookahead_days=lookahead_days,
+            refresh_interval_hours=refresh_interval_hours,
+        )
+
+    def schedule_fundamental_updates_after_events(
+        self,
+        lookback_days: int = 14,
+        max_assets: int = 25,
+    ) -> list[int]:
+        """
+        Scheduler entry point for post-earnings fundamental ingestion.
+
+        This should run after the earnings calendar refresh.
+        """
+        scheduler = CorporateCalendarScheduler(self.conn)
+
+        return scheduler.schedule_fundamental_updates_after_events(
+            lookback_days=lookback_days,
+            max_assets=max_assets,
+        )

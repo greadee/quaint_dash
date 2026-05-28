@@ -203,3 +203,22 @@ class CorporateCalendarIngestionRepository:
         ).fetchall()
 
         return [r[0] for r in rows]
+    
+    def select_assets_with_recent_earnings_events(
+        self,
+        start_date: date,
+        end_date: date,
+        limit: int,
+    ) -> list[str]:
+        """
+        Return tracked stock/ADR asset ids that had earnings events in the date window.
+
+        This is used by the scheduler to create post-event earnings/fundamental
+        update jobs.
+        """
+        rows = self.conn.execute(
+            qry.SELECT_ASSETS_WITH_RECENT_EARNINGS_EVENTS,
+            [start_date, end_date, limit],
+        ).fetchall()
+
+        return [r[0] for r in rows]
