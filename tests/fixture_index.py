@@ -1,3 +1,5 @@
+# tests/fixtures_index.py
+
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
@@ -13,7 +15,7 @@ from dashboard.ingestion.indices.index_models import (
 
 
 BENCHMARK_INDEX_TEST_SCHEMA = """
-CREATE TABLE benchmark_index (
+CREATE TABLE IF NOT EXISTS benchmark_index (
     index_id TEXT PRIMARY KEY,
     index_name TEXT NOT NULL,
     index_family TEXT NOT NULL,
@@ -28,7 +30,7 @@ CREATE TABLE benchmark_index (
     updated_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
-CREATE TABLE benchmark_index_symbol (
+CREATE TABLE IF NOT EXISTS benchmark_index_symbol (
     index_id TEXT NOT NULL,
     provider TEXT NOT NULL,
     provider_symbol TEXT NOT NULL,
@@ -40,7 +42,7 @@ CREATE TABLE benchmark_index_symbol (
     PRIMARY KEY (index_id, provider, provider_symbol, symbol_purpose)
 );
 
-CREATE TABLE benchmark_index_daily_price (
+CREATE TABLE IF NOT EXISTS benchmark_index_daily_price (
     index_id TEXT NOT NULL,
     price_date DATE NOT NULL,
     open DOUBLE,
@@ -59,7 +61,7 @@ CREATE TABLE benchmark_index_daily_price (
     PRIMARY KEY (index_id, price_date)
 );
 
-CREATE TABLE benchmark_index_intraday_price (
+CREATE TABLE IF NOT EXISTS benchmark_index_intraday_price (
     index_id TEXT NOT NULL,
     interval TEXT NOT NULL,
     bar_start_utc TIMESTAMP NOT NULL,
@@ -75,7 +77,7 @@ CREATE TABLE benchmark_index_intraday_price (
     PRIMARY KEY (index_id, interval, bar_start_utc)
 );
 
-CREATE TABLE benchmark_index_composition_snapshot (
+CREATE TABLE IF NOT EXISTS benchmark_index_composition_snapshot (
     index_id TEXT NOT NULL,
     snapshot_date DATE NOT NULL,
     source TEXT NOT NULL,
@@ -90,7 +92,7 @@ CREATE TABLE benchmark_index_composition_snapshot (
     PRIMARY KEY (index_id, snapshot_date, source)
 );
 
-CREATE TABLE benchmark_index_constituent (
+CREATE TABLE IF NOT EXISTS benchmark_index_constituent (
     index_id TEXT NOT NULL,
     snapshot_date DATE NOT NULL,
     source TEXT NOT NULL,
@@ -112,7 +114,7 @@ CREATE TABLE benchmark_index_constituent (
     )
 );
 
-CREATE TABLE benchmark_index_exposure_snapshot (
+CREATE TABLE IF NOT EXISTS benchmark_index_exposure_snapshot (
     index_id TEXT NOT NULL,
     snapshot_date DATE NOT NULL,
     dimension_type TEXT NOT NULL,
@@ -131,7 +133,7 @@ CREATE TABLE benchmark_index_exposure_snapshot (
     )
 );
 
-CREATE TABLE benchmark_index_daily_metric (
+CREATE TABLE IF NOT EXISTS benchmark_index_daily_metric (
     index_id TEXT NOT NULL,
     metric_date DATE NOT NULL,
     return_1d DOUBLE,
@@ -154,7 +156,7 @@ CREATE TABLE benchmark_index_daily_metric (
     PRIMARY KEY (index_id, metric_date)
 );
 
-CREATE TABLE benchmark_index_relative_metric (
+CREATE TABLE IF NOT EXISTS benchmark_index_relative_metric (
     index_id TEXT NOT NULL,
     comparison_index_id TEXT NOT NULL,
     metric_date DATE NOT NULL,
@@ -166,7 +168,7 @@ CREATE TABLE benchmark_index_relative_metric (
     PRIMARY KEY (index_id, comparison_index_id, metric_date)
 );
 
-CREATE TABLE benchmark_index_sync_state (
+CREATE TABLE IF NOT EXISTS benchmark_index_sync_state (
     index_id TEXT NOT NULL,
     job_type TEXT NOT NULL,
     last_success_at TIMESTAMP,
@@ -179,11 +181,28 @@ CREATE TABLE benchmark_index_sync_state (
 """
 
 
+def create_benchmark_index_tables(conn) -> None:
+    """
+    Create all benchmark-index test tables.
+
+    This is a plain helper so the root conftest.py can compose this schema with
+    other test schemas.
+    """
+    conn.execute(BENCHMARK_INDEX_TEST_SCHEMA)
+
+
 @pytest.fixture()
-def conn():
+def index_conn():
+    """
+    Standalone connection for index-only tests.
+
+    Most tests should use the shared root `conn` fixture from conftest.py.
+    """
     connection = duckdb.connect(":memory:")
-    connection.execute(BENCHMARK_INDEX_TEST_SCHEMA)
+    create_benchmark_index_tables(connection)
+
     yield connection
+
     connection.close()
 
 
@@ -246,11 +265,18 @@ def insert_test_symbol(
     )
 
 
-def insert_daily_price_rows(conn, index_id: str, start_close: float = 100.0, days: int = 260):
+def insert_daily_price_rows(
+    conn,
+    index_id: str,
+    start_close: float = 100.0,
+    days: int = 260,
+):
     insert_test_index(conn, index_id=index_id)
 
     for i in range(days):
-        price_date = date(2025, 1, 1).fromordinal(date(2025, 1, 1).toordinal() + i)
+        price_date = date(2025, 1, 1).fromordinal(
+            date(2025, 1, 1).toordinal() + i
+        )
         close = start_close + i
 
         previous_close = None if i == 0 else start_close + i - 1
@@ -296,6 +322,21 @@ def insert_daily_price_rows(conn, index_id: str, start_close: float = 100.0, day
         )
 
 
+@pytest.fixture()
+def insert_test_index_fn():
+    return insert_test_index
+
+
+@pytest.fixture()
+def insert_test_symbol_fn():
+    return insert_test_symbol
+
+
+@pytest.fixture()
+def insert_daily_price_rows_fn():
+    return insert_daily_price_rows
+
+
 class FakeDailyPriceProvider:
     provider_name = "fake"
 
@@ -313,7 +354,9 @@ class FakeDailyPriceProvider:
         bars = []
 
         for i, close in enumerate(self.closes):
-            price_date = date(2026, 1, 1).fromordinal(date(2026, 1, 1).toordinal() + i)
+            price_date = date(2026, 1, 1).fromordinal(
+                date(2026, 1, 1).toordinal() + i
+            )
 
             bars.append(
                 IndexDailyBar(
@@ -430,7 +473,34 @@ class FailingIntradayProvider:
         return []
 
     def get_intraday_prices(self, *args, **kwargs):
-        raise AssertionError("Intraday provider should not be called when market is closed")
+        raise AssertionError(
+            "Intraday provider should not be called when market is closed"
+        )
 
     def get_constituents(self, *args, **kwargs):
         return []
+
+
+@pytest.fixture()
+def fake_daily_price_provider_cls():
+    return FakeDailyPriceProvider
+
+
+@pytest.fixture()
+def empty_provider_cls():
+    return EmptyProvider
+
+
+@pytest.fixture()
+def fake_intraday_provider_cls():
+    return FakeIntradayProvider
+
+
+@pytest.fixture()
+def fake_constituent_provider_cls():
+    return FakeConstituentProvider
+
+
+@pytest.fixture()
+def failing_intraday_provider_cls():
+    return FailingIntradayProvider
