@@ -1,6 +1,6 @@
 from dashboard.ingestion.indices.index_ingestion_service import BenchmarkIndexIngestionService
 
-from tests.conftest import FakeIntradayProvider, insert_test_index, insert_test_symbol
+from tests.fixture_index import FakeIntradayProvider, insert_test_index, insert_test_symbol
 
 
 def test_intraday_price_ingestion_deduplicates_bars(conn):

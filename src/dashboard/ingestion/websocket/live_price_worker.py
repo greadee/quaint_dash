@@ -17,17 +17,39 @@ class LivePriceWorker:
         self.resolver = LivePriceSubscriptionResolver(conn)
         self.session_classifier = MarketSessionClassifier(conn)
 
-    def run(self) -> None:
-        include_watchlist = os.getenv("LIVE_STREAM_WATCHLIST_ASSETS", "false").lower() == "true"
-        enable_extended = os.getenv("LIVE_STREAM_EXTENDED_HOURS", "true").lower() == "true"
+    def run(
+        self,
+        include_watchlist: bool = False,
+        enable_extended_hours: bool = True,
+    ) -> None:
+        """
+        Long-running live price worker loop.
+        """
+        while True:
+            self.run_once(
+                include_watchlist=include_watchlist,
+                enable_extended_hours=enable_extended_hours,
+            )
 
+    def run_once(
+        self,
+        include_watchlist: bool = False,
+        enable_extended_hours: bool = True,
+    ) -> int:
+        """
+        Run one routing cycle.
+
+        Returns:
+            1 if a provider route was selected.
+            0 if no provider was called.
+        """
         subscriptions = self.resolver.resolve(
             include_portfolios=True,
             include_watchlist=include_watchlist,
         )
 
         if not subscriptions:
-            return
+            return 0
 
         symbol_to_asset_id = {
             item.symbol: item.asset_id
@@ -36,16 +58,19 @@ class LivePriceWorker:
 
         symbols = list(symbol_to_asset_id.keys())
 
-        while True:
-            now_utc = datetime.now(timezone.utc)
-            session = self.session_classifier.classify_us_session(now_utc)
+        now_utc = datetime.now(timezone.utc)
+        session = self.session_classifier.classify_us_session(now_utc)
 
-            if session == "regular":
-                self._run_finnhub(symbols, symbol_to_asset_id)
-            elif session in {"pre", "after"} and enable_extended:
-                self._run_fmp_extended(symbols, symbol_to_asset_id, session)
-            else:
-                time.sleep(60)
+        if session == "regular":
+            self._run_finnhub(symbols, symbol_to_asset_id)
+            return 1
+
+        if session in {"pre", "after"} and enable_extended_hours:
+            self._run_fmp_extended(symbols, symbol_to_asset_id, session)
+            return 1
+
+        time.sleep(0)
+        return 0
 
     def _run_finnhub(self, symbols: list[str], symbol_to_asset_id: dict[str, str]) -> None:
         client = FinnhubWebSocketClient(api_key=os.environ["FINNHUB_API_KEY"])

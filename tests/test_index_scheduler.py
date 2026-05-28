@@ -4,7 +4,7 @@ from dashboard.ingestion.indices.core_index_universe import CORE_INDICES
 from dashboard.ingestion.indices.index_ingestion_service import BenchmarkIndexIngestionService
 from dashboard.ingestion.indices.index_scheduler import BenchmarkIndexScheduler
 
-from tests.conftest import FailingIntradayProvider, FakeDailyPriceProvider
+from tests.fixture_index import FailingIntradayProvider, FakeDailyPriceProvider
 
 
 def test_scheduler_enqueues_daily_price_jobs_for_core_indices(conn):

@@ -1,6 +1,6 @@
 from dashboard.ingestion.indices.index_ingestion_service import BenchmarkIndexIngestionService
 
-from tests.conftest import insert_daily_price_rows
+from tests.fixture_index import insert_daily_price_rows
 
 
 def test_daily_metrics_compute_rolling_returns_and_volatility(conn):
