@@ -401,3 +401,211 @@ Normalizing every field immediately would add schema complexity before the analy
   - `year`
   - `quarter`
 - Normalized metric tables or views can be added later
+
+## ADR-030: Benchmark Index Domain Separation
+
+**Decision:** 
+Benchmark indices will be stored in dedicated benchmark index tables instead of the normal `asset` table.
+
+**Context:** 
+Indices such as S&P 500, Nasdaq 100, TSX, FTSE 100, Nikkei 225, Developed International, Emerging Markets, and Frontier Markets are reference benchmarks.
+
+They are different from tradable holdings such as:
+- ETFs
+- stocks
+- funds
+- ADRs
+
+**Rationale:** 
+- Keeps portfolio holdings separate from benchmark data
+- Avoids treating non-tradable indices as assets
+- Supports index-specific composition snapshots
+- Supports geographic and sector comparison
+- Keeps analytics cleaner for dashboard benchmarking
+
+**Implementation Notes:** 
+- Store index metadata in:
+  - `benchmark_index`
+- Store provider symbols in:
+  - `benchmark_index_symbol`
+- Keep benchmark ingestion separate from:
+  - asset metadata ingestion
+  - ticker streaming
+  - portfolio transactions
+
+  ## ADR-031: Index Provider Priority and Proxy Policy
+
+**Decision:** 
+Index ingestion will prefer low-cost accurate sources first, then fall back to paid/provider API calls only when needed.
+
+**Context:** 
+The dashboard uses both yfinance and FMP.
+
+Daily and intraday prices can often be fetched from yfinance without using FMP calls.
+
+Composition data is harder to source for free, especially for:
+- international indices
+- developed international
+- emerging markets
+- frontier markets
+- sector/theme indices
+
+**Rationale:** 
+- Reduces FMP API usage
+- Keeps ingestion cheaper
+- Preserves provider flexibility
+- Allows proxy data when exact index data is unavailable
+- Prevents ETF proxy data from being confused with official index data
+
+**Implementation Notes:** 
+- Prefer yfinance for:
+  - daily index prices
+  - intraday index bars
+- Prefer FMP for:
+  - supported index constituents
+  - fallback price ingestion
+- Mark proxy data with:
+  - `is_proxy = TRUE`
+- Store proxy symbols in:
+  - `benchmark_index_symbol`
+- Never hide whether data came from:
+  - official index source
+  - provider API
+  - ETF proxy
+
+## ADR-032: Index Composition Snapshots
+
+**Decision:** 
+Index constituents will be stored as dated composition snapshots.
+
+**Context:** 
+Index membership and weights change over time.
+
+The dashboard needs historical context for:
+- sector exposure
+- country exposure
+- currency exposure
+- industry exposure
+- benchmark comparison
+
+**Rationale:** 
+- Preserves historical index composition
+- Supports future exposure trend analysis
+- Avoids overwriting old benchmark state
+- Allows monthly or weekly refreshes
+- Supports official and proxy composition data
+
+**Implementation Notes:** 
+- Store snapshot metadata in:
+  - `benchmark_index_composition_snapshot`
+- Store constituents in:
+  - `benchmark_index_constituent`
+- Use key:
+  - `index_id`
+  - `snapshot_date`
+  - `source`
+- Replace same-day same-source constituents on refresh
+- Track quality with:
+  - `data_quality`
+  - `source_type`
+  - `is_proxy`
+
+## ADR-032: Derived Index Exposure Snapshots
+
+**Decision:** 
+Country, sector, industry, and currency exposures will be stored separately from raw constituents.
+
+**Context:** 
+The dashboard frequently needs summarized benchmark exposure data.
+
+Recomputing exposures from constituents every time would add repeated query complexity.
+
+**Rationale:** 
+- Speeds up dashboard comparison views
+- Keeps constituent data and exposure summaries separate
+- Supports geographic allocation analysis
+- Supports sector and industry comparison
+- Allows exposure data from factsheets or computed constituents
+
+**Implementation Notes:** 
+- Store exposure summaries in:
+  - `benchmark_index_exposure_snapshot`
+- Supported dimensions:
+  - `country`
+  - `region`
+  - `sector`
+  - `industry`
+  - `currency`
+- Exposure rows can be generated from:
+  - constituents
+  - factsheets
+  - ETF proxy holdings
+- Use key:
+  - `index_id`
+  - `snapshot_date`
+  - `dimension_type`
+  - `dimension_value`
+  - `source`
+
+## ADR-033: Local Index Metric Computation
+
+**Decision:** 
+Index returns, volatility, moving averages, drawdowns, beta, and correlation will be computed locally from stored price data.
+
+**Context:** 
+Different providers may define metrics differently.
+
+The dashboard needs consistent metrics across all benchmark indices.
+
+**Rationale:** 
+- Makes metrics reproducible
+- Avoids provider-specific metric definitions
+- Reduces API dependency
+- Supports testing with fake price data
+- Keeps analytics consistent across all indices
+
+**Implementation Notes:** 
+- Store daily metrics in:
+  - `benchmark_index_daily_metric`
+- Store relative metrics in:
+  - `benchmark_index_relative_metric`
+- Compute from:
+  - `benchmark_index_daily_price`
+- Core metrics include:
+  - returns
+  - annualized volatility
+  - SMA 50
+  - SMA 200
+  - 52-week high/low
+  - drawdown
+  - beta
+  - correlation
+
+## ADR-034: Benchmark Index Service Factory
+
+**Decision:** 
+Provider registry creation will live in a small service factory module.
+
+**Context:** 
+The benchmark index service needs both yfinance and FMP providers.
+
+Creating providers directly inside the scheduler or manager would duplicate setup logic.
+
+**Rationale:** 
+- Keeps provider wiring centralized
+- Avoids repeated registry creation code
+- Makes tests easier to mock
+- Keeps scheduler focused on timing
+- Keeps service focused on ingestion logic
+
+**Implementation Notes:** 
+- Store factory logic in:
+  - `index_service_factory.py`
+- Factory creates:
+  - provider registry
+  - ingestion service
+  - scheduler
+- Provider priority is controlled by:
+  - `benchmark_index_symbol.is_primary`
+  - `benchmark_index_symbol.is_proxy`
+- Tests can bypass the factory and inject fake providers directly

@@ -12,6 +12,8 @@ from dashboard.services.table_formatter import TxnTableFormatter, PositionTableF
 from dashboard.ingestion.price_history.service import PriceHistoryIngestionService
 from dashboard.ingestion.trading_calendar.service import TradingCalendarIngestionService
 from dashboard.ingestion.corporate_calendar.service import CorporateCalendarIngestionService
+from dashboard.ingestion.indices.index_service_factory import create_index_scheduler
+from dashboard.ingestion.indices.index_service_factory import create_index_ingestion_service
 from datetime import date
 
 
@@ -510,6 +512,38 @@ class DashboardManager:
                 return 0
 
         return len(service.enqueue_calendar_refresh())
+    
+
+
+    #########################################
+    ##      indices
+    #########################################
+
+
+    def seed_core_indices(self):
+        service = create_index_ingestion_service(self.conn)
+        return service.seed_core_universe()
+
+
+    def refresh_core_index_daily_prices(self, lookback_days: int = 10):
+        scheduler = create_index_scheduler(self.conn)
+        return scheduler.run_core_daily_refresh(lookback_days=lookback_days)
+
+
+    def refresh_core_index_intraday_prices(self, interval: str = "5min"):
+        scheduler = create_index_scheduler(self.conn)
+        return scheduler.run_core_intraday_refresh(interval=interval)
+
+
+    def refresh_core_index_composition(self):
+        scheduler = create_index_scheduler(self.conn)
+        return scheduler.run_core_composition_refresh()
+
+
+    def refresh_core_index_relative_metrics(self):
+        scheduler = create_index_scheduler(self.conn)
+        return scheduler.run_relative_metrics_against_sp500()
+
 
 class PortfolioManager():
     """

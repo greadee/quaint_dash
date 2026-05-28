@@ -17,18 +17,18 @@ Design Decisions: [ADR's](../adr/adr_ph2.md)
 - Ingest historical price history backfill (yfinance)
     - CLI test cmd
     - Scheduler
+- Trading day calendar ingestion
+- Corporate calendar ingestion
+- Core index ingestion
 
 ### Tasks: 
-- Ingest biweekly earnings calendar update (FMP)
-    - Scheduler
-- Ingest core index composition 3x intraday (FMP)
-    - Scheduler
 - Ingest ticker earnings data sync on calendar event finished (FMP)
     - Scheduler
 - Stream ticker data (price, vol, mkt cap) for positions (Finnhub)
     - Open stream on dash open and is market day
+- Historical backfill for fundamentals
+- Ingestion of forward looking fundamentals
 - Rate limiter and failsafes
-- Replace Mon-Fri market calendar to handle holidays and half-days
 - TBD: non-core index ingestion
 - TBD: items in watchlist ingestion
 

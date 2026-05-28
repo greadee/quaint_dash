@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Callable
 
 from dashboard.ingestion.indices.index_ingestion_service import BenchmarkIndexIngestionService
 
@@ -15,31 +15,21 @@ class IndexJobResult:
 
 
 class BenchmarkIndexScheduler:
-    """
-    Thin scheduler/worker wrapper.
-
-    Keep this small. The heavy work stays inside BenchmarkIndexIngestionService.
-    Later this can be wired to your generic ingestion_job table.
-    """
-
     def __init__(
         self,
         conn: Any,
         service: BenchmarkIndexIngestionService,
+        market_is_open_fn: Callable[[datetime], bool] | None = None,
     ):
         self.conn = conn
         self.service = service
+        self.market_is_open_fn = market_is_open_fn or self._default_market_is_open
 
     def run_core_daily_refresh(
         self,
         lookback_days: int = 10,
         end_date: date | None = None,
     ) -> IndexJobResult:
-        """
-        Refresh recent daily bars for all core indices.
-
-        A short lookback makes this idempotent and handles late corrections.
-        """
         end = end_date or date.today()
         start = end - timedelta(days=lookback_days)
 
@@ -59,7 +49,17 @@ class BenchmarkIndexScheduler:
     def run_core_intraday_refresh(
         self,
         interval: str = "5min",
+        now: datetime | None = None,
     ) -> IndexJobResult:
+        current_time = now or datetime.now()
+
+        if not self.market_is_open_fn(current_time):
+            return IndexJobResult(
+                job_type="core_intraday_refresh",
+                target_count=self._count_core_indices(),
+                row_count=0,
+            )
+
         row_count = self.service.ingest_core_intraday_prices(interval=interval)
 
         return IndexJobResult(
@@ -79,8 +79,6 @@ class BenchmarkIndexScheduler:
             try:
                 row_count += self.service.ingest_composition(index_id, snap_date)
             except ValueError:
-                # Some core benchmarks will only have proxy/manual composition at first.
-                # Do not fail the whole batch because one benchmark lacks constituents.
                 continue
 
         return IndexJobResult(
@@ -131,3 +129,6 @@ class BenchmarkIndexScheduler:
         ).fetchone()
 
         return int(row[0])
+
+    def _default_market_is_open(self, current_time: datetime) -> bool:
+        return True
