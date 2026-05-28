@@ -125,6 +125,7 @@ class DashboardView(View):
                 market-backfill-run [--max-jobs N],
                 market-refresh-enqueue <asset-id|all> [--prices-only],
                 market-refresh-run [--max-jobs N],
+                live-price-stream [--include-watchlist] [--no-extended-hours],
 
                 help [command-name], 
                 quit/exit
@@ -283,6 +284,28 @@ class DashboardView(View):
             )
             print(f"Refreshed {n} trading calendar day(s).")
             return self
+        
+        if cmd == "live-price-stream":
+            print("Starting live price stream.")
+            print("Streaming portfolio tickers by default.")
+            if ns.include_watchlist:
+                print("Watchlist streaming enabled.")
+            if ns.no_extended_hours:
+                print("Extended-hours streaming disabled.")
+            else:
+                print("Extended-hours streaming enabled.")
+
+            print("Press Ctrl+C to stop streaming.")
+
+            try:
+                self.access.run_live_price_stream(
+                    include_watchlist=ns.include_watchlist,
+                    enable_extended_hours=not ns.no_extended_hours,
+                )
+            except KeyboardInterrupt:
+                print("\nStopped live price stream.")
+
+            return self
 
         return self # fallback
 
@@ -396,6 +419,11 @@ class DashboardView(View):
         p.add_argument("target", help="US, CAN, or all")
         p.add_argument("--year", dest="year", type=int, default=None)
         parsers["trading-calendar-refresh"] = p
+
+        p = _NoExitParser(prog="live-price-stream", add_help=True, description="Start the live price streaming worker for portfolio assets.",)
+        p.add_argument("--include-watchlist", dest="include_watchlist", action="store_true", help="Also stream active watchlist assets. Default: portfolio assets only.",)
+        p.add_argument("--no-extended-hours", dest="no_extended_hours", action="store_true", help="Disable pre-market and after-hours streaming.",)
+        parsers["live-price-stream"] = p
 
         return parsers
 

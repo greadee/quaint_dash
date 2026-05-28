@@ -543,6 +543,72 @@ class DashboardManager:
     def refresh_core_index_relative_metrics(self):
         scheduler = create_index_scheduler(self.conn)
         return scheduler.run_relative_metrics_against_sp500()
+    
+
+    #######################################
+    ##      live prices
+    #######################################
+
+
+    def get_current_live_prices(self):
+        return self.conn.execute(
+            """
+            SELECT
+                asset_id,
+                symbol,
+                price,
+                volume,
+                bid,
+                ask,
+                provider,
+                market_session,
+                trade_ts_utc,
+                updated_at
+            FROM current_asset_price
+            ORDER BY symbol
+            """
+        ).fetchall()
+
+
+    def get_live_price_for_asset(self, asset_id: str):
+        return self.conn.execute(
+            """
+            SELECT
+                asset_id,
+                symbol,
+                price,
+                volume,
+                bid,
+                ask,
+                provider,
+                market_session,
+                trade_ts_utc,
+                updated_at
+            FROM current_asset_price
+            WHERE asset_id = ?
+            """,
+            [asset_id],
+        ).fetchone()
+    
+    def run_live_price_stream(
+        self,
+        include_watchlist: bool = False,
+        enable_extended_hours: bool = True,
+    ) -> None:
+        """
+        Run the live price streaming worker.
+
+        Portfolio assets are streamed by default.
+        Watchlist assets can optionally be included.
+        Extended-hours streaming can optionally be disabled.
+        """
+        from dashboard.ingestion.websocket.live_price_worker import LivePriceWorker
+
+        worker = LivePriceWorker(self.conn)
+        worker.run(
+            include_watchlist=include_watchlist,
+            enable_extended_hours=enable_extended_hours,
+        )
 
 
 class PortfolioManager():
