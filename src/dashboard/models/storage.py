@@ -14,6 +14,7 @@ from dashboard.ingestion.trading_calendar.service import TradingCalendarIngestio
 from dashboard.ingestion.corporate_calendar.service import CorporateCalendarIngestionService
 from dashboard.ingestion.indices.index_service_factory import create_index_scheduler
 from dashboard.ingestion.indices.index_service_factory import create_index_ingestion_service
+from dashboard.ingestion.ticker_universe import TickerUniverseRepository
 from datetime import date
 
 
@@ -83,7 +84,11 @@ class DashboardManager:
         Add/update an asset in the database
         Returns None
         """
-        self.conn.execute(qry.UPSERT_ASSET,[asset_id, asset_type, asset_subtype, ccy],)
+        normalized_asset_id = asset_id.upper().strip()
+        self.conn.execute(
+            qry.UPSERT_ASSET,
+            [normalized_asset_id, normalized_asset_id, asset_type, asset_subtype, ccy],
+        )
 
     def update_positions(self):
         """
@@ -91,6 +96,7 @@ class DashboardManager:
         - To be used prior to any position access. 
         """
         self.conn.execute(qry.UPDATE_POSITIONS)
+        TickerUniverseRepository(self.conn).sync_portfolio_tickers_from_positions()
 
     def list_portfolios(self, N:int|None):
         """
@@ -346,13 +352,7 @@ class DashboardManager:
         importer = AssetImporter(self)
 
         if asset_id is None:
-            rows = self.conn.execute("""
-                SELECT asset_id
-                FROM asset
-                WHERE track = TRUE
-                ORDER BY asset_id
-            """).fetchall()
-            asset_ids = [r[0] for r in rows]
+            asset_ids = TickerUniverseRepository(self.conn).ingestible_asset_ids()
         else:
             asset_ids = [asset_id.upper().strip()]
 
@@ -362,12 +362,20 @@ class DashboardManager:
     def refresh_due_asset_metadata(self, max_assets: int = 5) -> int:
         from dashboard.services.asset_importer import AssetImporter
 
-        rows = self.conn.execute("""
+        asset_ids = TickerUniverseRepository(self.conn).ingestible_asset_ids()
+        if not asset_ids:
+            return 0
+
+        placeholders = ", ".join("?" for _ in asset_ids)
+        rows = self.conn.execute(f"""
             SELECT asset_id
             FROM asset_metadata_sync
-            WHERE sync_status IN ('pending', 'stale', 'failed')
-            OR last_succeeded_at IS NULL
-            OR last_succeeded_at < now() - INTERVAL 30 DAY
+            WHERE asset_id IN ({placeholders})
+              AND (
+                sync_status IN ('pending', 'stale', 'failed')
+                OR last_succeeded_at IS NULL
+                OR last_succeeded_at < now() - INTERVAL 30 DAY
+            )
             ORDER BY
                 CASE sync_status
                     WHEN 'pending' THEN 1
@@ -377,7 +385,7 @@ class DashboardManager:
                 END,
                 last_attempted_at NULLS FIRST
             LIMIT ?
-        """, [max_assets]).fetchall()
+        """, [*asset_ids, max_assets]).fetchall()
 
         asset_ids = [r[0] for r in rows]
 
@@ -388,14 +396,19 @@ class DashboardManager:
     def schedule_due_price_history_backfills(self, max_assets: int = 3, years: int = 10) -> int:
         from dashboard.ingestion.price_history.service import PriceHistoryIngestionService
 
-        rows = self.conn.execute("""
+        asset_ids = TickerUniverseRepository(self.conn).ingestible_asset_ids()
+        if not asset_ids:
+            return 0
+
+        placeholders = ", ".join("?" for _ in asset_ids)
+        rows = self.conn.execute(f"""
           SELECT a.asset_id
             FROM asset a
             LEFT JOIN asset_sync_state s
             ON s.asset_id = a.asset_id
             AND s.domain = 'market'
             AND s.dataset = 'price_daily'
-        WHERE a.track = TRUE
+        WHERE a.asset_id IN ({placeholders})
         AND (
             s.asset_id IS NULL
             OR s.backfill_status IN ('not_started', 'failed')
@@ -411,7 +424,7 @@ class DashboardManager:
         AND j.status IN ('pending', 'running'))
         ORDER BY a.asset_id
         LIMIT ?;
-        """, [max_assets]).fetchall()
+        """, [*asset_ids, max_assets]).fetchall()
 
         service = PriceHistoryIngestionService(self.conn)
 

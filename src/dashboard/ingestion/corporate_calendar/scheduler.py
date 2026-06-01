@@ -13,6 +13,7 @@ from dashboard.ingestion.corporate_calendar.constants import (
     DOMAIN_CORPORATE,
     JOB_TYPE_CALENDAR_REFRESH,
     JOB_TYPE_EARNINGS_UPDATE,
+    JOB_TYPE_REFRESH,
     PRIORITY_EARNINGS_UPDATE,
 )
 from dashboard.ingestion.corporate_calendar.db.ingestion_repo import (
@@ -21,6 +22,7 @@ from dashboard.ingestion.corporate_calendar.db.ingestion_repo import (
 from dashboard.ingestion.corporate_calendar.jobs import (
     enqueue_calendar_refresh_jobs,
 )
+from dashboard.ingestion.ticker_universe import TickerUniverseRepository
 
 DEFAULT_FUNDAMENTAL_REFRESH_INTERVAL_DAYS = 7
 
@@ -43,6 +45,7 @@ class CorporateCalendarScheduler:
     def __init__(self, conn) -> None:
         self.conn = conn
         self.repo = CorporateCalendarIngestionRepository(conn)
+        self.ticker_universe = TickerUniverseRepository(conn)
 
     def schedule_calendar_refresh_if_due(
         self,
@@ -161,13 +164,22 @@ class CorporateCalendarScheduler:
         now = datetime.now()
         today = date.today()
 
+        asset_ids = self.ticker_universe.ingestible_asset_ids(
+            include_watchlist=True,
+            asset_types=("stock", "adr"),
+        )
+        if not asset_ids:
+            return []
+
+        placeholders = ", ".join("?" for _ in asset_ids)
         rows = self.conn.execute(
-            """
+            f"""
             SELECT
                 asset_id,
                 refresh_interval_days
             FROM fundamental_subscription
-            WHERE is_active = TRUE
+            WHERE asset_id IN ({placeholders})
+              AND is_active = TRUE
               AND (
                     next_refresh_at IS NULL
                     OR next_refresh_at <= ?
@@ -176,7 +188,7 @@ class CorporateCalendarScheduler:
                      asset_id ASC
             LIMIT ?
             """,
-            [now, max_assets],
+            [*asset_ids, now, max_assets],
         ).fetchall()
 
         job_ids: list[int] = []

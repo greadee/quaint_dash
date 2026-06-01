@@ -219,8 +219,7 @@ SELECT e.asset_id
 FROM earnings_calendar_event e
 JOIN asset a
   ON a.asset_id = e.asset_id
-WHERE a.track = TRUE
-  AND COALESCE(a.asset_type, 'stock') IN ('stock', 'adr')
+WHERE COALESCE(a.asset_type, 'stock') IN ('stock', 'adr')
   AND e.earnings_date >= ?
   AND e.earnings_date <= ?
 GROUP BY e.asset_id

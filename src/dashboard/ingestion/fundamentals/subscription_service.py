@@ -33,13 +33,16 @@ def _asset_id_column(conn) -> str:
 def _asset_ticker_column(conn) -> str:
     columns = _table_columns(conn, "asset")
 
+    if "asset_id" in columns:
+        return "asset_id"
+
     if "ticker" in columns:
         return "ticker"
 
     if "symbol" in columns:
         return "symbol"
 
-    raise RuntimeError("Could not find asset ticker column. Expected asset.ticker or asset.symbol.")
+    raise RuntimeError("Could not find asset ticker column. Expected asset.asset_id, asset.ticker, or asset.symbol.")
 
 
 class FundamentalSubscriptionService:
@@ -49,10 +52,10 @@ class FundamentalSubscriptionService:
 
     def subscribe_asset(
         self,
-        asset_id: int,
+        asset_id: str,
         refresh_interval_days: int = DEFAULT_REFRESH_INTERVAL_DAYS,
         subscription_source: str = "manual",
-    ) -> int:
+    ) -> str:
         """
         Adds an asset to the monitored fundamentals list.
 
@@ -123,7 +126,7 @@ class FundamentalSubscriptionService:
         ticker: str,
         refresh_interval_days: int = DEFAULT_REFRESH_INTERVAL_DAYS,
         subscription_source: str = "manual",
-    ) -> int:
+    ) -> str:
         """
         Subscribes an existing asset by ticker.
 
@@ -145,7 +148,7 @@ class FundamentalSubscriptionService:
             subscription_source=subscription_source,
         )
 
-    def unsubscribe_asset(self, asset_id: int) -> None:
+    def unsubscribe_asset(self, asset_id: str) -> None:
         now = _utc_now_naive()
 
         self.conn.execute(
@@ -167,7 +170,7 @@ class FundamentalSubscriptionService:
 
         self.unsubscribe_asset(asset_id)
 
-    def find_asset_id_by_ticker(self, ticker: str) -> int | None:
+    def find_asset_id_by_ticker(self, ticker: str) -> str | None:
         asset_id_col = _asset_id_column(self.conn)
         ticker_col = _asset_ticker_column(self.conn)
 
@@ -184,7 +187,7 @@ class FundamentalSubscriptionService:
         if not row:
             return None
 
-        return int(row[0])
+        return str(row[0])
 
     def list_active_subscriptions(self) -> list[dict[str, Any]]:
         asset_id_col = _asset_id_column(self.conn)

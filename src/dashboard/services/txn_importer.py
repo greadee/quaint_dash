@@ -83,6 +83,7 @@ class TxnImporter(ABC):
         self._validate_txn_stage()
         self._initialize_imported_assets()
         import_data = self._handle_import()
+        self.manager.update_positions()
         self._ingest_imported_asset_metadata()
 
         return import_data

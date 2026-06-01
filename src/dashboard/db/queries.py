@@ -117,10 +117,12 @@ WHERE a.size = ?"""
 ##########
 
 UPSERT_ASSET = """
-INSERT INTO asset (asset_id, asset_type, ccy)
-VALUES (?, ?, ?)
+INSERT INTO asset (asset_id, symbol, asset_type, asset_subtype, ccy)
+VALUES (?, ?, ?, ?, ?)
 ON CONFLICT(asset_id) DO UPDATE SET
+  symbol = excluded.symbol,
   asset_type = excluded.asset_type,
+  asset_subtype = excluded.asset_subtype,
   ccy = excluded.ccy,
   updated_at = now();
 """
@@ -134,6 +136,7 @@ WHERE asset_id = ?;
 INITIALIZE_IMPORTED_ASSETS = """
 INSERT INTO asset (
   asset_id,
+  symbol,
   asset_type,
   ccy,
   track,
@@ -142,6 +145,7 @@ INSERT INTO asset (
 )
 SELECT DISTINCT
   n.asset_id,
+  n.asset_id AS symbol,
   'stock' AS asset_type,
   COALESCE(NULLIF(n.ccy, ''), 'CAD') AS ccy,
   TRUE AS track,
@@ -150,6 +154,32 @@ SELECT DISTINCT
 FROM norm_stg_txn n
 WHERE n.asset_id IS NOT NULL
 ON CONFLICT (asset_id) DO UPDATE SET
+  symbol = COALESCE(asset.symbol, excluded.symbol),
+  updated_at = now();
+"""
+
+SYNC_PORTFOLIO_TICKERS_FROM_POSITIONS = """
+INSERT INTO portfolio_ticker (
+  portfolio_id,
+  asset_id,
+  is_active,
+  source,
+  created_at,
+  updated_at
+)
+SELECT DISTINCT
+  portfolio_id,
+  asset_id,
+  TRUE,
+  'position',
+  now(),
+  now()
+FROM position
+WHERE asset_id IS NOT NULL
+  AND COALESCE(qty, 0) <> 0
+ON CONFLICT (portfolio_id, asset_id)
+DO UPDATE SET
+  is_active = TRUE,
   updated_at = now();
 """
 

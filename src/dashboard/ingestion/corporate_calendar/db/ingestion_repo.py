@@ -23,12 +23,14 @@ from dashboard.ingestion.corporate_calendar.models import (
     CorporateIngestionJob,
     FinancialStatementRow,
 )
+from dashboard.ingestion.ticker_universe import TickerUniverseRepository
 import dashboard.ingestion.corporate_calendar.db.queries as qry
 
 
 class CorporateCalendarIngestionRepository:
     def __init__(self, conn) -> None:
         self.conn = conn
+        self.ticker_universe = TickerUniverseRepository(conn)
 
     def next_job_id(self) -> int:
         return int(self.conn.execute(qry.NEXT_JOB_ID).fetchone()[0])
@@ -66,8 +68,10 @@ class CorporateCalendarIngestionRepository:
         self.conn.execute(qry.ENSURE_SYNC_STATE, [asset_id, DOMAIN_CORPORATE, dataset])
 
     def get_tracked_stock_asset_ids(self) -> list[str]:
-        rows = self.conn.execute(qry.SELECT_TRACKED_STOCK_ASSET_IDS).fetchall()
-        return [r[0] for r in rows]
+        return self.ticker_universe.ingestible_asset_ids(
+            include_watchlist=True,
+            asset_types=("stock", "adr"),
+        )
 
     def claim_next_pending_job(self) -> Optional[CorporateIngestionJob]:
         row = self.conn.execute(
@@ -221,4 +225,10 @@ class CorporateCalendarIngestionRepository:
             [start_date, end_date, limit],
         ).fetchall()
 
-        return [r[0] for r in rows]
+        eligible = set(
+            self.ticker_universe.ingestible_asset_ids(
+                include_watchlist=True,
+                asset_types=("stock", "adr"),
+            )
+        )
+        return [r[0] for r in rows if r[0] in eligible]

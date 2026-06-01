@@ -2,7 +2,7 @@ def ensure_fundamental_phase1_schema(conn) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS fundamental_subscription (
-            asset_id INTEGER PRIMARY KEY,
+            asset_id TEXT PRIMARY KEY,
             is_active BOOLEAN NOT NULL DEFAULT TRUE,
 
             refresh_interval_days INTEGER NOT NULL DEFAULT 7,
@@ -25,7 +25,7 @@ def ensure_fundamental_phase1_schema(conn) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS fundamental_sync_state (
-            asset_id INTEGER NOT NULL,
+            asset_id TEXT NOT NULL,
             dataset VARCHAR NOT NULL,
             sync_mode VARCHAR NOT NULL,
 

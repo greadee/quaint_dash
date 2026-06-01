@@ -21,6 +21,7 @@ from dashboard.ingestion.price_history.constants import (
     STATUS_RUNNING,
 )
 from dashboard.ingestion.price_history.models import DividendEventRow, IngestionJob, PriceDailyRow, SplitEventRow
+from dashboard.ingestion.ticker_universe import TickerUniverseRepository
 import dashboard.ingestion.price_history.db.queries as qry
 
 class PriceHistoryIngestionRepository:
@@ -30,6 +31,7 @@ class PriceHistoryIngestionRepository:
 
     def __init__(self, conn) -> None:
         self.conn = conn
+        self.ticker_universe = TickerUniverseRepository(conn)
 
     def next_job_id(self) -> int:
         return int(self.conn.execute(qry.NEXT_JOB_ID).fetchone()[0])
@@ -210,8 +212,7 @@ class PriceHistoryIngestionRepository:
             )
 
     def get_all_asset_ids(self) -> list[str]:
-        rows = self.conn.execute(qry.SELECT_ALL_ASSET_IDS).fetchall()
-        return [r[0] for r in rows]
+        return self.ticker_universe.ingestible_asset_ids()
 
     def get_latest_dataset_date(self, asset_id: str, dataset: str) -> Optional[date]:
         if dataset == DATASET_PRICE_DAILY:
