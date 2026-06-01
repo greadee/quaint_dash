@@ -2,6 +2,7 @@ from datetime import date, timedelta
 
 import duckdb
 
+from dashboard.ingestion.fundamentals.schema import ensure_fundamental_phase1_schema
 from dashboard.ingestion.corporate_calendar.models import (
     CorporateCalendarEventRow,
     FinancialStatementRow,
@@ -320,3 +321,95 @@ def test_worker_processes_post_event_fundamental_jobs():
     """).fetchone()
 
     assert statement_row == ("income", 2026, 1)
+
+
+def test_scheduler_recurring_fundamental_refreshes_respect_ticker_universe():
+    conn = make_conn()
+    ensure_fundamental_phase1_schema(conn)
+    service = CorporateCalendarIngestionService(conn, provider=FakeCorporateProvider())
+
+    conn.execute(
+        """
+        INSERT INTO asset(asset_id, asset_type, ccy, track)
+        VALUES
+            ('MSFT', 'stock', 'USD', TRUE),
+            ('SPY', 'etf', 'USD', TRUE)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE portfolio_ticker (
+            portfolio_id BIGINT,
+            asset_id TEXT,
+            is_active BOOLEAN,
+            source TEXT,
+            created_at TIMESTAMP DEFAULT now(),
+            updated_at TIMESTAMP DEFAULT now(),
+            PRIMARY KEY(portfolio_id, asset_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE watchlist_ticker (
+            asset_id TEXT PRIMARY KEY,
+            is_active BOOLEAN,
+            source TEXT,
+            created_at TIMESTAMP DEFAULT now(),
+            updated_at TIMESTAMP DEFAULT now()
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'AAPL', TRUE, 'position')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO watchlist_ticker(asset_id, is_active, source)
+        VALUES
+            ('MSFT', FALSE, 'manual'),
+            ('SPY', TRUE, 'manual')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO fundamental_subscription(asset_id, is_active, next_refresh_at)
+        VALUES
+            ('AAPL', TRUE, now() - INTERVAL 1 DAY),
+            ('MSFT', TRUE, now() - INTERVAL 1 DAY),
+            ('SPY', TRUE, now() - INTERVAL 1 DAY)
+        """
+    )
+
+    job_ids = service.schedule_calendar_refresh_if_due()
+    assert len(job_ids) == 1
+
+    recurring_ids = service.schedule_fundamental_updates_after_events()
+    assert recurring_ids == []
+
+    recurring_ids = service.schedule_calendar_refresh_if_due()
+    assert recurring_ids == []
+
+    scheduler_ids = service.schedule_fundamental_updates_after_events()
+    assert scheduler_ids == []
+
+    subscription_ids = service.schedule_due_fundamental_subscription_refreshes(
+        max_assets=10
+    )
+
+    rows = conn.execute(
+        """
+        SELECT asset_id, job_type, dataset, status
+        FROM ingestion_job
+        WHERE dataset = 'financial_statements'
+        ORDER BY asset_id
+        """
+    ).fetchall()
+
+    assert len(subscription_ids) == 1
+    assert rows == [
+        ("AAPL", "refresh", "financial_statements", "pending"),
+    ]

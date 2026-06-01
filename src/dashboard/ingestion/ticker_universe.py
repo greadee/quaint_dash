@@ -215,7 +215,7 @@ class TickerUniverseRepository:
             return []
 
         placeholders = ", ".join("?" for _ in asset_ids)
-        symbol_expr = "symbol" if self._has_column("asset", "symbol") else "asset_id"
+        symbol_expr = "COALESCE(symbol, asset_id)" if self._has_column("asset", "symbol") else "asset_id"
         exchange_expr = "exchange_code" if self._has_column("asset", "exchange_code") else "NULL"
 
         rows = self.conn.execute(

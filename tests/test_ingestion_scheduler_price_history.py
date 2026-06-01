@@ -18,6 +18,7 @@ import pytest
 from dashboard.db.db_conn import DB, init_db
 from dashboard.models.storage import DashboardManager
 from dashboard.ingestion.price_history.models import PriceDailyRow
+from dashboard.ingestion.price_history.service import PriceHistoryIngestionService
 
 
 class FakeAssetImporter:
@@ -375,3 +376,57 @@ def test_price_history_scheduler_ignores_completed_asset(manager):
     )
 
     assert n_jobs == 0
+
+
+def test_price_history_enqueue_all_uses_portfolio_and_watchlist_ticker_universe(manager):
+    """
+    Bulk enqueueing should target explicit portfolio/watchlist ticker tables,
+    not every tracked asset row.
+    """
+
+    insert_asset(manager, "AAPL", ccy="USD")
+    insert_asset(manager, "MSFT", ccy="USD")
+    insert_asset(manager, "OLD", ccy="USD")
+
+    manager.conn.execute(
+        """
+        INSERT INTO portfolio(portfolio_id, portfolio_name)
+        VALUES (1, 'Core')
+        """
+    )
+    manager.conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES
+            (1, 'AAPL', TRUE, 'position'),
+            (1, 'OLD', FALSE, 'position')
+        """
+    )
+    manager.conn.execute(
+        """
+        INSERT INTO watchlist_ticker(asset_id, is_active, source)
+        VALUES ('MSFT', TRUE, 'manual')
+        """
+    )
+
+    service = PriceHistoryIngestionService(manager.conn)
+
+    job_ids = service.enqueue_backfill_all(
+        years=1,
+        include_dividends=False,
+        include_splits=False,
+    )
+
+    rows = manager.conn.execute(
+        """
+        SELECT asset_id, dataset
+        FROM ingestion_job
+        ORDER BY asset_id
+        """
+    ).fetchall()
+
+    assert len(job_ids) == 2
+    assert rows == [
+        ("AAPL", "price_daily"),
+        ("MSFT", "price_daily"),
+    ]

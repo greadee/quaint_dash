@@ -111,3 +111,16 @@ class CorporateCalendarIngestionService:
             lookback_days=lookback_days,
             max_assets=max_assets,
         )
+
+    def schedule_due_fundamental_subscription_refreshes(
+        self,
+        max_assets: int = 25,
+    ) -> list[int]:
+        """
+        Scheduler entry point for recurring subscribed fundamentals refreshes.
+        """
+        scheduler = CorporateCalendarScheduler(self.conn)
+
+        return scheduler.schedule_due_fundamental_subscription_refreshes(
+            max_assets=max_assets,
+        )

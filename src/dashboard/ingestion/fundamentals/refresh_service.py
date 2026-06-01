@@ -20,7 +20,7 @@ class ExistingStatementIngestionAdapter:
     def __init__(self, statement_ingestion_service):
         self.statement_ingestion_service = statement_ingestion_service
 
-    def refresh_latest(self, asset_id: int) -> None:
+    def refresh_latest(self, asset_id: str) -> None:
         for method_name in self.METHOD_NAMES:
             method = getattr(self.statement_ingestion_service, method_name, None)
 
@@ -41,7 +41,7 @@ class FundamentalRefreshService:
             statement_ingestion_service
         )
 
-    def refresh_asset(self, asset_id: int) -> None:
+    def refresh_asset(self, asset_id: str) -> None:
         """
         Refreshes latest fundamentals for one asset.
 
