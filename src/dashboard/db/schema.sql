@@ -348,25 +348,50 @@ CREATE TABLE IF NOT EXISTS ingestion_run (
     source TEXT, -- 'finnhub', 'fmp'
 );
 
-CREATE TABLE IF NOT EXISTS ingestion_job (
-    job_id UUID PRIMARY KEY,
-    target_type TEXT NOT NULL,           -- asset, benchmark_index, calendar, earnings
-    target_id TEXT NOT NULL,
-    job_type TEXT NOT NULL,
 
-    status TEXT NOT NULL DEFAULT 'queued', -- queued, running, succeeded, failed
-    priority INTEGER NOT NULL DEFAULT 100,
 
-    due_at TIMESTAMP NOT NULL DEFAULT now(),
-    started_at TIMESTAMP,
-    finished_at TIMESTAMP,
 
-    attempts INTEGER NOT NULL DEFAULT 0,
-    max_attempts INTEGER NOT NULL DEFAULT 3,
-    error_message TEXT,
+
+
+CREATE TABLE IF NOT EXISTS fundamental_subscription (
+    asset_id TEXT PRIMARY KEY,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+
+    refresh_interval_days INTEGER NOT NULL DEFAULT 7,
+    next_refresh_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    last_refresh_attempted_at TIMESTAMP,
+    last_refresh_succeeded_at TIMESTAMP,
+
+    subscription_source TEXT NOT NULL DEFAULT 'manual',
 
     created_at TIMESTAMP NOT NULL DEFAULT now(),
-    updated_at TIMESTAMP NOT NULL DEFAULT now()
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    FOREIGN KEY(asset_id) REFERENCES asset(asset_id)
 );
+
+CREATE TABLE IF NOT EXISTS fundamental_sync_state (
+    asset_id INTEGER NOT NULL,
+    dataset VARCHAR NOT NULL,
+    sync_mode VARCHAR NOT NULL,
+
+    status VARCHAR NOT NULL,
+    last_attempted_at TIMESTAMP,
+    last_succeeded_at TIMESTAMP,
+    error_message VARCHAR,
+    source VARCHAR,
+
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (asset_id, dataset, sync_mode)
+);
+
+CREATE INDEX IF NOT EXISTS idx_fundamental_subscription_due
+ON fundamental_subscription (is_active, next_refresh_at);
+
+CREATE INDEX IF NOT EXISTS idx_fundamental_sync_state_asset
+ON fundamental_sync_state (asset_id);
 
 COMMIT; 

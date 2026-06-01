@@ -22,10 +22,22 @@ from dashboard.ingestion.corporate_calendar.jobs import (
     enqueue_calendar_refresh_jobs,
 )
 
+DEFAULT_FUNDAMENTAL_REFRESH_INTERVAL_DAYS = 7
+
 
 class CorporateCalendarScheduler:
     """
     Creates corporate ingestion jobs only when they are due.
+
+    This scheduler now supports three corporate scheduling paths:
+
+    1. Earnings calendar refresh
+    2. Post-earnings actuals / financial statement updates
+    3. Subscription-based recurring financial statement refreshes
+
+    The scheduler only creates ingestion_job rows.
+    The existing CorporateCalendarWorker remains the only execution path for
+    financial statement ingestion.
     """
 
     def __init__(self, conn) -> None:
@@ -53,6 +65,7 @@ class CorporateCalendarScheduler:
 
         if latest_success is not None:
             cutoff = datetime.now() - timedelta(hours=refresh_interval_hours)
+
             if latest_success >= cutoff:
                 return []
 
@@ -71,6 +84,12 @@ class CorporateCalendarScheduler:
     ) -> list[int]:
         """
         Enqueue earnings/fundamental update jobs for recent earnings events.
+
+        This handles the post-earnings path:
+        - update earnings actuals
+        - update latest financial statements
+
+        This should stay separate from subscription-based recurring refreshes.
         """
         today = date.today()
         start_date = today - timedelta(days=lookback_days)
@@ -119,6 +138,111 @@ class CorporateCalendarScheduler:
                 )
 
         return job_ids
+
+    def schedule_due_fundamental_subscription_refreshes(
+        self,
+        max_assets: int = 25,
+    ) -> list[int]:
+        """
+        Enqueue recurring financial statement refresh jobs for subscribed assets.
+
+        This is Phase 1 subscription monitoring.
+
+        It does not fetch or store statements directly. It only creates normal
+        corporate ingestion jobs:
+
+            domain = corporate
+            job_type = refresh
+            dataset = financial_statements
+
+        The existing CorporateCalendarWorker will process those jobs using the
+        existing financial statement ingestion path.
+        """
+        now = datetime.now()
+        today = date.today()
+
+        rows = self.conn.execute(
+            """
+            SELECT
+                asset_id,
+                refresh_interval_days
+            FROM fundamental_subscription
+            WHERE is_active = TRUE
+              AND (
+                    next_refresh_at IS NULL
+                    OR next_refresh_at <= ?
+              )
+            ORDER BY COALESCE(next_refresh_at, TIMESTAMP '1970-01-01') ASC,
+                     asset_id ASC
+            LIMIT ?
+            """,
+            [now, max_assets],
+        ).fetchall()
+
+        job_ids: list[int] = []
+
+        for asset_id, refresh_interval_days in rows:
+            if self._has_open_or_today_job(
+                asset_id=asset_id,
+                dataset=DATASET_FINANCIAL_STATEMENTS,
+                job_type=JOB_TYPE_REFRESH,
+                today=today,
+            ):
+                continue
+
+            job_id = self.repo.create_job(
+                asset_id=asset_id,
+                job_type=JOB_TYPE_REFRESH,
+                dataset=DATASET_FINANCIAL_STATEMENTS,
+                priority=PRIORITY_EARNINGS_UPDATE - 1,
+                start_date=None,
+                end_date=None,
+            )
+
+            job_ids.append(job_id)
+
+            self._mark_subscription_refresh_scheduled(
+                asset_id=asset_id,
+                refresh_interval_days=refresh_interval_days,
+            )
+
+        return job_ids
+
+    def _mark_subscription_refresh_scheduled(
+        self,
+        asset_id: str,
+        refresh_interval_days: int | None,
+    ) -> None:
+        """
+        Move next_refresh_at forward after enqueueing a refresh job.
+
+        The worker still controls actual ingestion success/failure through
+        ingestion_job and asset_sync_state.
+
+        This prevents the scheduler from creating the same recurring refresh
+        repeatedly after a completed job.
+        """
+        now = datetime.now()
+
+        interval_days = (
+            int(refresh_interval_days)
+            if refresh_interval_days is not None
+            else DEFAULT_FUNDAMENTAL_REFRESH_INTERVAL_DAYS
+        )
+
+        next_refresh_at = now + timedelta(days=interval_days)
+
+        self.conn.execute(
+            """
+            UPDATE fundamental_subscription
+            SET
+                last_refresh_attempted_at = ?,
+                next_refresh_at = ?,
+                updated_at = ?
+            WHERE asset_id = ?
+            """,
+            [now, next_refresh_at, now, asset_id],
+        )
 
     def _count_open_jobs(self, dataset: str, job_type: str) -> int:
         row = self.conn.execute(
