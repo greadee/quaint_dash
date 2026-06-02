@@ -6,6 +6,12 @@ from typing import Any
 import pandas as pd
 import yfinance as yf
 
+from dashboard.ingestion.rate_limits import (
+    InMemoryRateLimiter,
+    RateLimitPolicy,
+    default_rate_limiter,
+    yfinance_rate_limit_policy,
+)
 from dashboard.ingestion.indices.index_models import (
     IndexConstituent,
     IndexDailyBar,
@@ -24,6 +30,14 @@ class YFinanceIndexProvider:
 
     provider_name = "yfinance"
 
+    def __init__(
+        self,
+        rate_limiter: InMemoryRateLimiter | None = None,
+        rate_limit_policy: RateLimitPolicy | None = None,
+    ) -> None:
+        self.rate_limiter = rate_limiter or default_rate_limiter()
+        self.rate_limit_policy = rate_limit_policy or yfinance_rate_limit_policy()
+
     def get_daily_prices(
         self,
         index_id: str,
@@ -32,7 +46,7 @@ class YFinanceIndexProvider:
         end_date: date,
         is_proxy: bool,
     ) -> list[IndexDailyBar]:
-        df = yf.download(
+        df = self._download(
             provider_symbol,
             start=start_date.isoformat(),
             end=end_date.isoformat(),
@@ -82,7 +96,7 @@ class YFinanceIndexProvider:
     ) -> list[IndexIntradayBar]:
         yf_interval = self._map_interval(interval)
 
-        df = yf.download(
+        df = self._download(
             provider_symbol,
             period="5d",
             interval=yf_interval,
@@ -131,6 +145,10 @@ class YFinanceIndexProvider:
         is_proxy: bool,
     ) -> list[IndexConstituent]:
         return []
+
+    def _download(self, *args, **kwargs) -> pd.DataFrame:
+        self.rate_limiter.acquire(self.rate_limit_policy)
+        return yf.download(*args, **kwargs)
 
     def _flatten_yfinance_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """

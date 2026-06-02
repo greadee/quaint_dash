@@ -88,4 +88,4 @@ class CorporateCalendarWorker:
                 error=str(exc),
             )
 
-            raise
+            return False

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime, timezone
 from typing import Callable
 
+from dashboard.ingestion.rate_limits import enforce_symbol_cap, env_int, normalize_symbols
 from dashboard.ingestion.websocket.live_price_models import LivePriceTick
 
 
@@ -47,9 +49,14 @@ def parse_finnhub_trade_payload(message: str | dict) -> list[LivePriceTick]:
 
 
 class FinnhubWebSocketClient:
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, max_symbols: int | None = None):
         self.api_key = api_key
-        self.url = f"wss://ws.finnhub.io?token={api_key}"
+        self.url = os.getenv("FINNHUB_WEBSOCKET_URL", f"wss://ws.finnhub.io?token={api_key}")
+        self.max_symbols = (
+            max_symbols
+            if max_symbols is not None
+            else env_int("FINNHUB_WEBSOCKET_MAX_SYMBOLS", 50)
+        )
 
     def stream(
         self,
@@ -63,6 +70,11 @@ class FinnhubWebSocketClient:
         websocket-client is imported lazily so unit tests that only test the
         parser do not need to import the websocket package during collection.
         """
+        symbols = normalize_symbols(symbols)
+        if not symbols:
+            return
+        enforce_symbol_cap("Finnhub websocket", symbols, self.max_symbols)
+
         try:
             import websocket
         except ImportError as exc:

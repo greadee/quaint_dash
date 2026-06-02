@@ -11,6 +11,12 @@ from typing import Optional
 
 import yfinance as yf
 
+from dashboard.ingestion.rate_limits import (
+    InMemoryRateLimiter,
+    RateLimitPolicy,
+    default_rate_limiter,
+    yfinance_rate_limit_policy,
+)
 from dashboard.ingestion.price_history.models import (
     PriceDailyRow,
     DividendEventRow,
@@ -26,18 +32,34 @@ class YahooPriceProvider:
 
     source = "yfinance"
 
+    def __init__(
+        self,
+        rate_limiter: InMemoryRateLimiter | None = None,
+        rate_limit_policy: RateLimitPolicy | None = None,
+    ) -> None:
+        self.rate_limiter = rate_limiter or default_rate_limiter()
+        self.rate_limit_policy = rate_limit_policy or yfinance_rate_limit_policy()
+        self._history_cache = {}
+
     def _download_history(self, asset_id: str, start_date: date, end_date: date):
         """
         yfinance treats end as exclusive, so add one day.
         """
+        cache_key = (asset_id.upper(), start_date, end_date)
+        if cache_key in self._history_cache:
+            return self._history_cache[cache_key]
+
+        self.rate_limiter.acquire(self.rate_limit_policy)
         ticker = yf.Ticker(asset_id)
 
-        return ticker.history(
+        history = ticker.history(
             start=start_date.isoformat(),
             end=(end_date + timedelta(days=1)).isoformat(),
             auto_adjust=False,
             actions=True,
         )
+        self._history_cache[cache_key] = history
+        return history
 
     @staticmethod
     def _to_float(value) -> Optional[float]:

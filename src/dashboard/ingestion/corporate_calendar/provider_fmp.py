@@ -14,6 +14,13 @@ import urllib.request
 
 from dotenv import load_dotenv
 
+from dashboard.ingestion.rate_limits import (
+    InMemoryRateLimiter,
+    RateLimitExceeded,
+    RateLimitPolicy,
+    default_rate_limiter,
+    fmp_rate_limit_policy,
+)
 from dashboard.ingestion.corporate_calendar.models import (
     CorporateCalendarEventRow,
     FinancialStatementRow,
@@ -33,9 +40,13 @@ class FmpCorporateCalendarProvider:
         self,
         api_key: str | None = None,
         base_url: str = "https://financialmodelingprep.com/stable",
+        rate_limiter: InMemoryRateLimiter | None = None,
+        rate_limit_policy: RateLimitPolicy | None = None,
     ) -> None:
         self.api_key = api_key or os.getenv("FMP_API_KEY")
         self.base_url = base_url.rstrip("/")
+        self.rate_limiter = rate_limiter or default_rate_limiter()
+        self.rate_limit_policy = rate_limit_policy or fmp_rate_limit_policy()
 
         if not self.api_key:
             raise RuntimeError("FMP_API_KEY not found in environment or .env file")
@@ -47,13 +58,18 @@ class FmpCorporateCalendarProvider:
         url = f"{self.base_url}/{path.lstrip('/')}?{urllib.parse.urlencode(query)}"
 
         try:
+            self.rate_limiter.acquire(self.rate_limit_policy)
             with urllib.request.urlopen(url, timeout=20) as response:
                 status = getattr(response, "status", 200)
+                if status == 429:
+                    raise RateLimitExceeded("FMP rate limit exceeded")
                 if status != 200:
                     raise RuntimeError(f"FMP request failed with status {status}")
                 payload = response.read().decode("utf-8")
 
         except urllib.error.HTTPError as exc:
+            if exc.code == 429:
+                raise RateLimitExceeded("FMP rate limit exceeded") from exc
             raise RuntimeError(f"FMP HTTP error {exc.code}") from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(f"FMP connection error: {exc.reason}") from exc
@@ -61,7 +77,10 @@ class FmpCorporateCalendarProvider:
         data = json.loads(payload)
 
         if isinstance(data, dict) and "Error Message" in data:
-            raise RuntimeError(data["Error Message"])
+            message = str(data["Error Message"])
+            if "limit" in message.lower() or "rate" in message.lower():
+                raise RateLimitExceeded(message)
+            raise RuntimeError(message)
 
         return data
 

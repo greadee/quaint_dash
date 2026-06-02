@@ -16,6 +16,13 @@ import urllib.error
 
 from dashboard.models.storage import DashboardManager
 from dashboard.db import queries as qry
+from dashboard.ingestion.rate_limits import (
+    InMemoryRateLimiter,
+    RateLimitExceeded,
+    RateLimitPolicy,
+    default_rate_limiter,
+    fmp_rate_limit_policy,
+)
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -33,6 +40,8 @@ class AssetImporter:
     manager: DashboardManager
     api_key: str | None = None
     base_url: str = "https://financialmodelingprep.com/stable/profile"
+    rate_limiter: InMemoryRateLimiter | None = None
+    rate_limit_policy: RateLimitPolicy | None = None
 
     def __post_init__(self):
         """
@@ -43,6 +52,11 @@ class AssetImporter:
 
         if not self.api_key:
             raise RuntimeError("FMP_API_KEY not found in environment or .env file")
+
+        if self.rate_limiter is None:
+            self.rate_limiter = default_rate_limiter()
+        if self.rate_limit_policy is None:
+            self.rate_limit_policy = fmp_rate_limit_policy()
 
     def import_stage_assets(self) -> list[str]:
         """
@@ -101,13 +115,18 @@ class AssetImporter:
         url = f"{self.base_url}?{query}"
 
         try:
+            self.rate_limiter.acquire(self.rate_limit_policy)
             with urllib.request.urlopen(url, timeout=15) as response:
                 status = getattr(response, "status", 200)
+                if status == 429:
+                    raise RateLimitExceeded("FMP rate limit exceeded")
                 if status != 200:
                     raise RuntimeError(f"FMP request failed with status {status}")
 
                 payload = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
+            if exc.code == 429:
+                raise RateLimitExceeded("FMP rate limit exceeded") from exc
             raise RuntimeError(f"FMP HTTP error {exc.code}") from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(f"FMP connection error: {exc.reason}") from exc
@@ -121,7 +140,10 @@ class AssetImporter:
 
         if isinstance(data, dict):
             if "Error Message" in data:
-                raise RuntimeError(data["Error Message"])
+                message = str(data["Error Message"])
+                if "limit" in message.lower() or "rate" in message.lower():
+                    raise RateLimitExceeded(message)
+                raise RuntimeError(message)
             return data
 
         return None

@@ -7,6 +7,13 @@ from typing import Any
 import requests
 from dotenv import load_dotenv
 
+from dashboard.ingestion.rate_limits import (
+    InMemoryRateLimiter,
+    RateLimitExceeded,
+    RateLimitPolicy,
+    default_rate_limiter,
+    fmp_rate_limit_policy,
+)
 from dashboard.ingestion.indices.index_models import (
     IndexConstituent,
     IndexDailyBar,
@@ -32,6 +39,8 @@ class FMPIndexProvider:
         v3_base_url: str = "https://financialmodelingprep.com/api/v3",
         stable_base_url: str = "https://financialmodelingprep.com/stable",
         timeout_seconds: int = 20,
+        rate_limiter: InMemoryRateLimiter | None = None,
+        rate_limit_policy: RateLimitPolicy | None = None,
     ):
         load_dotenv()
 
@@ -39,6 +48,8 @@ class FMPIndexProvider:
         self.v3_base_url = v3_base_url.rstrip("/")
         self.stable_base_url = stable_base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        self.rate_limiter = rate_limiter or default_rate_limiter()
+        self.rate_limit_policy = rate_limit_policy or fmp_rate_limit_policy()
 
         if not self.api_key:
             raise ValueError("FMP_API_KEY is required for FMPIndexProvider")
@@ -253,13 +264,22 @@ class FMPIndexProvider:
         params = dict(params)
         params["apikey"] = self.api_key
 
+        self.rate_limiter.acquire(self.rate_limit_policy)
         response = requests.get(
             f"{base_url}{path}",
             params=params,
             timeout=self.timeout_seconds,
         )
+        if response.status_code == 429:
+            raise RateLimitExceeded("FMP index rate limit exceeded")
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        if isinstance(data, dict) and "Error Message" in data:
+            message = str(data["Error Message"])
+            if "limit" in message.lower() or "rate" in message.lower():
+                raise RateLimitExceeded(message)
+            raise RuntimeError(message)
+        return data
 
     def _constituent_endpoint(self, provider_symbol: str) -> str | None:
         normalized = provider_symbol.strip().lower()
