@@ -30,6 +30,7 @@ class SentimentIngestionService:
         self,
         ticker: str,
         since: datetime | None = None,
+        provider_name: str | None = None,
     ) -> int:
         asset = self._asset_ref_for_ticker(ticker)
         if asset is None:
@@ -37,6 +38,8 @@ class SentimentIngestionService:
 
         observations_written = 0
         for provider in self.news_providers:
+            if provider_name is not None and provider.name != provider_name:
+                continue
             articles = provider.fetch_articles_for_ticker(asset.ticker, since)
             for article in articles:
                 article_id = self.repo.upsert_article(article)
@@ -64,6 +67,7 @@ class SentimentIngestionService:
         self,
         ticker: str,
         since: datetime | None = None,
+        provider_name: str | None = None,
     ) -> int:
         asset = self._asset_ref_for_ticker(ticker)
         if asset is None:
@@ -71,6 +75,8 @@ class SentimentIngestionService:
 
         observations_written = 0
         for provider in self.social_providers:
+            if provider_name is not None and provider.name != provider_name:
+                continue
             posts = provider.fetch_posts_for_ticker(asset.ticker, since)
             for post in posts:
                 post_id = self.repo.upsert_social_post(post)
@@ -108,9 +114,25 @@ class SentimentIngestionService:
             )
         if source == "news":
             return self.refresh_news_for_ticker(ticker, since)
-        if source in {"social", "retail", "reddit", "x"}:
+        if source in {"social", "retail"}:
             return self.refresh_social_for_ticker(ticker, since)
+        if source in {"reddit", "x"}:
+            return self.refresh_social_for_ticker(ticker, since, provider_name=source)
         raise ValueError(f"Unsupported sentiment source: {source}")
+
+    def aggregate_daily_sentiment(self, ticker: str, snapshot_date) -> int:
+        from dashboard.ingestion_sentiment.scoring import DailySentimentAggregator
+
+        asset = self._asset_ref_for_ticker(ticker)
+        if asset is None:
+            raise ValueError(f"Unknown sentiment ticker: {ticker}")
+
+        DailySentimentAggregator(self.repo).aggregate_for_ticker(
+            asset_id=asset.asset_id,
+            ticker=asset.ticker,
+            snapshot_date=snapshot_date,
+        )
+        return 1
 
     def _asset_ref_for_ticker(self, ticker: str) -> AssetRef | None:
         normalized = ticker.upper().strip()
@@ -118,4 +140,3 @@ class SentimentIngestionService:
             if asset.asset_id.upper() == normalized or asset.ticker.upper() == normalized:
                 return replace(asset, ticker=asset.ticker.upper())
         return None
-

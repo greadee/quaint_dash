@@ -11,9 +11,17 @@ from dashboard.ingestion_sentiment.models import (
     AssetRef,
     NewsArticleInput,
     SentimentDailySnapshot,
+    SentimentIngestionJob,
     SentimentObservationInput,
     SocialPostInput,
     TickerMention,
+)
+from dashboard.ingestion_sentiment.constants import (
+    DOMAIN_SENTIMENT,
+    STATUS_DONE,
+    STATUS_FAILED,
+    STATUS_PENDING,
+    STATUS_RUNNING,
 )
 import dashboard.ingestion_sentiment.queries as qry
 
@@ -196,6 +204,50 @@ class SentimentIngestionRepository:
         row = self.conn.execute(qry.SELECT_RECENT_AVG_ITEM_COUNT, [asset_id, snapshot_date, snapshot_date]).fetchone()
         return None if row is None else row[0]
 
+    def create_job(
+        self,
+        asset_id: str,
+        job_type: str,
+        dataset: str,
+        priority: int,
+        start_date=None,
+        end_date=None,
+    ) -> int:
+        job_id = self._next_job_id()
+        self.conn.execute(
+            qry.INSERT_SENTIMENT_JOB,
+            [
+                job_id,
+                asset_id,
+                DOMAIN_SENTIMENT,
+                job_type,
+                dataset,
+                STATUS_PENDING,
+                priority,
+                start_date,
+                end_date,
+            ],
+        )
+        return job_id
+
+    def claim_next_pending_job(self) -> SentimentIngestionJob | None:
+        row = self.conn.execute(
+            qry.SELECT_NEXT_PENDING_SENTIMENT_JOB,
+            [DOMAIN_SENTIMENT, STATUS_PENDING],
+        ).fetchone()
+        if row is None:
+            return None
+
+        job = SentimentIngestionJob(*row)
+        self.conn.execute(qry.MARK_JOB_RUNNING, [STATUS_RUNNING, job.job_id])
+        return job
+
+    def mark_job_done(self, job_id: int) -> None:
+        self.conn.execute(qry.MARK_JOB_DONE, [STATUS_DONE, job_id])
+
+    def mark_job_failed(self, job_id: int, error: str) -> None:
+        self.conn.execute(qry.MARK_JOB_FAILED, [STATUS_FAILED, error, job_id])
+
     def _next_article_id(self) -> int:
         return int(self.conn.execute(qry.NEXT_NEWS_ARTICLE_ID).fetchone()[0])
 
@@ -204,6 +256,9 @@ class SentimentIngestionRepository:
 
     def _next_sentiment_observation_id(self) -> int:
         return int(self.conn.execute(qry.NEXT_SENTIMENT_OBSERVATION_ID).fetchone()[0])
+
+    def _next_job_id(self) -> int:
+        return int(self.conn.execute(qry.NEXT_JOB_ID).fetchone()[0])
 
 
 def article_content_hash(article: NewsArticleInput) -> str:

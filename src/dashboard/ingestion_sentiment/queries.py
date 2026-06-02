@@ -288,3 +288,62 @@ WHERE asset_id = ?
   AND date < ?
   AND date >= ? - INTERVAL 30 DAY
 """
+
+INSERT_SENTIMENT_JOB = """
+INSERT INTO ingestion_job (
+    job_id,
+    asset_id,
+    domain,
+    job_type,
+    dataset,
+    status,
+    priority,
+    requested_start_date,
+    requested_end_date
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+SELECT_NEXT_PENDING_SENTIMENT_JOB = """
+SELECT
+    job_id,
+    asset_id,
+    domain,
+    job_type,
+    dataset,
+    status,
+    priority,
+    requested_start_date,
+    requested_end_date,
+    attempt_count,
+    error_message
+FROM ingestion_job
+WHERE domain = ? AND status = ?
+ORDER BY priority DESC, created_at ASC
+LIMIT 1
+"""
+
+MARK_JOB_RUNNING = """
+UPDATE ingestion_job
+SET status = ?,
+    attempt_count = attempt_count + 1,
+    updated_at = now(),
+    error_message = NULL
+WHERE job_id = ?
+"""
+
+MARK_JOB_DONE = """
+UPDATE ingestion_job
+SET status = ?,
+    updated_at = now(),
+    error_message = NULL
+WHERE job_id = ?
+"""
+
+MARK_JOB_FAILED = """
+UPDATE ingestion_job
+SET status = ?,
+    error_message = ?,
+    updated_at = now()
+WHERE job_id = ?
+"""
