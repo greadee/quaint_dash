@@ -7,6 +7,7 @@ import pytest
 from dashboard.analytics import (
     AnalyticsEngine,
     AnalyticsRepository,
+    AnalyticsStorageService,
     PricePoint,
     discounted_cash_flow_model,
     dividend_discount_model,
@@ -163,3 +164,128 @@ def test_portfolio_report_builds_weighted_return_series(tmp_path):
     assert report.risk is not None
     assert report.risk.observations == 10
     assert report.missing_inputs == []
+
+
+def test_analytics_storage_is_disabled_by_default(tmp_path):
+    db = DB(str(tmp_path / "analytics_storage_disabled.db"))
+    init_db(db)
+
+    result = AnalyticsStorageService(db.conn).refresh_due(as_of_date=date(2026, 1, 5))
+
+    assert result.skipped is True
+    assert result.reason == "analytics storage disabled"
+    table_count = db.conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM information_schema.tables
+        WHERE table_name = 'asset_analytics_snapshot'
+        """
+    ).fetchone()[0]
+    assert table_count == 0
+
+
+def test_enabled_analytics_storage_writes_daily_asset_snapshots(tmp_path):
+    db = DB(str(tmp_path / "analytics_storage_enabled.db"))
+    init_db(db)
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, track)
+        VALUES ('AAPL', 'AAPL', 'stock', 'USD', TRUE)
+        """
+    )
+    start = date(2025, 1, 1)
+    for i in range(20):
+        close = 100.0 + i
+        db.conn.execute(
+            """
+            INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+            VALUES ('AAPL', ?, ?, ?, 'test')
+            """,
+            [start + timedelta(days=i), close, close],
+        )
+
+    service = AnalyticsStorageService(db.conn, enabled=True)
+    first = service.refresh_due(as_of_date=date(2026, 1, 5))
+    second = service.refresh_due(as_of_date=date(2026, 1, 5))
+
+    assert first.assets_stored == 1
+    assert second.assets_stored == 0
+    row = db.conn.execute(
+        """
+        SELECT latest_price, payload_json, missing_inputs_json
+        FROM asset_analytics_snapshot
+        WHERE asset_id = 'AAPL'
+          AND snapshot_date = DATE '2026-01-05'
+        """
+    ).fetchone()
+    assert row[0] == pytest.approx(119.0)
+    assert '"asset_id": "AAPL"' in row[1]
+    assert "annual dividend" in row[2]
+
+
+def test_portfolio_storage_refreshes_when_positions_change_same_day(tmp_path):
+    db = DB(str(tmp_path / "analytics_storage_portfolio.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy)
+        VALUES ('AAA', 'AAA', 'stock', 'USD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO position(portfolio_id, asset_id, qty, book_cost, created_at, updated_at)
+        VALUES (1, 'AAA', 1, 100, now(), now())
+        """
+    )
+    start = date(2025, 1, 1)
+    for i in range(10):
+        close = 100.0 + i
+        db.conn.execute(
+            """
+            INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+            VALUES ('AAA', ?, ?, ?, 'test')
+            """,
+            [start + timedelta(days=i), close, close],
+        )
+
+    service = AnalyticsStorageService(db.conn, enabled=True)
+    first = service.refresh_due(
+        as_of_date=date(2026, 1, 5),
+        asset_ids=[],
+        portfolio_ids=[1],
+    )
+    second = service.refresh_due(
+        as_of_date=date(2026, 1, 5),
+        asset_ids=[],
+        portfolio_ids=[1],
+    )
+    db.conn.execute(
+        """
+        UPDATE position
+        SET qty = 2,
+            book_cost = 200,
+            updated_at = now()
+        WHERE portfolio_id = 1
+          AND asset_id = 'AAA'
+        """
+    )
+    third = service.refresh_due(
+        as_of_date=date(2026, 1, 5),
+        asset_ids=[],
+        portfolio_ids=[1],
+    )
+
+    assert first.portfolios_stored == 1
+    assert second.portfolios_stored == 0
+    assert third.portfolios_stored == 1
+    row = db.conn.execute(
+        """
+        SELECT market_value
+        FROM portfolio_analytics_snapshot
+        WHERE portfolio_id = 1
+          AND snapshot_date = DATE '2026-01-05'
+        """
+    ).fetchone()
+    assert row[0] == pytest.approx(218.0)
