@@ -90,10 +90,14 @@ dashboard           # or python -m dashboard
 - Calculation-first analytics over existing portfolio, price, dividend, benchmark, and financial statement data
 - Risk and return metrics including CAGR, volatility, Sharpe, Sortino, max drawdown, alpha, beta, correlation, and excess CAGR
 - Intrinsic value models including dividend discount, discounted cash flow, margin of safety, expected CAGR, and implied priced-in growth
+- Valuation depth from stored statement JSON, including growth, margin, leverage, profitability, payout, multiple, and DCF scenario metrics
+- ETF analytics including expense ratio, distribution yield, tracking error, top holdings, exposures, and direct-holding overlap
+- Forecast analytics including valuation mean reversion, dividend growth projection, blended expected CAGR, and deterministic simulation bands
 - Portfolio analytics with weighted synthetic return series from current positions
 - Explicit missing-input reporting when dividends, fundamentals, benchmarks, or positions are unavailable
 - Optional analytics snapshot storage for future AI-layer context, disabled by default
 - Daily snapshot refresh behavior with same-day portfolio-change refreshes when storage is enabled
+- AI-ready report context with structured facts, explanations, anomaly flags, and snapshot fact comparisons
 ```
 
 #### Architectural Decision Records: [Main Decisions](docs/adr/adr_ph3.md)

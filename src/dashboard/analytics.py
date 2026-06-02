@@ -217,6 +217,52 @@ class ForecastMetrics:
 
 
 @dataclass(frozen=True)
+class AnalyticsFact:
+    key: str
+    label: str
+    value: float | int | str | bool | None
+    unit: str | None
+    source: str
+    confidence: float
+
+
+@dataclass(frozen=True)
+class AnalyticsExplanation:
+    topic: str
+    summary: str
+    evidence: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class AnalyticsAnomaly:
+    severity: str
+    metric: str
+    message: str
+    value: float | int | str | bool | None = None
+
+
+@dataclass(frozen=True)
+class SnapshotMetricChange:
+    key: str
+    previous_value: float | int | str | bool | None
+    current_value: float | int | str | bool | None
+    absolute_change: float | None
+    relative_change: float | None
+
+
+@dataclass(frozen=True)
+class AIReadinessContext:
+    subject_type: str
+    subject_id: str
+    summary: str
+    facts: list[AnalyticsFact] = field(default_factory=list)
+    explanations: list[AnalyticsExplanation] = field(default_factory=list)
+    anomalies: list[AnalyticsAnomaly] = field(default_factory=list)
+    missing_inputs: list[str] = field(default_factory=list)
+    snapshot_hash: str | None = None
+
+
+@dataclass(frozen=True)
 class ValuationResult:
     method: str
     intrinsic_value_per_share: float | None
@@ -240,6 +286,7 @@ class AssetAnalyticsReport:
     valuation_depth: ValuationDepthMetrics
     etf: ETFAnalytics | None
     forecast: ForecastMetrics
+    ai_context: AIReadinessContext
 
 
 @dataclass(frozen=True)
@@ -265,6 +312,7 @@ class PortfolioAnalyticsReport:
     relative: RelativeRiskMetrics | None
     forecast: ForecastMetrics
     missing_inputs: list[str]
+    ai_context: AIReadinessContext
 
 
 @dataclass(frozen=True)
@@ -666,6 +714,23 @@ class AnalyticsEngine:
         fcf = self.repo.latest_free_cash_flow(asset_id)
         shares = self.repo.shares_outstanding(asset_id)
         fcf_per_share = fcf / shares if fcf is not None and shares else None
+        risk = risk_return_metrics(prices, risk_free_rate=risk_free_rate)
+        relative = relative_risk_metrics(prices, benchmark, risk_free_rate) if benchmark else None
+        dividend_discount = dividend_discount_model(
+            annual_dividend=dividend,
+            market_price=latest_price,
+            discount_rate=discount_rate,
+            growth_rate=dividend_growth_rate,
+            forecast_years=forecast_years,
+        )
+        discounted_cash_flow = discounted_cash_flow_model(
+            cashflow_per_share=fcf_per_share,
+            market_price=latest_price,
+            discount_rate=discount_rate,
+            growth_rate=dividend_growth_rate,
+            terminal_growth_rate=terminal_growth_rate,
+            forecast_years=forecast_years,
+        )
         valuation_depth = valuation_depth_metrics(
             income_statements=self.repo.financial_statement_history(asset_id, "income"),
             balance_sheets=self.repo.financial_statement_history(asset_id, "balance"),
@@ -697,39 +762,36 @@ class AnalyticsEngine:
         )
         forecast = asset_forecast_metrics(
             market_price=latest_price,
-            risk= risk_return_metrics(prices, risk_free_rate=risk_free_rate),
+            risk=risk,
             valuation_depth=valuation_depth,
             dividend_history=self.repo.dividend_history(asset_id),
             annual_dividend=dividend,
             forecast_years=forecast_years,
+        )
+        ai_context = asset_ai_context(
+            asset_id=asset_id,
+            latest_price=latest_price,
+            risk=risk,
+            relative=relative,
+            dividend_discount=dividend_discount,
+            discounted_cash_flow=discounted_cash_flow,
+            valuation_depth=valuation_depth,
+            etf=etf,
+            forecast=forecast,
         )
 
         return AssetAnalyticsReport(
             asset_id=asset_id,
             latest_price=latest_price,
             data_coverage=self.repo.data_coverage(),
-            risk=risk_return_metrics(prices, risk_free_rate=risk_free_rate),
-            relative=relative_risk_metrics(prices, benchmark, risk_free_rate)
-            if benchmark
-            else None,
-            dividend_discount=dividend_discount_model(
-                annual_dividend=dividend,
-                market_price=latest_price,
-                discount_rate=discount_rate,
-                growth_rate=dividend_growth_rate,
-                forecast_years=forecast_years,
-            ),
-            discounted_cash_flow=discounted_cash_flow_model(
-                cashflow_per_share=fcf_per_share,
-                market_price=latest_price,
-                discount_rate=discount_rate,
-                growth_rate=dividend_growth_rate,
-                terminal_growth_rate=terminal_growth_rate,
-                forecast_years=forecast_years,
-            ),
+            risk=risk,
+            relative=relative,
+            dividend_discount=dividend_discount,
+            discounted_cash_flow=discounted_cash_flow,
             valuation_depth=valuation_depth,
             etf=etf,
             forecast=forecast,
+            ai_context=ai_context,
         )
 
     def portfolio_report(
@@ -820,6 +882,17 @@ class AnalyticsEngine:
             missing.append("portfolio positions")
         if not portfolio_prices:
             missing.append("overlapping position price history")
+        ai_context = portfolio_ai_context(
+            portfolio_id=portfolio_id,
+            positions=weighted_positions,
+            market_value=total_value,
+            performance=performance,
+            risk_decomposition=risk_decomposition,
+            risk=risk,
+            relative=relative,
+            forecast=forecast,
+            missing_inputs=missing,
+        )
 
         return PortfolioAnalyticsReport(
             portfolio_id=portfolio_id,
@@ -831,6 +904,7 @@ class AnalyticsEngine:
             relative=relative,
             forecast=forecast,
             missing_inputs=missing,
+            ai_context=ai_context,
         )
 
     def _synthetic_portfolio_prices(self, positions: list[PositionAnalytics]) -> list[PricePoint]:
@@ -2180,6 +2254,488 @@ def forecast_missing_inputs(
     if simulation is None:
         missing.append("simulation inputs")
     return missing
+
+
+def asset_ai_context(
+    asset_id: str,
+    latest_price: float | None,
+    risk: RiskReturnMetrics,
+    relative: RelativeRiskMetrics | None,
+    dividend_discount: ValuationResult,
+    discounted_cash_flow: ValuationResult,
+    valuation_depth: ValuationDepthMetrics,
+    etf: ETFAnalytics | None,
+    forecast: ForecastMetrics,
+) -> AIReadinessContext:
+    missing = sorted(
+        set(
+            dividend_discount.missing_inputs
+            + discounted_cash_flow.missing_inputs
+            + valuation_depth.missing_inputs
+            + forecast.missing_inputs
+            + (etf.missing_inputs if etf else [])
+        )
+    )
+    facts = [
+        _analytics_fact("latest_price", "Latest price", latest_price, "currency", "market_price"),
+        _analytics_fact("cagr", "Historical CAGR", risk.cagr, "percent", "risk_return"),
+        _analytics_fact(
+            "annualized_volatility",
+            "Annualized volatility",
+            risk.annualized_volatility,
+            "percent",
+            "risk_return",
+        ),
+        _analytics_fact("sharpe_ratio", "Sharpe ratio", risk.sharpe_ratio, "ratio", "risk_return"),
+        _analytics_fact("sortino_ratio", "Sortino ratio", risk.sortino_ratio, "ratio", "risk_return"),
+        _analytics_fact("max_drawdown", "Max drawdown", risk.max_drawdown, "percent", "risk_return"),
+        _analytics_fact("beta", "Beta", relative.beta if relative else None, "ratio", "relative_risk"),
+        _analytics_fact(
+            "alpha_annualized",
+            "Annualized alpha",
+            relative.alpha_annualized if relative else None,
+            "percent",
+            "relative_risk",
+        ),
+        _analytics_fact(
+            "ddm_intrinsic_value",
+            "DDM intrinsic value",
+            dividend_discount.intrinsic_value_per_share,
+            "currency",
+            "dividend_discount",
+        ),
+        _analytics_fact(
+            "dcf_intrinsic_value",
+            "DCF intrinsic value",
+            discounted_cash_flow.intrinsic_value_per_share,
+            "currency",
+            "discounted_cash_flow",
+        ),
+        _analytics_fact(
+            "dcf_margin_of_safety",
+            "DCF margin of safety",
+            discounted_cash_flow.margin_of_safety,
+            "percent",
+            "discounted_cash_flow",
+        ),
+        _analytics_fact("pe_ratio", "P/E ratio", valuation_depth.pe_ratio, "ratio", "valuation_depth"),
+        _analytics_fact(
+            "price_to_free_cash_flow",
+            "Price to free cash flow",
+            valuation_depth.price_to_free_cash_flow,
+            "ratio",
+            "valuation_depth",
+        ),
+        _analytics_fact(
+            "debt_to_equity",
+            "Debt to equity",
+            valuation_depth.debt_to_equity,
+            "ratio",
+            "valuation_depth",
+        ),
+        _analytics_fact(
+            "blended_expected_cagr",
+            "Blended expected CAGR",
+            forecast.blended_expected_cagr,
+            "percent",
+            "forecast",
+        ),
+    ]
+    if etf is not None:
+        facts.extend(
+            [
+                _analytics_fact("is_etf", "Is ETF", etf.is_etf, None, "etf_profile"),
+                _analytics_fact("expense_ratio", "Expense ratio", etf.expense_ratio, "percent", "etf_profile"),
+                _analytics_fact(
+                    "distribution_yield",
+                    "Distribution yield",
+                    etf.distribution_yield,
+                    "percent",
+                    "etf_profile",
+                ),
+                _analytics_fact(
+                    "tracking_error",
+                    "Tracking error",
+                    etf.tracking_error,
+                    "percent",
+                    "etf_profile",
+                ),
+                _analytics_fact("holding_count", "ETF holding count", etf.holding_count, "count", "etf_holdings"),
+            ]
+        )
+
+    explanations = [
+        AnalyticsExplanation(
+            topic="risk",
+            summary=_asset_risk_summary(risk),
+            evidence=_present_fact_labels(facts, ["cagr", "annualized_volatility", "sharpe_ratio", "max_drawdown"]),
+        ),
+        AnalyticsExplanation(
+            topic="valuation",
+            summary=_asset_valuation_summary(discounted_cash_flow, valuation_depth),
+            evidence=_present_fact_labels(facts, ["dcf_intrinsic_value", "dcf_margin_of_safety", "pe_ratio"]),
+        ),
+        AnalyticsExplanation(
+            topic="forecast",
+            summary=_forecast_summary(forecast),
+            evidence=_present_fact_labels(facts, ["blended_expected_cagr"]),
+        ),
+    ]
+    if etf is not None and etf.is_etf:
+        explanations.append(
+            AnalyticsExplanation(
+                topic="etf",
+                summary=f"ETF profile covers {etf.holding_count} holdings and benchmark {etf.benchmark_index_id or 'unknown'}.",
+                evidence=_present_fact_labels(facts, ["expense_ratio", "distribution_yield", "tracking_error"]),
+            )
+        )
+
+    anomalies = asset_ai_anomalies(risk, discounted_cash_flow, valuation_depth, etf, missing)
+    summary = _asset_ai_summary(asset_id, latest_price, forecast, anomalies, missing)
+    snapshot_hash = _ai_snapshot_hash(facts, anomalies, missing)
+    return AIReadinessContext(
+        subject_type="asset",
+        subject_id=asset_id,
+        summary=summary,
+        facts=facts,
+        explanations=explanations,
+        anomalies=anomalies,
+        missing_inputs=missing,
+        snapshot_hash=snapshot_hash,
+    )
+
+
+def portfolio_ai_context(
+    portfolio_id: int,
+    positions: list[PositionAnalytics],
+    market_value: float,
+    performance: PortfolioPerformanceMetrics,
+    risk_decomposition: PortfolioRiskDecomposition,
+    risk: RiskReturnMetrics | None,
+    relative: RelativeRiskMetrics | None,
+    forecast: ForecastMetrics,
+    missing_inputs: list[str],
+) -> AIReadinessContext:
+    missing = sorted(set(missing_inputs + risk_decomposition.missing_inputs + forecast.missing_inputs))
+    facts = [
+        _analytics_fact("market_value", "Market value", market_value, "currency", "portfolio_positions"),
+        _analytics_fact("position_count", "Position count", len(positions), "count", "portfolio_positions"),
+        _analytics_fact(
+            "modified_dietz_return",
+            "Modified Dietz return",
+            performance.modified_dietz_return,
+            "percent",
+            "portfolio_performance",
+        ),
+        _analytics_fact(
+            "money_weighted_return",
+            "Money-weighted return",
+            performance.money_weighted_return,
+            "percent",
+            "portfolio_performance",
+        ),
+        _analytics_fact("portfolio_cagr", "Portfolio CAGR", risk.cagr if risk else None, "percent", "risk_return"),
+        _analytics_fact(
+            "portfolio_volatility",
+            "Portfolio volatility",
+            risk_decomposition.portfolio_volatility,
+            "percent",
+            "risk_decomposition",
+        ),
+        _analytics_fact("sharpe_ratio", "Sharpe ratio", risk.sharpe_ratio if risk else None, "ratio", "risk_return"),
+        _analytics_fact(
+            "sortino_ratio",
+            "Sortino ratio",
+            risk.sortino_ratio if risk else None,
+            "ratio",
+            "risk_return",
+        ),
+        _analytics_fact("beta", "Beta", relative.beta if relative else None, "ratio", "relative_risk"),
+        _analytics_fact(
+            "alpha_annualized",
+            "Annualized alpha",
+            relative.alpha_annualized if relative else None,
+            "percent",
+            "relative_risk",
+        ),
+        _analytics_fact(
+            "concentration_hhi",
+            "Concentration HHI",
+            risk_decomposition.concentration_hhi,
+            "ratio",
+            "risk_decomposition",
+        ),
+        _analytics_fact(
+            "largest_position_weight",
+            "Largest position weight",
+            risk_decomposition.largest_position_weight,
+            "percent",
+            "risk_decomposition",
+        ),
+        _analytics_fact(
+            "diversification_score",
+            "Diversification score",
+            risk_decomposition.diversification_score,
+            "score",
+            "risk_decomposition",
+        ),
+        _analytics_fact(
+            "blended_expected_cagr",
+            "Blended expected CAGR",
+            forecast.blended_expected_cagr,
+            "percent",
+            "forecast",
+        ),
+    ]
+    explanations = [
+        AnalyticsExplanation(
+            topic="portfolio_performance",
+            summary=_portfolio_performance_summary(performance, risk),
+            evidence=_present_fact_labels(facts, ["market_value", "money_weighted_return", "portfolio_cagr"]),
+        ),
+        AnalyticsExplanation(
+            topic="portfolio_risk",
+            summary=_portfolio_risk_summary(risk_decomposition),
+            evidence=_present_fact_labels(
+                facts,
+                ["portfolio_volatility", "concentration_hhi", "largest_position_weight", "diversification_score"],
+            ),
+        ),
+        AnalyticsExplanation(
+            topic="forecast",
+            summary=_forecast_summary(forecast),
+            evidence=_present_fact_labels(facts, ["blended_expected_cagr"]),
+        ),
+    ]
+    anomalies = portfolio_ai_anomalies(risk_decomposition, risk, missing)
+    summary = _portfolio_ai_summary(portfolio_id, market_value, positions, anomalies, missing)
+    snapshot_hash = _ai_snapshot_hash(facts, anomalies, missing)
+    return AIReadinessContext(
+        subject_type="portfolio",
+        subject_id=str(portfolio_id),
+        summary=summary,
+        facts=facts,
+        explanations=explanations,
+        anomalies=anomalies,
+        missing_inputs=missing,
+        snapshot_hash=snapshot_hash,
+    )
+
+
+def compare_ai_snapshot_facts(
+    previous: AIReadinessContext,
+    current: AIReadinessContext,
+) -> list[SnapshotMetricChange]:
+    previous_facts = {fact.key: fact.value for fact in previous.facts}
+    current_facts = {fact.key: fact.value for fact in current.facts}
+    changes = []
+    for key in sorted(previous_facts.keys() | current_facts.keys()):
+        previous_value = previous_facts.get(key)
+        current_value = current_facts.get(key)
+        if previous_value == current_value:
+            continue
+        absolute = None
+        relative = None
+        if _is_number(previous_value) and _is_number(current_value):
+            absolute = float(current_value) - float(previous_value)
+            relative = safe_div(absolute, float(previous_value))
+        changes.append(
+            SnapshotMetricChange(
+                key=key,
+                previous_value=previous_value,
+                current_value=current_value,
+                absolute_change=absolute,
+                relative_change=relative,
+            )
+        )
+    return changes
+
+
+def asset_ai_anomalies(
+    risk: RiskReturnMetrics,
+    discounted_cash_flow: ValuationResult,
+    valuation_depth: ValuationDepthMetrics,
+    etf: ETFAnalytics | None,
+    missing_inputs: list[str],
+) -> list[AnalyticsAnomaly]:
+    anomalies: list[AnalyticsAnomaly] = []
+    if risk.annualized_volatility is not None and risk.annualized_volatility > 0.40:
+        anomalies.append(
+            AnalyticsAnomaly("high", "annualized_volatility", "Annualized volatility is above 40%.", risk.annualized_volatility)
+        )
+    if risk.max_drawdown is not None and risk.max_drawdown < -0.30:
+        anomalies.append(AnalyticsAnomaly("high", "max_drawdown", "Maximum drawdown is deeper than 30%.", risk.max_drawdown))
+    if discounted_cash_flow.margin_of_safety is not None and discounted_cash_flow.margin_of_safety < -0.20:
+        anomalies.append(
+            AnalyticsAnomaly(
+                "medium",
+                "dcf_margin_of_safety",
+                "DCF estimate is more than 20% below market price.",
+                discounted_cash_flow.margin_of_safety,
+            )
+        )
+    if valuation_depth.pe_ratio is not None and valuation_depth.pe_ratio > 40:
+        anomalies.append(AnalyticsAnomaly("medium", "pe_ratio", "P/E ratio is above 40.", valuation_depth.pe_ratio))
+    if valuation_depth.debt_to_equity is not None and valuation_depth.debt_to_equity > 2:
+        anomalies.append(
+            AnalyticsAnomaly("medium", "debt_to_equity", "Debt-to-equity is above 2.", valuation_depth.debt_to_equity)
+        )
+    if etf and etf.tracking_error is not None and etf.tracking_error > 0.05:
+        anomalies.append(
+            AnalyticsAnomaly("medium", "tracking_error", "ETF tracking error is above 5%.", etf.tracking_error)
+        )
+    if missing_inputs:
+        anomalies.append(
+            AnalyticsAnomaly("low", "missing_inputs", "Some analytics inputs are unavailable.", len(missing_inputs))
+        )
+    return anomalies
+
+
+def portfolio_ai_anomalies(
+    risk_decomposition: PortfolioRiskDecomposition,
+    risk: RiskReturnMetrics | None,
+    missing_inputs: list[str],
+) -> list[AnalyticsAnomaly]:
+    anomalies: list[AnalyticsAnomaly] = []
+    largest = risk_decomposition.largest_position_weight
+    hhi = risk_decomposition.concentration_hhi
+    if (largest is not None and largest > 0.25) or (hhi is not None and hhi > 0.25):
+        anomalies.append(
+            AnalyticsAnomaly("high", "concentration", "Portfolio concentration is elevated.", largest or hhi)
+        )
+    score = risk_decomposition.diversification_score
+    if score is not None and score < 50:
+        anomalies.append(AnalyticsAnomaly("medium", "diversification_score", "Diversification score is below 50.", score))
+    volatility = risk_decomposition.portfolio_volatility or (risk.annualized_volatility if risk else None)
+    if volatility is not None and volatility > 0.35:
+        anomalies.append(AnalyticsAnomaly("medium", "portfolio_volatility", "Portfolio volatility is above 35%.", volatility))
+    if missing_inputs:
+        anomalies.append(
+            AnalyticsAnomaly("low", "missing_inputs", "Some portfolio analytics inputs are unavailable.", len(missing_inputs))
+        )
+    return anomalies
+
+
+def _analytics_fact(
+    key: str,
+    label: str,
+    value: float | int | str | bool | None,
+    unit: str | None,
+    source: str,
+) -> AnalyticsFact:
+    confidence = 1.0 if value is not None else 0.0
+    return AnalyticsFact(
+        key=key,
+        label=label,
+        value=value,
+        unit=unit,
+        source=source,
+        confidence=confidence,
+    )
+
+
+def _present_fact_labels(facts: list[AnalyticsFact], keys: list[str]) -> list[str]:
+    by_key = {fact.key: fact for fact in facts}
+    return [by_key[key].label for key in keys if key in by_key and by_key[key].value is not None]
+
+
+def _asset_ai_summary(
+    asset_id: str,
+    latest_price: float | None,
+    forecast: ForecastMetrics,
+    anomalies: list[AnalyticsAnomaly],
+    missing_inputs: list[str],
+) -> str:
+    price = f"latest price {latest_price:.2f}" if latest_price is not None else "no latest price"
+    expected = forecast.blended_expected_cagr
+    expectation = f"blended expected CAGR {expected:.2%}" if expected is not None else "no blended CAGR"
+    return (
+        f"{asset_id} has {price}, {expectation}, "
+        f"{len(anomalies)} anomaly flags, and {len(missing_inputs)} missing input groups."
+    )
+
+
+def _portfolio_ai_summary(
+    portfolio_id: int,
+    market_value: float,
+    positions: list[PositionAnalytics],
+    anomalies: list[AnalyticsAnomaly],
+    missing_inputs: list[str],
+) -> str:
+    return (
+        f"Portfolio {portfolio_id} has market value {market_value:.2f}, "
+        f"{len(positions)} positions, {len(anomalies)} anomaly flags, "
+        f"and {len(missing_inputs)} missing input groups."
+    )
+
+
+def _asset_risk_summary(risk: RiskReturnMetrics) -> str:
+    if risk.cagr is None and risk.annualized_volatility is None:
+        return "Return history is insufficient for risk-adjusted analytics."
+    cagr_text = f"CAGR {risk.cagr:.2%}" if risk.cagr is not None else "CAGR unavailable"
+    vol_text = (
+        f"annualized volatility {risk.annualized_volatility:.2%}"
+        if risk.annualized_volatility is not None
+        else "volatility unavailable"
+    )
+    return f"Historical risk profile shows {cagr_text} with {vol_text}."
+
+
+def _asset_valuation_summary(
+    discounted_cash_flow: ValuationResult,
+    valuation_depth: ValuationDepthMetrics,
+) -> str:
+    if discounted_cash_flow.margin_of_safety is not None:
+        return f"DCF margin of safety is {discounted_cash_flow.margin_of_safety:.2%}."
+    if valuation_depth.pe_ratio is not None:
+        return f"Valuation context is available with P/E of {valuation_depth.pe_ratio:.2f}."
+    return "Valuation inputs are not yet complete enough for a firm intrinsic value view."
+
+
+def _portfolio_performance_summary(
+    performance: PortfolioPerformanceMetrics,
+    risk: RiskReturnMetrics | None,
+) -> str:
+    if performance.money_weighted_return is not None:
+        return f"Money-weighted return is {performance.money_weighted_return:.2%}."
+    if risk and risk.cagr is not None:
+        return f"Synthetic portfolio CAGR is {risk.cagr:.2%}."
+    return "Portfolio performance needs more cash-flow or price history."
+
+
+def _portfolio_risk_summary(risk_decomposition: PortfolioRiskDecomposition) -> str:
+    if risk_decomposition.largest_position_weight is None:
+        return "Portfolio concentration cannot be assessed without valued positions."
+    return (
+        f"Largest position weight is {risk_decomposition.largest_position_weight:.2%}; "
+        f"diversification score is {risk_decomposition.diversification_score or 0.0:.2f}."
+    )
+
+
+def _forecast_summary(forecast: ForecastMetrics) -> str:
+    if forecast.blended_expected_cagr is None:
+        return "Forecast inputs are incomplete."
+    return f"Blended expected CAGR is {forecast.blended_expected_cagr:.2%} over {forecast.horizon_years} years."
+
+
+def _ai_snapshot_hash(
+    facts: list[AnalyticsFact],
+    anomalies: list[AnalyticsAnomaly],
+    missing_inputs: list[str],
+) -> str:
+    encoded = json.dumps(
+        {
+            "facts": _json_ready([asdict(fact) for fact in facts]),
+            "anomalies": _json_ready([asdict(anomaly) for anomaly in anomalies]),
+            "missing_inputs": missing_inputs,
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def dividend_discount_model(

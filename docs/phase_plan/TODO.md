@@ -10,6 +10,10 @@ Design Decisions: [ADR's](../adr/adr_ph3.md)
     - Dividend discount model
     - Discounted cash flow model
     - Implied priced-in growth
+    - Valuation depth metrics from stored statement JSON
+    - ETF expense, distribution, tracking-error, exposure, holding, and overlap analytics
+    - Forecast metrics with blended expected CAGR and simulation bands
+    - AI-ready facts, explanations, anomaly flags, and snapshot comparisons
     - Portfolio weighted return series
 - Data coverage and missing-input reporting
 - Optional analytics snapshot storage
@@ -22,7 +26,6 @@ Design Decisions: [ADR's](../adr/adr_ph3.md)
 - Add CLI/dashboard commands for analytics reports
 - Add user-facing configuration for enabling analytics storage
 - Add migration/schema docs for analytics snapshot tables once the storage surface is promoted beyond service-level opt-in
-- Expand normalized fundamental metric extraction from raw statement JSON
 - Add benchmark default selection per portfolio or asset geography
 
 ## Phase 2 - Metric Ingestion

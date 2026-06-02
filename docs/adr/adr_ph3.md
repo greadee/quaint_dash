@@ -38,6 +38,26 @@ Analytics must therefore work with partial data and identify missing inputs clea
   - discounted cash flow model
   - margin of safety
   - implied priced-in growth
+- Valuation depth analytics include:
+  - revenue, EPS, and free-cash-flow growth
+  - gross, operating, and net margins
+  - return on equity and return on assets
+  - debt-to-equity and net debt-to-EBITDA
+  - payout ratio and valuation multiples
+  - bear/base/bull DCF scenarios
+- ETF analytics include:
+  - expense ratio
+  - distribution yield
+  - tracking error
+  - top holdings
+  - sector, country, and currency exposure
+  - overlap with direct portfolio holdings
+- Forecast analytics include:
+  - expected CAGR from valuation mean reversion
+  - dividend growth projection
+  - fundamental growth assumption
+  - blended expected CAGR
+  - deterministic p10/p50/p90 simulation bands
 - Missing dividends, financial statements, market prices, or benchmark data are reported as missing inputs.
 
 ## ADR-062: Existing Data Before New Ingestion
@@ -99,6 +119,33 @@ Advanced analytics can produce many derived values and JSON payloads. These snap
   - full JSON payloads for future AI context
   - missing-input JSON
   - refresh timestamps
+
+## ADR-065: AI-Ready Analytics Context
+
+**Decision:** Asset and portfolio analytics reports include structured AI-readiness context inside the existing report payload.
+
+**Context:**
+The future AI layer should be able to answer questions from a predictable, compact representation of the latest analytics without reverse-engineering every raw metric object. The context must still be derived from deterministic analytics outputs and should not require analytics storage to be enabled.
+
+**Rationale:**
+- Gives the AI layer stable facts, summaries, explanations, and anomaly flags
+- Keeps optional storage useful by persisting the same context in report JSON payloads
+- Avoids adding new tables before the AI product surface is finalized
+- Supports comparing stored snapshots over time through fact-level change detection
+- Keeps missing-input caveats visible to downstream consumers
+
+**Implementation Notes:**
+- `AssetAnalyticsReport` and `PortfolioAnalyticsReport` include `ai_context`.
+- `AIReadinessContext` contains:
+  - subject type and id
+  - summary
+  - structured facts
+  - explanations with supporting evidence labels
+  - anomaly flags
+  - missing inputs
+  - snapshot hash
+- `compare_ai_snapshot_facts()` reports fact changes between two contexts with absolute and relative change values when both sides are numeric.
+- Anomaly flags currently cover missing inputs, high volatility, drawdown, valuation downside, high P/E, leverage, ETF tracking error, concentration, low diversification, and portfolio volatility.
 
 ## ADR-064: Daily and Portfolio-Change Refresh Cadence
 

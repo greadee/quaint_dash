@@ -5,10 +5,13 @@ from datetime import date, timedelta
 import pytest
 
 from dashboard.analytics import (
+    AIReadinessContext,
+    AnalyticsFact,
     AnalyticsEngine,
     AnalyticsRepository,
     AnalyticsStorageService,
     PricePoint,
+    compare_ai_snapshot_facts,
     discounted_cash_flow_model,
     dividend_discount_model,
     implied_dcf_growth_rate,
@@ -125,6 +128,10 @@ def test_asset_report_uses_existing_db_inputs_and_marks_missing_fundamentals(tmp
     assert "income statement" in report.valuation_depth.missing_inputs
     assert report.etf is None
     assert "fundamental growth history" in report.forecast.missing_inputs
+    assert report.ai_context.subject_type == "asset"
+    assert report.ai_context.snapshot_hash is not None
+    assert any(fact.key == "latest_price" for fact in report.ai_context.facts)
+    assert any(anomaly.metric == "missing_inputs" for anomaly in report.ai_context.anomalies)
 
 
 def test_portfolio_report_builds_weighted_return_series(tmp_path):
@@ -177,6 +184,10 @@ def test_portfolio_report_builds_weighted_return_series(tmp_path):
     assert report.risk_decomposition.diversification_score == pytest.approx(64.0)
     assert report.forecast.simulation is not None
     assert report.missing_inputs == []
+    assert report.ai_context.subject_type == "portfolio"
+    assert report.ai_context.snapshot_hash is not None
+    assert any(fact.key == "market_value" for fact in report.ai_context.facts)
+    assert any(anomaly.metric == "concentration" for anomaly in report.ai_context.anomalies)
 
 
 def test_portfolio_performance_tracks_cash_flows_income_and_gains():
@@ -404,6 +415,39 @@ def test_asset_report_includes_valuation_depth_from_statement_json(tmp_path):
     assert report.forecast.expected_cagr_from_valuation is not None
     assert report.forecast.fundamental_growth_assumption == pytest.approx(0.20)
     assert report.forecast.blended_expected_cagr is not None
+    assert report.ai_context.summary.startswith("AAPL has latest price")
+    assert any(explanation.topic == "valuation" for explanation in report.ai_context.explanations)
+
+
+def test_ai_snapshot_fact_comparison_reports_metric_changes():
+    previous = AIReadinessContext(
+        subject_type="asset",
+        subject_id="AAPL",
+        summary="previous",
+        facts=[
+            AnalyticsFact("latest_price", "Latest price", 100.0, "currency", "market_price", 1.0),
+            AnalyticsFact("pe_ratio", "P/E ratio", 20.0, "ratio", "valuation_depth", 1.0),
+        ],
+    )
+    current = AIReadinessContext(
+        subject_type="asset",
+        subject_id="AAPL",
+        summary="current",
+        facts=[
+            AnalyticsFact("latest_price", "Latest price", 110.0, "currency", "market_price", 1.0),
+            AnalyticsFact("pe_ratio", "P/E ratio", 20.0, "ratio", "valuation_depth", 1.0),
+            AnalyticsFact("sharpe_ratio", "Sharpe ratio", 1.2, "ratio", "risk_return", 1.0),
+        ],
+    )
+
+    changes = compare_ai_snapshot_facts(previous, current)
+
+    latest_price = next(change for change in changes if change.key == "latest_price")
+    sharpe = next(change for change in changes if change.key == "sharpe_ratio")
+    assert latest_price.absolute_change == pytest.approx(10.0)
+    assert latest_price.relative_change == pytest.approx(0.10)
+    assert sharpe.previous_value is None
+    assert sharpe.current_value == pytest.approx(1.2)
 
 
 def test_forecasting_projects_dividend_growth_and_simulation_bands():
