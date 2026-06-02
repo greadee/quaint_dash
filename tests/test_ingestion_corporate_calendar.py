@@ -246,6 +246,23 @@ def test_scheduler_calendar_refresh_only_runs_when_due():
     third_job_ids = service.schedule_calendar_refresh_if_due()
     assert len(third_job_ids) == 0
 
+
+def test_scheduler_entry_points_do_not_require_provider_or_api_key(monkeypatch):
+    conn = make_conn()
+    service = CorporateCalendarIngestionService(conn)
+
+    def fail_provider_init(*args, **kwargs):
+        raise AssertionError("provider should not be initialized for scheduling")
+
+    monkeypatch.setattr(
+        "dashboard.ingestion.corporate_calendar.service.FmpCorporateCalendarProvider",
+        fail_provider_init,
+    )
+
+    job_ids = service.schedule_calendar_refresh_if_due()
+
+    assert len(job_ids) == 1
+
 def test_scheduler_enqueues_fundamental_updates_after_earnings_event():
     conn = make_conn()
     service = CorporateCalendarIngestionService(conn, provider=FakeCorporateProvider())

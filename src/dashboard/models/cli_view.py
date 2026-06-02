@@ -121,10 +121,9 @@ class DashboardView(View):
                 open <portfolio-name>, 
                 import <csv-path>,
 
-                market-backfill-enqueue <asset-id|all> [--years N] [--prices-only],
-                market-backfill-run [--max-jobs N],
-                market-refresh-enqueue <asset-id|all> [--prices-only],
-                market-refresh-run [--max-jobs N],
+                job list [--status pending|running|done|failed] [--domain market|corporate],
+                job schedule [pipeline] [--target asset-id|all] [--max-assets N],
+                job run [all|market|corporate] [--max-jobs N],
                 live-price-stream [--include-watchlist] [--no-extended-hours],
 
                 help [command-name], 
@@ -230,60 +229,47 @@ class DashboardView(View):
             importer = TxnImporterCSV(self.access, ns.csv_path)
             importer.run()
             return self
-        
-        if cmd == "market-backfill-enqueue":
-            asset_id = None if ns.target.lower() == "all" else ns.target
-            include_dividends = not ns.prices_only
-            include_splits = not ns.prices_only
 
-            n_jobs = self.access.enqueue_market_backfill(
-                asset_id=asset_id,
-                years=ns.years,
-                include_dividends=include_dividends,
-                include_splits=include_splits,
-            )
+        if cmd == "job":
+            if ns.job_command == "list":
+                rows = self.access.list_ingestion_jobs(
+                    statuses=None if ns.all else (ns.status or ["pending", "running"]),
+                    domain=ns.domain,
+                    limit=ns.n,
+                )
+                self._print_ingestion_jobs(rows)
+                return self
 
-            print(f"Enqueued {n_jobs} market backfill job(s).")
-            return self
+            if ns.job_command == "schedule":
+                asset_id = None if ns.target is None else ns.target
+                try:
+                    n_jobs = self.access.schedule_ingestion_jobs(
+                        pipeline=ns.pipeline,
+                        asset_id=asset_id,
+                        max_assets=ns.max_assets,
+                        years=ns.years,
+                        prices_only=ns.prices_only,
+                        calendar_year=ns.year,
+                    )
+                except ValueError as exc:
+                    print(exc)
+                    return self
 
-        if cmd == "market-backfill-run":
-            n_done = self.access.run_market_backfill_jobs(max_jobs=ns.max_jobs)
-            print(f"Processed {n_done} market backfill job(s).")
-            return self
+                print(f"Scheduled/refreshed {n_jobs} ingestion item(s).")
+                return self
 
-        if cmd == "market-refresh-enqueue":
-            asset_id = None if ns.target.lower() == "all" else ns.target
-            include_dividends = not ns.prices_only
-            include_splits = not ns.prices_only
+            if ns.job_command == "run":
+                try:
+                    n_done = self.access.run_ingestion_jobs(
+                        domain=ns.domain,
+                        max_jobs=ns.max_jobs,
+                    )
+                except ValueError as exc:
+                    print(exc)
+                    return self
 
-            n_jobs = self.access.enqueue_market_refresh(
-                asset_id=asset_id,
-                include_dividends=include_dividends,
-                include_splits=include_splits,
-            )
-
-            print(f"Enqueued {n_jobs} market refresh job(s).")
-            return self
-
-        if cmd == "market-refresh-run":
-            n_done = self.access.run_market_refresh_jobs(max_jobs=ns.max_jobs)
-            print(f"Processed {n_done} market refresh job(s).")
-            return self
-        
-        if cmd == "asset-metadata-refresh":
-            asset_id = None if ns.target.lower() == "all" else ns.target
-            n = self.access.refresh_asset_metadata(asset_id)
-            print(f"Refreshed metadata for {n} asset(s).")
-            return self
-        
-        if cmd == "trading-calendar-refresh":
-            market_code = None if ns.target.lower() == "all" else ns.target
-            n = self.access.refresh_trading_calendar(
-                market_code=market_code,
-                year=ns.year,
-            )
-            print(f"Refreshed {n} trading calendar day(s).")
-            return self
+                print(f"Processed {n_done} ingestion job(s).")
+                return self
         
         if cmd == "live-price-stream":
             print("Starting live price stream.")
@@ -326,6 +312,36 @@ class DashboardView(View):
             print("help [command]: show general help or command help")
         else:
             print(f"No such command: {cmd}")
+
+    @staticmethod
+    def _print_ingestion_jobs(rows) -> None:
+        if not rows:
+            print("No ingestion jobs found.")
+            return
+
+        print(
+            "| job_id | asset_id | domain | job_type | dataset | status | attempts | updated_at |"
+        )
+        for row in rows:
+            (
+                job_id,
+                asset_id,
+                domain,
+                job_type,
+                dataset,
+                status,
+                _priority,
+                _start_date,
+                _end_date,
+                attempt_count,
+                _error_message,
+                _created_at,
+                updated_at,
+            ) = row
+            print(
+                f"| {job_id} | {asset_id} | {domain} | {job_type} | "
+                f"{dataset} | {status} | {attempt_count} | {updated_at} |"
+            )
 
     @staticmethod
     def build_dash_parsers():
@@ -386,39 +402,44 @@ class DashboardView(View):
         p.add_argument("csv_path", help="Path to CSV file")
         parsers["import"] = p
 
-        # market backfill enqueue parser
-        p = _NoExitParser(prog="market-backfill-enqueue", add_help=True, description="Enqueue Domain A market backfill jobs.",)
-        p.add_argument("target", help="Asset id to backfill, or 'all' for every asset.",)
-        p.add_argument("--years", dest="years", type=int, default=10, help="Number of years of market history to backfill. Default: 10.",)
-        p.add_argument("--prices-only", dest="prices_only", action="store_true", help="Only enqueue daily price jobs. Skip dividends and splits.",)
-        parsers["market-backfill-enqueue"] = p
+        p = _NoExitParser(prog="job", add_help=True, description="Inspect, schedule, and run ingestion jobs.")
+        job_subp = p.add_subparsers(dest="job_command", required=True)
 
-        # market backfill run parser
-        p = _NoExitParser(prog="market-backfill-run", add_help=True, description="Process queued Domain A market backfill jobs.",)
-        p.add_argument("--max-jobs", dest="max_jobs", type=int, default=1, help="Maximum number of jobs to process in this run. Default: 1.",)
-        parsers["market-backfill-run"] = p
+        p_list = job_subp.add_parser("list", add_help=True, description="List ingestion jobs.")
+        p_list.add_argument("--status", dest="status", action="append", default=None)
+        p_list.add_argument("--domain", dest="domain", choices=["market", "corporate"], default=None)
+        p_list.add_argument("--all", dest="all", action="store_true")
+        p_list.add_argument("-n", "--n", dest="n", type=int, default=None)
 
-        # market refresh enqueue parser
-        p = _NoExitParser(prog="market-refresh-enqueue", add_help=True, description="Enqueue Domain A market refresh jobs.",)
-        p.add_argument("target", help="Asset id to refresh, or 'all' for every asset.",)
-        p.add_argument("--prices-only", dest="prices_only", action="store_true", help="Only enqueue daily price jobs. Skip dividends and splits.",)
-        parsers["market-refresh-enqueue"] = p
+        p_schedule = job_subp.add_parser("schedule", add_help=True, description="Schedule ingestion work.")
+        p_schedule.add_argument(
+            "pipeline",
+            nargs="?",
+            default="all",
+            choices=[
+                "all",
+                "price-backfill",
+                "due-price-backfill",
+                "price-refresh",
+                "corporate-calendar",
+                "earnings-updates",
+                "fundamentals-backfill",
+                "fundamentals-refresh",
+                "metadata",
+                "trading-calendar",
+            ],
+        )
+        p_schedule.add_argument("--target", dest="target", default=None)
+        p_schedule.add_argument("--max-assets", dest="max_assets", type=int, default=25)
+        p_schedule.add_argument("--years", dest="years", type=int, default=10)
+        p_schedule.add_argument("--prices-only", dest="prices_only", action="store_true")
+        p_schedule.add_argument("--year", dest="year", type=int, default=None)
 
-        # market refresh run parser
-        p = _NoExitParser(prog="market-refresh-run", add_help=True, description="Process queued Domain A market refresh jobs.",)
-        p.add_argument("--max-jobs", dest="max_jobs", type=int, default=1, help="Maximum number of jobs to process in this run. Default: 1.",)
-        parsers["market-refresh-run"] = p
+        p_run = job_subp.add_parser("run", add_help=True, description="Process pending ingestion jobs.")
+        p_run.add_argument("domain", nargs="?", choices=["all", "market", "corporate"], default="all")
+        p_run.add_argument("--max-jobs", dest="max_jobs", type=int, default=1)
 
-        # metadata refresh run parser
-        p = _NoExitParser(prog="asset-metadata-refresh", add_help=True, description="Refresh FMP asset metadata for one asset or all assets.",)
-        p.add_argument("target", help="Asset id, or 'all'")
-        parsers["asset-metadata-refresh"] = p
-
-        # trading calendar refreh parser
-        p = _NoExitParser(prog="trading-calendar-refresh", add_help=True, description="Refresh US/CAN trading calendars.",)
-        p.add_argument("target", help="US, CAN, or all")
-        p.add_argument("--year", dest="year", type=int, default=None)
-        parsers["trading-calendar-refresh"] = p
+        parsers["job"] = p
 
         p = _NoExitParser(prog="live-price-stream", add_help=True, description="Start the live price streaming worker for portfolio assets.",)
         p.add_argument("--include-watchlist", dest="include_watchlist", action="store_true", help="Also stream active watchlist assets. Default: portfolio assets only.",)

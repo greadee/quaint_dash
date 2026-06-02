@@ -332,6 +332,164 @@ class DashboardManager:
 
         return len(job_ids)
 
+    def list_ingestion_jobs(
+        self,
+        statuses: list[str] | None = None,
+        domain: str | None = None,
+        limit: int | None = None,
+    ):
+        """
+        Return ingestion jobs for dev inspection.
+        """
+        where = []
+        params: list[object] = []
+
+        if statuses:
+            placeholders = ", ".join("?" for _ in statuses)
+            where.append(f"status IN ({placeholders})")
+            params.extend(statuses)
+
+        if domain:
+            where.append("domain = ?")
+            params.append(domain)
+
+        query = """
+            SELECT
+                job_id,
+                asset_id,
+                domain,
+                job_type,
+                dataset,
+                status,
+                priority,
+                requested_start_date,
+                requested_end_date,
+                attempt_count,
+                error_message,
+                created_at,
+                updated_at
+            FROM ingestion_job
+        """
+
+        if where:
+            query += " WHERE " + " AND ".join(where)
+
+        query += " ORDER BY status, priority DESC, created_at ASC"
+
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+
+        return self.conn.execute(query, params).fetchall()
+
+    def schedule_ingestion_jobs(
+        self,
+        pipeline: str = "all",
+        asset_id: str | None = None,
+        max_assets: int = 25,
+        years: int = 10,
+        prices_only: bool = False,
+        calendar_year: int | None = None,
+    ) -> int:
+        """
+        Master scheduler for dev ingestion commands.
+        """
+        include_dividends = not prices_only
+        include_splits = not prices_only
+        pipeline = pipeline.replace("_", "-").lower()
+
+        if asset_id is not None and asset_id.lower() == "all":
+            asset_id = None
+
+        if pipeline == "all":
+            total = 0
+            total += self.schedule_due_price_history_backfills(
+                max_assets=max_assets,
+                years=years,
+            )
+            total += self.enqueue_market_refresh(
+                asset_id=None,
+                include_dividends=include_dividends,
+                include_splits=include_splits,
+            )
+            total += self.schedule_due_corporate_calendar_refresh()
+            total += self.schedule_due_corporate_fundamental_updates(max_assets=max_assets)
+            total += self.schedule_due_fundamental_backfills(max_assets=max_assets)
+            total += self.schedule_due_fundamental_refreshes(max_assets=max_assets)
+            return total
+
+        if pipeline == "price-backfill":
+            return self.enqueue_market_backfill(
+                asset_id=asset_id,
+                years=years,
+                include_dividends=include_dividends,
+                include_splits=include_splits,
+            )
+
+        if pipeline == "due-price-backfill":
+            return self.schedule_due_price_history_backfills(
+                max_assets=max_assets,
+                years=years,
+            )
+
+        if pipeline == "price-refresh":
+            return self.enqueue_market_refresh(
+                asset_id=asset_id,
+                include_dividends=include_dividends,
+                include_splits=include_splits,
+            )
+
+        if pipeline == "corporate-calendar":
+            return self.schedule_due_corporate_calendar_refresh()
+
+        if pipeline == "earnings-updates":
+            return self.schedule_due_corporate_fundamental_updates(max_assets=max_assets)
+
+        if pipeline == "fundamentals-backfill":
+            return self.schedule_due_fundamental_backfills(max_assets=max_assets)
+
+        if pipeline == "fundamentals-refresh":
+            return self.schedule_due_fundamental_refreshes(max_assets=max_assets)
+
+        if pipeline == "metadata":
+            return self.refresh_due_asset_metadata(max_assets=max_assets)
+
+        if pipeline == "trading-calendar":
+            return self.refresh_trading_calendar(market_code="all", year=calendar_year)
+
+        raise ValueError(f"Unsupported ingestion pipeline: {pipeline}")
+
+    def run_ingestion_jobs(self, domain: str = "all", max_jobs: int = 1) -> int:
+        """
+        Process pending ingestion jobs through the shared dev command surface.
+        """
+        domain = domain.lower()
+
+        if domain == "market":
+            return PriceHistoryIngestionService(self.conn).process_jobs(max_jobs=max_jobs)
+
+        if domain == "corporate":
+            return CorporateCalendarIngestionService(self.conn).process_jobs(max_jobs=max_jobs)
+
+        if domain != "all":
+            raise ValueError(f"Unsupported ingestion job domain: {domain}")
+
+        completed = 0
+        while completed < max_jobs:
+            did_market = PriceHistoryIngestionService(self.conn).process_jobs(max_jobs=1)
+            if did_market:
+                completed += did_market
+                continue
+
+            did_corporate = CorporateCalendarIngestionService(self.conn).process_jobs(max_jobs=1)
+            if did_corporate:
+                completed += did_corporate
+                continue
+
+            break
+
+        return completed
+
     def run_market_backfill_jobs(self, max_jobs: int = 1) -> int:
         """
         Process queued Domain A market backfill jobs.

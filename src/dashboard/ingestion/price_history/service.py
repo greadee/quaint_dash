@@ -100,3 +100,9 @@ class PriceHistoryIngestionService:
                 break
             completed += 1
         return completed
+
+    def process_jobs(self, max_jobs: int = 1) -> int:
+        return self.process_backfill_jobs(max_jobs=max_jobs)
+
+    def process_refresh_jobs(self, max_jobs: int = 1) -> int:
+        return self.process_backfill_jobs(max_jobs=max_jobs)

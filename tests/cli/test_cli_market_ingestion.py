@@ -4,10 +4,10 @@ tests/test_market_cli_ingestion.py
 Tests Domain A market ingestion through the CLI View layer.
 
 Covers:
-  - market-backfill-enqueue
-  - market-backfill-run
-  - market-refresh-enqueue
-  - market-refresh-run
+  - job schedule price-backfill
+  - job schedule price-refresh
+  - job run market
+  - job list
   - ingestion_job queue behavior
   - asset_sync_state behavior
   - asset_quote_daily inserts
@@ -134,7 +134,7 @@ def test_cli_market_backfill_enqueue_prices_only(test_manager):
     view = DashboardView(manager)
 
     next_view = view.handle_input(
-        "market-backfill-enqueue BN.TO --years 10 --prices-only"
+        "job schedule price-backfill --target BN.TO --years 10 --prices-only"
     )
 
     assert next_view is view
@@ -165,8 +165,8 @@ def test_cli_market_backfill_run_inserts_daily_quotes(test_manager):
     manager, fake_provider = test_manager
     view = DashboardView(manager)
 
-    view.handle_input("market-backfill-enqueue BN.TO --years 10 --prices-only")
-    view.handle_input("market-backfill-run --max-jobs 1")
+    view.handle_input("job schedule price-backfill --target BN.TO --years 10 --prices-only")
+    view.handle_input("job run market --max-jobs 1")
 
     job_row = manager.conn.execute(
         """
@@ -225,8 +225,8 @@ def test_cli_market_backfill_updates_sync_state(test_manager):
     manager, _ = test_manager
     view = DashboardView(manager)
 
-    view.handle_input("market-backfill-enqueue BN.TO --years 10 --prices-only")
-    view.handle_input("market-backfill-run --max-jobs 1")
+    view.handle_input("job schedule price-backfill --target BN.TO --years 10 --prices-only")
+    view.handle_input("job run market --max-jobs 1")
 
     sync_row = manager.conn.execute(
         """
@@ -264,10 +264,10 @@ def test_cli_market_refresh_enqueue_uses_latest_quote_date(test_manager):
     manager, _ = test_manager
     view = DashboardView(manager)
 
-    view.handle_input("market-backfill-enqueue BN.TO --years 10 --prices-only")
-    view.handle_input("market-backfill-run --max-jobs 1")
+    view.handle_input("job schedule price-backfill --target BN.TO --years 10 --prices-only")
+    view.handle_input("job run market --max-jobs 1")
 
-    view.handle_input("market-refresh-enqueue BN.TO --prices-only")
+    view.handle_input("job schedule price-refresh --target BN.TO --prices-only")
 
     refresh_job = manager.conn.execute(
         """
@@ -319,7 +319,7 @@ def test_cli_market_backfill_enqueue_all_prices_only(test_manager):
         ["AAPL", "stock", "USD", "Apple Inc."],
     )
 
-    view.handle_input("market-backfill-enqueue all --years 10 --prices-only")
+    view.handle_input("job schedule price-backfill --target all --years 10 --prices-only")
 
     rows = manager.conn.execute(
         """
@@ -342,3 +342,37 @@ def test_cli_market_backfill_enqueue_all_prices_only(test_manager):
     assert rows[1][1] == "backfill"
     assert rows[1][2] == "price_daily"
     assert rows[1][3] == "pending"
+
+
+def test_cli_job_list_shows_pending_jobs(test_manager, capsys):
+    manager, _ = test_manager
+    view = DashboardView(manager)
+
+    view.handle_input("job schedule price-backfill --target BN.TO --years 10 --prices-only")
+    view.handle_input("job list --status pending")
+
+    out = capsys.readouterr().out
+
+    assert "job_id" in out
+    assert "BN.TO" in out
+    assert "market" in out
+    assert "pending" in out
+
+
+def test_cli_job_list_defaults_to_pending_and_running_only(test_manager, capsys):
+    manager, _ = test_manager
+    view = DashboardView(manager)
+
+    view.handle_input("job schedule price-backfill --target BN.TO --years 10 --prices-only")
+    view.handle_input("job run market --max-jobs 1")
+    capsys.readouterr()
+
+    view.handle_input("job list")
+    default_out = capsys.readouterr().out
+
+    view.handle_input("job list --all")
+    all_out = capsys.readouterr().out
+
+    assert "BN.TO" not in default_out
+    assert "BN.TO" in all_out
+    assert "done" in all_out

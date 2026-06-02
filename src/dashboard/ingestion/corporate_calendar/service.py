@@ -27,7 +27,7 @@ class CorporateCalendarIngestionService:
     def __init__(self, conn, provider: FmpCorporateCalendarProvider | None = None) -> None:
         self.conn = conn
         self.repo = CorporateCalendarIngestionRepository(conn)
-        self.provider = provider or FmpCorporateCalendarProvider()
+        self.provider = provider
 
     def enqueue_calendar_refresh(
         self,
@@ -64,7 +64,7 @@ class CorporateCalendarIngestionService:
         )
 
     def process_jobs(self, max_jobs: int = 1) -> int:
-        worker = CorporateCalendarWorker(self.conn, self.provider)
+        worker = CorporateCalendarWorker(self.conn, self.provider or FmpCorporateCalendarProvider())
 
         completed = 0
 
