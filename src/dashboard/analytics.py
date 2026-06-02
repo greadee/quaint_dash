@@ -81,6 +81,32 @@ class PortfolioPerformanceMetrics:
 
 
 @dataclass(frozen=True)
+class AssetRiskContribution:
+    asset_id: str
+    weight: float
+    annualized_volatility: float | None
+    portfolio_volatility_contribution: float | None
+    percent_of_portfolio_volatility: float | None
+
+
+@dataclass(frozen=True)
+class PortfolioRiskDecomposition:
+    asset_count: int
+    effective_asset_count: float | None
+    concentration_hhi: float | None
+    largest_position_weight: float | None
+    diversification_score: float | None
+    portfolio_volatility: float | None
+    average_pairwise_correlation: float | None
+    correlation_matrix: dict[str, dict[str, float | None]] = field(default_factory=dict)
+    volatility_contributions: list[AssetRiskContribution] = field(default_factory=list)
+    sector_exposure: dict[str, float] = field(default_factory=dict)
+    country_exposure: dict[str, float] = field(default_factory=dict)
+    currency_exposure: dict[str, float] = field(default_factory=dict)
+    missing_inputs: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class ValuationResult:
     method: str
     intrinsic_value_per_share: float | None
@@ -121,6 +147,7 @@ class PortfolioAnalyticsReport:
     positions: list[PositionAnalytics]
     market_value: float
     performance: PortfolioPerformanceMetrics
+    risk_decomposition: PortfolioRiskDecomposition
     risk: RiskReturnMetrics | None
     relative: RelativeRiskMetrics | None
     missing_inputs: list[str]
@@ -315,6 +342,27 @@ class AnalyticsRepository:
         ).fetchall()
         return rows
 
+    def asset_exposure_metadata(self, asset_ids: list[str]) -> dict[str, dict[str, str | None]]:
+        if not asset_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in asset_ids)
+        rows = self.conn.execute(
+            f"""
+            SELECT asset_id, sector, country, ccy
+            FROM asset
+            WHERE asset_id IN ({placeholders})
+            """,
+            asset_ids,
+        ).fetchall()
+        return {
+            row[0]: {
+                "sector": row[1],
+                "country": row[2],
+                "currency": row[3],
+            }
+            for row in rows
+        }
+
     def tracked_asset_ids(self) -> list[str]:
         rows = self.conn.execute(
             """
@@ -461,6 +509,17 @@ class AnalyticsEngine:
             if weighted_positions
             else None,
         )
+        risk_decomposition = portfolio_risk_decomposition(
+            positions=weighted_positions,
+            price_history_by_asset={
+                p.asset_id: self.repo.price_history(p.asset_id)
+                for p in weighted_positions
+                if p.weight is not None and p.weight > 0
+            },
+            exposure_metadata=self.repo.asset_exposure_metadata(
+                [p.asset_id for p in weighted_positions]
+            ),
+        )
         benchmark = (
             self.repo.benchmark_price_history(benchmark_index_id)
             if benchmark_index_id is not None
@@ -483,6 +542,7 @@ class AnalyticsEngine:
             positions=weighted_positions,
             market_value=total_value,
             performance=performance,
+            risk_decomposition=risk_decomposition,
             risk=risk,
             relative=relative,
             missing_inputs=missing,
@@ -1131,6 +1191,218 @@ def money_weighted_return(cash_flows: list[tuple[date, float]]) -> float | None:
             low = mid
             low_value = mid_value
     return (low + high) / 2
+
+
+def portfolio_risk_decomposition(
+    positions: list[PositionAnalytics],
+    price_history_by_asset: dict[str, list[PricePoint]],
+    exposure_metadata: dict[str, dict[str, str | None]] | None = None,
+) -> PortfolioRiskDecomposition:
+    weighted_positions = [p for p in positions if p.weight is not None and p.weight > 0]
+    weights = {p.asset_id: float(p.weight or 0.0) for p in weighted_positions}
+    asset_ids = [p.asset_id for p in weighted_positions]
+    missing: list[str] = []
+
+    hhi = sum(weight * weight for weight in weights.values()) if weights else None
+    effective_count = 1 / hhi if hhi and hhi > 0 else None
+    largest_weight = max(weights.values()) if weights else None
+    diversification = diversification_score(weights)
+
+    aligned_returns = aligned_asset_returns(price_history_by_asset, asset_ids)
+    if len(aligned_returns) < 2 and asset_ids:
+        missing.append("overlapping asset return history")
+
+    returns_by_asset = {
+        asset_id: [row[asset_id] for row in aligned_returns]
+        for asset_id in asset_ids
+        if aligned_returns and asset_id in aligned_returns[0]
+    }
+    correlation_mat = correlation_matrix(returns_by_asset)
+    average_corr = average_pairwise_correlation(correlation_mat)
+    portfolio_vol = portfolio_annualized_volatility(returns_by_asset, weights)
+    contributions = portfolio_volatility_contributions(
+        returns_by_asset=returns_by_asset,
+        weights=weights,
+        portfolio_volatility=portfolio_vol,
+    )
+    exposure_metadata = exposure_metadata or {}
+
+    return PortfolioRiskDecomposition(
+        asset_count=len(asset_ids),
+        effective_asset_count=effective_count,
+        concentration_hhi=hhi,
+        largest_position_weight=largest_weight,
+        diversification_score=diversification,
+        portfolio_volatility=portfolio_vol,
+        average_pairwise_correlation=average_corr,
+        correlation_matrix=correlation_mat,
+        volatility_contributions=contributions,
+        sector_exposure=dimension_exposure(weights, exposure_metadata, "sector"),
+        country_exposure=dimension_exposure(weights, exposure_metadata, "country"),
+        currency_exposure=dimension_exposure(weights, exposure_metadata, "currency"),
+        missing_inputs=missing,
+    )
+
+
+def diversification_score(weights: dict[str, float]) -> float | None:
+    if not weights:
+        return None
+    if len(weights) == 1:
+        return 0.0
+    hhi = sum(weight * weight for weight in weights.values())
+    minimum_hhi = 1 / len(weights)
+    if hhi <= minimum_hhi:
+        return 100.0
+    return max(0.0, min(100.0, 100.0 * (1.0 - hhi) / (1.0 - minimum_hhi)))
+
+
+def aligned_asset_returns(
+    price_history_by_asset: dict[str, list[PricePoint]],
+    asset_ids: list[str],
+) -> list[dict[str, float]]:
+    if not asset_ids:
+        return []
+    prices_by_asset = {
+        asset_id: {point.date: point.close for point in price_history_by_asset.get(asset_id, [])}
+        for asset_id in asset_ids
+    }
+    if any(not prices for prices in prices_by_asset.values()):
+        return []
+    common_dates = sorted(set.intersection(*(set(prices) for prices in prices_by_asset.values())))
+    rows: list[dict[str, float]] = []
+    for previous_date, current_date in zip(common_dates, common_dates[1:]):
+        row: dict[str, float] = {}
+        valid = True
+        for asset_id in asset_ids:
+            previous_price = prices_by_asset[asset_id][previous_date]
+            current_price = prices_by_asset[asset_id][current_date]
+            if previous_price <= 0 or current_price <= 0:
+                valid = False
+                break
+            row[asset_id] = current_price / previous_price - 1.0
+        if valid:
+            rows.append(row)
+    return rows
+
+
+def correlation_matrix(
+    returns_by_asset: dict[str, list[float]],
+) -> dict[str, dict[str, float | None]]:
+    asset_ids = sorted(returns_by_asset)
+    matrix: dict[str, dict[str, float | None]] = {}
+    for left in asset_ids:
+        matrix[left] = {}
+        for right in asset_ids:
+            if left == right:
+                matrix[left][right] = 1.0 if len(returns_by_asset[left]) >= 2 else None
+            else:
+                matrix[left][right] = correlation(returns_by_asset[left], returns_by_asset[right])
+    return matrix
+
+
+def average_pairwise_correlation(matrix: dict[str, dict[str, float | None]]) -> float | None:
+    values: list[float] = []
+    asset_ids = sorted(matrix)
+    for i, left in enumerate(asset_ids):
+        for right in asset_ids[i + 1 :]:
+            value = matrix[left][right]
+            if value is not None:
+                values.append(value)
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
+def portfolio_annualized_volatility(
+    returns_by_asset: dict[str, list[float]],
+    weights: dict[str, float],
+) -> float | None:
+    portfolio_returns = portfolio_returns_from_components(returns_by_asset, weights)
+    return annualized_volatility(portfolio_returns)
+
+
+def portfolio_returns_from_components(
+    returns_by_asset: dict[str, list[float]],
+    weights: dict[str, float],
+) -> list[float]:
+    if not returns_by_asset:
+        return []
+    lengths = {len(values) for values in returns_by_asset.values()}
+    if len(lengths) != 1:
+        return []
+    count = lengths.pop()
+    rows = []
+    for idx in range(count):
+        rows.append(
+            sum(weights.get(asset_id, 0.0) * returns[idx] for asset_id, returns in returns_by_asset.items())
+        )
+    return rows
+
+
+def portfolio_volatility_contributions(
+    returns_by_asset: dict[str, list[float]],
+    weights: dict[str, float],
+    portfolio_volatility: float | None,
+) -> list[AssetRiskContribution]:
+    asset_ids = sorted(weights)
+    if not asset_ids:
+        return []
+    if portfolio_volatility is None or portfolio_volatility <= 0 or not returns_by_asset:
+        return [
+            AssetRiskContribution(
+                asset_id=asset_id,
+                weight=weights[asset_id],
+                annualized_volatility=annualized_volatility(returns_by_asset.get(asset_id, [])),
+                portfolio_volatility_contribution=None,
+                percent_of_portfolio_volatility=None,
+            )
+            for asset_id in asset_ids
+        ]
+
+    portfolio_returns = portfolio_returns_from_components(returns_by_asset, weights)
+    portfolio_daily_volatility = statistics.stdev(portfolio_returns)
+    if portfolio_daily_volatility == 0:
+        return []
+
+    contributions: list[AssetRiskContribution] = []
+    for asset_id in asset_ids:
+        asset_returns = returns_by_asset.get(asset_id, [])
+        covariance = sample_covariance(asset_returns, portfolio_returns)
+        marginal_contribution = covariance / portfolio_daily_volatility
+        annualized_contribution = (
+            weights[asset_id] * marginal_contribution * math.sqrt(TRADING_DAYS_PER_YEAR)
+        )
+        percent = annualized_contribution / portfolio_volatility if portfolio_volatility else None
+        contributions.append(
+            AssetRiskContribution(
+                asset_id=asset_id,
+                weight=weights[asset_id],
+                annualized_volatility=annualized_volatility(asset_returns),
+                portfolio_volatility_contribution=annualized_contribution,
+                percent_of_portfolio_volatility=percent,
+            )
+        )
+    return contributions
+
+
+def sample_covariance(xs: list[float], ys: list[float]) -> float | None:
+    if len(xs) != len(ys) or len(xs) < 2:
+        return None
+    mean_x = statistics.mean(xs)
+    mean_y = statistics.mean(ys)
+    return sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys)) / (len(xs) - 1)
+
+
+def dimension_exposure(
+    weights: dict[str, float],
+    exposure_metadata: dict[str, dict[str, str | None]],
+    dimension: str,
+) -> dict[str, float]:
+    exposure: dict[str, float] = {}
+    for asset_id, weight in weights.items():
+        value = exposure_metadata.get(asset_id, {}).get(dimension) or "Unknown"
+        exposure[value] = exposure.get(value, 0.0) + weight
+    return dict(sorted(exposure.items()))
 
 
 def dividend_discount_model(

@@ -13,6 +13,7 @@ from dashboard.analytics import (
     dividend_discount_model,
     implied_dcf_growth_rate,
     money_weighted_return,
+    portfolio_risk_decomposition,
     portfolio_performance_metrics,
     relative_risk_metrics,
     risk_return_metrics,
@@ -166,6 +167,8 @@ def test_portfolio_report_builds_weighted_return_series(tmp_path):
     assert report.risk is not None
     assert report.risk.observations == 10
     assert report.performance.ending_market_value == pytest.approx(report.market_value)
+    assert report.risk_decomposition.asset_count == 2
+    assert report.risk_decomposition.diversification_score == pytest.approx(64.0)
     assert report.missing_inputs == []
 
 
@@ -261,6 +264,73 @@ def test_portfolio_report_includes_ledger_performance_metrics(tmp_path):
     assert report.performance.dividend_income == pytest.approx(5.0)
     assert report.performance.realized_gain == pytest.approx(36.0)
     assert report.performance.unrealized_gain == pytest.approx((3 * 109.0) - 303.0)
+
+
+def test_portfolio_risk_decomposition_calculates_concentration_and_exposures():
+    start = date(2025, 1, 1)
+    positions = [
+        _position("AAA", 0.60),
+        _position("BBB", 0.40),
+    ]
+    price_history = {
+        "AAA": [
+            PricePoint(start + timedelta(days=i), close)
+            for i, close in enumerate([100.0, 102.0, 101.0, 105.0, 106.0])
+        ],
+        "BBB": [
+            PricePoint(start + timedelta(days=i), close)
+            for i, close in enumerate([50.0, 51.0, 52.0, 51.0, 53.0])
+        ],
+    }
+
+    decomposition = portfolio_risk_decomposition(
+        positions=positions,
+        price_history_by_asset=price_history,
+        exposure_metadata={
+            "AAA": {"sector": "Technology", "country": "US", "currency": "USD"},
+            "BBB": {"sector": "Financials", "country": "CA", "currency": "CAD"},
+        },
+    )
+
+    assert decomposition.asset_count == 2
+    assert decomposition.concentration_hhi == pytest.approx(0.52)
+    assert decomposition.effective_asset_count == pytest.approx(1 / 0.52)
+    assert decomposition.largest_position_weight == pytest.approx(0.60)
+    assert decomposition.diversification_score == pytest.approx(96.0)
+    assert decomposition.portfolio_volatility is not None
+    assert decomposition.average_pairwise_correlation is not None
+    assert decomposition.correlation_matrix["AAA"]["AAA"] == pytest.approx(1.0)
+    assert decomposition.correlation_matrix["AAA"]["BBB"] == pytest.approx(
+        decomposition.correlation_matrix["BBB"]["AAA"]
+    )
+    assert decomposition.sector_exposure == {
+        "Financials": pytest.approx(0.40),
+        "Technology": pytest.approx(0.60),
+    }
+    assert decomposition.country_exposure == {"CA": pytest.approx(0.40), "US": pytest.approx(0.60)}
+    assert decomposition.currency_exposure == {
+        "CAD": pytest.approx(0.40),
+        "USD": pytest.approx(0.60),
+    }
+    assert len(decomposition.volatility_contributions) == 2
+    contribution_total = sum(
+        item.portfolio_volatility_contribution or 0.0
+        for item in decomposition.volatility_contributions
+    )
+    assert contribution_total == pytest.approx(decomposition.portfolio_volatility)
+
+
+def test_portfolio_risk_decomposition_reports_missing_return_history():
+    decomposition = portfolio_risk_decomposition(
+        positions=[_position("AAA", 1.0)],
+        price_history_by_asset={"AAA": []},
+        exposure_metadata={},
+    )
+
+    assert decomposition.asset_count == 1
+    assert decomposition.diversification_score == 0.0
+    assert decomposition.portfolio_volatility is None
+    assert "overlapping asset return history" in decomposition.missing_inputs
 
 
 def test_analytics_storage_is_disabled_by_default(tmp_path):
@@ -386,3 +456,14 @@ def test_portfolio_storage_refreshes_when_positions_change_same_day(tmp_path):
         """
     ).fetchone()
     assert row[0] == pytest.approx(218.0)
+
+
+def _position(asset_id: str, weight: float):
+    return type(
+        "PositionStub",
+        (),
+        {
+            "asset_id": asset_id,
+            "weight": weight,
+        },
+    )()
