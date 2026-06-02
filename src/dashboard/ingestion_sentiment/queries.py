@@ -194,3 +194,97 @@ ORDER BY COALESCE(p.published_at, p.fetched_at) DESC
 LIMIT ?
 """
 
+INSERT_SENTIMENT_OBSERVATION = """
+INSERT INTO sentiment_observation (
+    observation_id,
+    asset_id,
+    ticker,
+    item_type,
+    item_id,
+    provider,
+    sentiment_label,
+    sentiment_score,
+    confidence,
+    relevance_score,
+    source_weight,
+    engagement_weight,
+    explanation,
+    observed_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+SELECT_SENTIMENT_OBSERVATIONS_FOR_DATE = """
+SELECT
+    asset_id,
+    ticker,
+    item_type,
+    item_id,
+    provider,
+    sentiment_label,
+    sentiment_score,
+    confidence,
+    relevance_score,
+    source_weight,
+    engagement_weight,
+    observed_at
+FROM sentiment_observation
+WHERE asset_id = ?
+  AND CAST(observed_at AS DATE) = ?
+"""
+
+UPSERT_TICKER_SENTIMENT_DAILY = """
+INSERT INTO ticker_sentiment_daily (
+    asset_id,
+    ticker,
+    date,
+    retail_sentiment_score,
+    news_sentiment_score,
+    analyst_sentiment_score,
+    blended_sentiment_score,
+    reddit_post_count,
+    x_post_count,
+    article_count,
+    bullish_count,
+    neutral_count,
+    bearish_count,
+    sentiment_momentum_1d,
+    sentiment_momentum_7d,
+    sentiment_momentum_30d,
+    unusual_volume_flag,
+    updated_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
+ON CONFLICT(asset_id, date)
+DO UPDATE SET
+    ticker = excluded.ticker,
+    retail_sentiment_score = excluded.retail_sentiment_score,
+    news_sentiment_score = excluded.news_sentiment_score,
+    analyst_sentiment_score = excluded.analyst_sentiment_score,
+    blended_sentiment_score = excluded.blended_sentiment_score,
+    reddit_post_count = excluded.reddit_post_count,
+    x_post_count = excluded.x_post_count,
+    article_count = excluded.article_count,
+    bullish_count = excluded.bullish_count,
+    neutral_count = excluded.neutral_count,
+    bearish_count = excluded.bearish_count,
+    sentiment_momentum_1d = excluded.sentiment_momentum_1d,
+    sentiment_momentum_7d = excluded.sentiment_momentum_7d,
+    sentiment_momentum_30d = excluded.sentiment_momentum_30d,
+    unusual_volume_flag = excluded.unusual_volume_flag,
+    updated_at = now()
+"""
+
+SELECT_DAILY_BLENDED_SCORE = """
+SELECT blended_sentiment_score
+FROM ticker_sentiment_daily
+WHERE asset_id = ? AND date = ?
+"""
+
+SELECT_RECENT_AVG_ITEM_COUNT = """
+SELECT AVG(reddit_post_count + x_post_count + article_count)
+FROM ticker_sentiment_daily
+WHERE asset_id = ?
+  AND date < ?
+  AND date >= ? - INTERVAL 30 DAY
+"""

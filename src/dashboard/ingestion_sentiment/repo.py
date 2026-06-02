@@ -10,6 +10,8 @@ from typing import Any
 from dashboard.ingestion_sentiment.models import (
     AssetRef,
     NewsArticleInput,
+    SentimentDailySnapshot,
+    SentimentObservationInput,
     SocialPostInput,
     TickerMention,
 )
@@ -127,11 +129,81 @@ class SentimentIngestionRepository:
     def list_social_for_ticker(self, ticker: str, limit: int = 10) -> list[tuple[Any, ...]]:
         return self.conn.execute(qry.SELECT_SOCIAL_FOR_TICKER, [ticker.upper(), limit]).fetchall()
 
+    def insert_sentiment_observation(self, observation: SentimentObservationInput) -> int:
+        observation_id = self._next_sentiment_observation_id()
+        observed_at = observation.observed_at or datetime.now()
+
+        self.conn.execute(
+            qry.INSERT_SENTIMENT_OBSERVATION,
+            [
+                observation_id,
+                observation.asset_id,
+                observation.ticker,
+                observation.item_type,
+                observation.item_id,
+                observation.provider,
+                observation.sentiment_label,
+                observation.sentiment_score,
+                observation.confidence,
+                observation.relevance_score,
+                observation.source_weight,
+                observation.engagement_weight,
+                observation.explanation,
+                observed_at,
+            ],
+        )
+        return observation_id
+
+    def sentiment_observations_for_date(
+        self,
+        asset_id: str,
+        snapshot_date,
+    ) -> list[tuple[Any, ...]]:
+        return self.conn.execute(
+            qry.SELECT_SENTIMENT_OBSERVATIONS_FOR_DATE,
+            [asset_id, snapshot_date],
+        ).fetchall()
+
+    def upsert_ticker_sentiment_daily(self, snapshot: SentimentDailySnapshot) -> None:
+        self.conn.execute(
+            qry.UPSERT_TICKER_SENTIMENT_DAILY,
+            [
+                snapshot.asset_id,
+                snapshot.ticker,
+                snapshot.snapshot_date,
+                snapshot.retail_sentiment_score,
+                snapshot.news_sentiment_score,
+                snapshot.analyst_sentiment_score,
+                snapshot.blended_sentiment_score,
+                snapshot.reddit_post_count,
+                snapshot.x_post_count,
+                snapshot.article_count,
+                snapshot.bullish_count,
+                snapshot.neutral_count,
+                snapshot.bearish_count,
+                snapshot.sentiment_momentum_1d,
+                snapshot.sentiment_momentum_7d,
+                snapshot.sentiment_momentum_30d,
+                snapshot.unusual_volume_flag,
+            ],
+        )
+
+    def daily_blended_score(self, asset_id: str, snapshot_date) -> float | None:
+        row = self.conn.execute(qry.SELECT_DAILY_BLENDED_SCORE, [asset_id, snapshot_date]).fetchone()
+        return None if row is None else row[0]
+
+    def recent_average_item_count(self, asset_id: str, snapshot_date) -> float | None:
+        row = self.conn.execute(qry.SELECT_RECENT_AVG_ITEM_COUNT, [asset_id, snapshot_date, snapshot_date]).fetchone()
+        return None if row is None else row[0]
+
     def _next_article_id(self) -> int:
         return int(self.conn.execute(qry.NEXT_NEWS_ARTICLE_ID).fetchone()[0])
 
     def _next_social_post_id(self) -> int:
         return int(self.conn.execute(qry.NEXT_SOCIAL_POST_ID).fetchone()[0])
+
+    def _next_sentiment_observation_id(self) -> int:
+        return int(self.conn.execute(qry.NEXT_SENTIMENT_OBSERVATION_ID).fetchone()[0])
 
 
 def article_content_hash(article: NewsArticleInput) -> str:
@@ -167,4 +239,3 @@ def _stable_hash(parts: list[str | None]) -> str:
 
 def _iso_or_empty(value: datetime | None) -> str:
     return "" if value is None else value.isoformat()
-
