@@ -20,15 +20,15 @@ Design Decisions: [ADR's](../adr/adr_ph2.md)
 - Trading day calendar ingestion
 - Corporate calendar ingestion
 - Core index ingestion
-
-### Tasks: 
+    - non-core index ingestion
 - Ingest ticker earnings data sync on calendar event finished (FMP)
     - Scheduler
 - Stream ticker data (price, vol, mkt cap) for positions (Finnhub)
     - Open stream on dash open and is market day
-- Historical backfill for fundamentals
 - Ingestion of forward looking fundamentals
+
+
+### Tasks: 
+- Historical backfill for fundamentals
 - Rate limiter and failsafes
-- TBD: non-core index ingestion
-- TBD: items in watchlist ingestion
 

@@ -1131,3 +1131,144 @@ Extended-hours polling may increase API usage.
   - after-hours does not call FMP
   - closed market does not call providers
 - Tests verify both enabled and disabled routing
+
+## ADR-051: Existing Statement Ingestion as Canonical Path
+
+**Decision:** Existing corporate calendar statement ingestion will remain the only financial statement ingestion path.
+
+**Context:** 
+The project already has a worker, provider, repository, and raw JSON storage path for financial statements.
+
+**Rationale:** 
+- Avoids duplicate statement ingestion logic
+- Keeps provider calls centralized
+- Reuses existing tests and repository upserts
+- Prevents two systems from writing the same data differently
+- Simplifies debugging ingestion failures
+
+**Implementation Notes:** 
+- Keep `CorporateCalendarWorker`
+- Keep `FmpCorporateCalendarProvider.fetch_quarterly_statements`
+- Keep `CorporateCalendarIngestionRepository.upsert_financial_statement_rows`
+- Subscription refreshes only create `ingestion_job` rows
+
+## ADR-052: Subscription Refresh Jobs
+
+**Decision:** Fundamental subscriptions will create recurring `refresh` jobs for `financial_statements`.
+
+**Context:** 
+Subscribed tickers need fundamentals monitored on an interval without creating a second ingestion worker.
+
+**Rationale:** 
+- Reuses the existing corporate ingestion queue
+- Keeps scheduling separate from ingestion execution
+- Allows refresh jobs to be prioritized
+- Prevents direct provider calls from subscription code
+- Supports future CLI and automated scheduling
+
+**Implementation Notes:** 
+- Add `JOB_TYPE_REFRESH = "refresh"`
+- Use `domain = "corporate"`
+- Use `dataset = "financial_statements"`
+- Existing worker processes the job by dataset
+
+
+## ADR-053: Refresh and Backfill Separation
+
+**Decision:** Ongoing fundamental refreshes and historical fundamental backfills will be separate phases.
+
+**Context:** 
+Latest-data monitoring and historical analytics have different data ranges, job sizes, and retry behavior.
+
+**Rationale:** 
+- Keeps recurring refresh jobs lightweight
+- Allows deeper historical loading only when needed
+- Makes scheduler behavior easier to test
+- Avoids large provider calls during routine refreshes
+- Supports staged implementation
+
+**Implementation Notes:** 
+- Phase 1 uses recurring `refresh` jobs
+- Phase 2 uses `backfill` jobs
+- Refresh jobs fetch latest quarterly data
+- Backfill jobs will fetch deeper quarterly and annual history
+
+## ADR-054: Partial Fundamental Backfill Success
+
+**Decision:** Historical fundamental backfills may partially succeed by dataset.
+
+**Context:** 
+Provider coverage can be inconsistent across stocks, ADRs, Canadian tickers, and smaller companies.
+
+**Rationale:** 
+- Prevents one missing dataset from blocking all analytics
+- Preserves successfully ingested statements
+- Allows retrying only failed datasets
+- Improves international ticker support
+- Makes provider failures easier to isolate
+
+**Implementation Notes:** 
+- Track state by asset, domain, and dataset
+- Core statement datasets determine basic backfill completeness
+- Optional datasets can fail without disabling the ticker
+- Failed datasets remain retryable
+
+## ADR-055: Post-Earnings Fundamental Refresh
+
+**Decision:** Recent earnings events will trigger financial statement refresh jobs.
+
+**Context:** 
+Financial statements are most likely to change shortly after earnings events.
+
+**Rationale:** 
+- Keeps fundamentals fresh around reporting dates
+- Avoids unnecessary daily statement polling
+- Reuses the earnings calendar pipeline
+- Improves timeliness of company analytics
+- Supports event-driven ingestion
+
+**Implementation Notes:** 
+- Scheduler finds assets with recent earnings events
+- Enqueue earnings actuals jobs
+- Enqueue financial statement update jobs
+- Existing worker processes both datasets
+
+## ADR-056: Unified Corporate Ingestion Job Table
+
+**Decision:** Corporate fundamentals will use the domain/dataset-based `ingestion_job` schema.
+
+**Context:** 
+The corporate ingestion system needs jobs to identify asset, domain, job type, dataset, priority, and requested date range.
+
+**Rationale:** 
+- Supports calendar, earnings, refresh, and backfill jobs
+- Allows one worker to process multiple corporate datasets
+- Keeps job status and retry behavior consistent
+- Avoids duplicate queue schemas
+- Makes scheduler tests simpler
+
+**Implementation Notes:** 
+- Keep `asset_id`, `domain`, `job_type`, `dataset`, and `priority`
+- Use statuses `pending`, `running`, `done`, and `failed`
+- Remove incompatible duplicate job schemas
+- Corporate schedulers should create standard `ingestion_job` rows
+
+## ADR-057: Fundamentals as Enrichment Data
+
+**Decision:** Fundamental data will be treated as enrichment data, not as a prerequisite for portfolio transactions.
+
+**Context:** 
+Transaction imports should remain reliable even when providers fail or fundamentals are unavailable.
+
+**Rationale:** 
+- Keeps portfolio data as the source of truth
+- Prevents provider failures from blocking imports
+- Allows fundamentals to be refreshed asynchronously
+- Supports retry and repair workflows
+- Improves system resilience
+
+**Implementation Notes:** 
+- Transaction import creates or references assets
+- Fundamental subscription may be created after asset creation
+- Refresh and backfill jobs run separately
+- Failures are logged in job and sync state tables
