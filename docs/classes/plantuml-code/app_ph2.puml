@@ -1,0 +1,149 @@
+@startuml
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+
+package "CLI" {
+  class cli_loop {
+    + cli_loop(db_path: str | None)
+  }
+
+  class CommandRouter {
+    + dashboard commands
+    + portfolio commands
+    + job commands
+  }
+}
+
+package "Database" {
+  class DB {
+    - path : Path
+    - conn : DuckDBPyConnection
+    + connect() : DuckDBPyConnection
+  }
+
+  class init_db {
+    + init_db(db: DB)
+  }
+}
+
+package "Domain Models" {
+  class Portfolio {
+    + portfolio_id : int
+    + portfolio_name : str
+    + base_ccy : str
+  }
+
+  class Asset {
+    + asset_id : str
+    + symbol : str
+    + exchange_code : str
+    + asset_type : str
+    + ccy : str
+  }
+
+  class Position {
+    + portfolio_id : int
+    + asset_id : str
+    + qty : float
+    + book_cost : float
+  }
+
+  class Txn {
+    + txn_id : int
+    + portfolio_id : int
+    + asset_id : str | None
+    + txn_type : str
+    + qty : float | None
+    + price : float | None
+    + cash_amt : float | None
+  }
+
+  class ImportData {
+    + batch_id : int
+    + batch_type : str
+    + inserted_rows : int
+  }
+}
+
+package "Managers" {
+  class DashboardManager {
+    - db : DB
+    - conn
+    + open()
+    + list_portfolios(N:int)
+    + list_txns(N:int)
+    + list_positions(N:int)
+    + list_ingestion_jobs(statuses, domains, limit)
+    + schedule_ingestion_jobs()
+    + run_ingestion_jobs(max_jobs:int)
+  }
+
+  class PortfolioManager {
+    - db : DB
+    - conn
+    - portfolio_id : int
+    + load_portfolio() : Portfolio
+    + list_txns(N:int)
+    + list_positions(N:int)
+  }
+}
+
+package "Transaction Import" {
+  abstract class TxnImporter {
+    - manager : DashboardManager
+    + run() : ImportData
+    - _normalize_txn_stage()
+    - _validate_txn_stage()
+    {abstract} - _stage_import()
+    {abstract} - _handle_import() : ImportData
+  }
+
+  class TxnImporterManual
+  class TxnImporterCSV
+  class AssetImporter {
+    - manager : DashboardManager
+    + import_stage_assets() : list[str]
+    + import_asset_ids(asset_ids) : list[str]
+  }
+}
+
+package "Views" {
+  abstract class View {
+    + default_display()
+    + prompt_input() : str
+    + handle_input(line:str) : View
+  }
+
+  class DashboardView
+  class PortfolioView
+}
+
+cli_loop --> DB
+cli_loop --> init_db
+cli_loop --> DashboardManager
+CommandRouter ..> DashboardManager
+
+DashboardManager --> DB
+PortfolioManager --> DB
+DashboardManager --> PortfolioManager : creates
+
+DashboardManager ..> Portfolio
+DashboardManager ..> Position
+DashboardManager ..> Txn
+PortfolioManager ..> Portfolio
+PortfolioManager ..> Position
+PortfolioManager ..> Txn
+
+TxnImporter <|-- TxnImporterManual
+TxnImporter <|-- TxnImporterCSV
+TxnImporter --> DashboardManager
+TxnImporter ..> ImportData
+TxnImporter ..> AssetImporter : schedules metadata sync
+
+View <|-- DashboardView
+View <|-- PortfolioView
+DashboardView --> DashboardManager
+PortfolioView --> PortfolioManager
+PortfolioView --> DashboardManager
+
+@enduml

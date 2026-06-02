@@ -1,0 +1,143 @@
+erDiagram
+  BENCHMARK_INDEX ||--o{ BENCHMARK_INDEX_SYMBOL : provider_symbols
+  BENCHMARK_INDEX ||--o{ BENCHMARK_INDEX_DAILY_PRICE : daily_prices
+  BENCHMARK_INDEX ||--o{ BENCHMARK_INDEX_INTRADAY_PRICE : intraday_prices
+  BENCHMARK_INDEX ||--o{ BENCHMARK_INDEX_COMPOSITION_SNAPSHOT : composition_snapshots
+  BENCHMARK_INDEX_COMPOSITION_SNAPSHOT ||--o{ BENCHMARK_INDEX_CONSTITUENT : constituents
+  BENCHMARK_INDEX ||--o{ BENCHMARK_INDEX_EXPOSURE_SNAPSHOT : exposures
+  BENCHMARK_INDEX ||--o{ BENCHMARK_INDEX_DAILY_METRIC : daily_metrics
+  BENCHMARK_INDEX ||--o{ BENCHMARK_INDEX_RELATIVE_METRIC : relative_metrics
+  BENCHMARK_INDEX ||--o{ BENCHMARK_INDEX_SYNC_STATE : sync_state
+
+  BENCHMARK_INDEX {
+    TEXT index_id PK
+    TEXT index_name
+    TEXT index_family
+    TEXT index_category
+    TEXT region
+    TEXT country_code
+    TEXT currency
+    BOOLEAN is_core
+    BOOLEAN is_active
+    TEXT notes
+  }
+
+  BENCHMARK_INDEX_SYMBOL {
+    TEXT index_id PK, FK
+    TEXT provider PK
+    TEXT provider_symbol PK
+    TEXT symbol_purpose PK
+    BOOLEAN is_primary
+    BOOLEAN is_proxy
+  }
+
+  BENCHMARK_INDEX_DAILY_PRICE {
+    TEXT index_id PK, FK
+    DATE price_date PK
+    DOUBLE open
+    DOUBLE high
+    DOUBLE low
+    DOUBLE close
+    DOUBLE adj_close
+    DOUBLE volume
+    DOUBLE previous_close
+    DOUBLE price_return_1d
+    DOUBLE total_return_1d
+    TEXT source
+    TEXT source_symbol
+    BOOLEAN is_proxy
+  }
+
+  BENCHMARK_INDEX_INTRADAY_PRICE {
+    TEXT index_id PK, FK
+    TEXT interval PK
+    TIMESTAMP bar_start_utc PK
+    DOUBLE open
+    DOUBLE high
+    DOUBLE low
+    DOUBLE close
+    DOUBLE volume
+    TEXT source
+    TEXT source_symbol
+    BOOLEAN is_proxy
+  }
+
+  BENCHMARK_INDEX_COMPOSITION_SNAPSHOT {
+    TEXT index_id PK, FK
+    DATE snapshot_date PK
+    TEXT source PK
+    TEXT source_symbol
+    TEXT source_type
+    BOOLEAN is_proxy
+    INTEGER constituent_count
+    DOUBLE total_weight_pct
+    TEXT data_quality
+    TEXT notes
+  }
+
+  BENCHMARK_INDEX_CONSTITUENT {
+    TEXT index_id PK, FK
+    DATE snapshot_date PK
+    TEXT source PK
+    TEXT constituent_symbol PK
+    TEXT constituent_name
+    TEXT exchange_code
+    TEXT country_code
+    TEXT currency
+    TEXT sector
+    TEXT industry
+    DOUBLE weight_pct
+    DOUBLE market_cap
+    BOOLEAN is_proxy
+  }
+
+  BENCHMARK_INDEX_EXPOSURE_SNAPSHOT {
+    TEXT index_id PK, FK
+    DATE snapshot_date PK
+    TEXT dimension_type PK
+    TEXT dimension_value PK
+    TEXT source PK
+    DOUBLE weight_pct
+    TEXT source_type
+    BOOLEAN is_proxy
+  }
+
+  BENCHMARK_INDEX_DAILY_METRIC {
+    TEXT index_id PK, FK
+    DATE metric_date PK
+    DOUBLE return_1d
+    DOUBLE return_5d
+    DOUBLE return_21d
+    DOUBLE return_63d
+    DOUBLE return_126d
+    DOUBLE return_252d
+    DOUBLE return_ytd
+    DOUBLE volatility_21d_ann
+    DOUBLE volatility_63d_ann
+    DOUBLE volatility_252d_ann
+    DOUBLE sma_50
+    DOUBLE sma_200
+    DOUBLE high_52w
+    DOUBLE low_52w
+    DOUBLE drawdown_from_52w_high
+    TEXT source
+  }
+
+  BENCHMARK_INDEX_RELATIVE_METRIC {
+    TEXT index_id PK, FK
+    TEXT comparison_index_id PK, FK
+    DATE metric_date PK
+    DOUBLE correlation_252d
+    DOUBLE beta_252d
+    DOUBLE excess_return_252d
+    TEXT source
+  }
+
+  BENCHMARK_INDEX_SYNC_STATE {
+    TEXT index_id PK, FK
+    TEXT job_type PK
+    TIMESTAMP last_success_at
+    TIMESTAMP last_attempt_at
+    DATE last_success_date
+    TEXT last_error
+  }

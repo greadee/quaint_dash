@@ -1,0 +1,99 @@
+erDiagram
+  PORTFOLIO ||--o{ POSITION : holds
+  PORTFOLIO ||--o{ TXN : owns
+  PORTFOLIO ||--o{ PORTFOLIO_TICKER : tracks
+  ASSET ||--o{ POSITION : appears_in
+  ASSET ||--o{ TXN : referenced_by
+  ASSET ||--o{ PORTFOLIO_TICKER : portfolio_tracked
+  ASSET ||--o{ WATCHLIST_TICKER : watchlisted
+  ASSET ||--o{ ASSET_METADATA_SYNC : metadata_sync
+  IMPORT_BATCH ||--o{ TXN : imports
+
+  PORTFOLIO {
+    BIGINT portfolio_id PK
+    TEXT portfolio_name
+    TIMESTAMP created_at
+    TIMESTAMP updated_at
+    TEXT base_ccy
+  }
+
+  ASSET {
+    TEXT asset_id PK
+    TEXT symbol
+    TEXT exchange_code
+    TEXT asset_type
+    TEXT asset_subtype
+    TEXT ccy
+    TEXT name
+    TEXT description
+    TEXT sector
+    TEXT industry
+    TEXT country
+    TEXT region
+    TEXT size
+    DOUBLE mkt_cap
+    DOUBLE shares_outstanding
+    DOUBLE market_beta
+    BOOLEAN track
+    TIMESTAMP created_at
+    TIMESTAMP updated_at
+  }
+
+  POSITION {
+    BIGINT portfolio_id PK, FK
+    TEXT asset_id PK, FK
+    DOUBLE qty
+    DOUBLE book_cost
+    TIMESTAMP created_at
+    TIMESTAMP updated_at
+  }
+
+  TXN {
+    BIGINT txn_id PK
+    BIGINT portfolio_id FK
+    TIMESTAMP time_stamp
+    TEXT txn_type
+    TEXT asset_id FK
+    DOUBLE qty
+    DOUBLE price
+    TEXT ccy
+    DOUBLE cash_amt
+    DOUBLE fee_amt
+    BIGINT batch_id FK
+  }
+
+  IMPORT_BATCH {
+    BIGINT batch_id PK
+    TEXT batch_type
+    TIMESTAMP import_time
+  }
+
+  PORTFOLIO_TICKER {
+    BIGINT portfolio_id PK, FK
+    TEXT asset_id PK, FK
+    BOOLEAN is_active
+    TEXT source
+    TIMESTAMP created_at
+    TIMESTAMP updated_at
+  }
+
+  WATCHLIST_TICKER {
+    TEXT asset_id PK, FK
+    BOOLEAN is_active
+    TEXT source
+    TIMESTAMP created_at
+    TIMESTAMP updated_at
+  }
+
+  ASSET_METADATA_SYNC {
+    TEXT asset_id PK, FK
+    TEXT source
+    TEXT sync_status
+    TIMESTAMP last_attempted_at
+    TIMESTAMP last_succeeded_at
+    TIMESTAMP next_retry_at
+    BIGINT attempt_count
+    TEXT last_error
+    TIMESTAMP created_at
+    TIMESTAMP updated_at
+  }

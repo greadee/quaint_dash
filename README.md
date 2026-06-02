@@ -66,23 +66,44 @@ dashboard           # or python -m dashboard
 --- 
 <br>
 
+### Phase 2: Metric Ingestion
+
+```
+- Portfolio and watchlist ticker universe tables for ingestion scope
+- Price-history ingestion for daily OHLCV, dividends, and splits through queued backfill jobs
+- Corporate calendar and fundamentals ingestion for earnings events and financial statements
+- Fundamentals subscriptions, recurring refreshes, and historical backfills
+- Trading calendar ingestion for market-aware scheduling
+- Live price ingestion with Finnhub regular-session streaming and FMP extended-hours polling
+- Benchmark index ingestion for core, sector, industry, and theme benchmarks
+- Unified ingestion job listing, scheduling, and processing commands
+- Shared provider rate limiters, per-run call budgets, symbol caps, and failure recording
+```
+
+#### Architectural Decision Records: [Main Decisions](docs/adr/adr_ph2.md)
+---
+<br>
+
 ## Diagrams
 
+
+### UML Class Diagrams:
+<br>
+
+App Architecture: 
+
+![App Architecture](docs/classes/to-display/app_ph2.svg)
+- [Phase 2 Ingestion Architecture](docs/classes/to-display/ingestion_ph2.svg)
+- [Phase 1 Display Formatters](docs/classes/to-display/formatters_ph1.svg)
 
 ### Database E-R:
 <br>
 
-![Entity Relationship](docs/erd/to-display/erd_ph2.svg)
-
-### App Core Components: 
-<br>
-
-![Core Components](docs/classes/to-display/app_ph1.svg)
-
-### App Display:
-<br>
-
-![Formatter Class](docs/classes/to-display/formatters_ph1.svg)
+- [Phase 2 ER overview](docs/erd/to-display/erd_ph2.svg)
+- [Core portfolio and ticker universe ER](docs/erd/to-display/erd_ph2_core.svg)
+- [Ingestion and fundamentals ER](docs/erd/to-display/erd_ph2_ingestion.svg)
+- [Live price and trading calendar ER](docs/erd/to-display/erd_ph2_live_calendar.svg)
+- [Benchmark index ER](docs/erd/to-display/erd_ph2_benchmarks.svg)
 
 ## License: 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)

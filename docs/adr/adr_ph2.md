@@ -1272,3 +1272,85 @@ Transaction imports should remain reliable even when providers fail or fundament
 - Fundamental subscription may be created after asset creation
 - Refresh and backfill jobs run separately
 - Failures are logged in job and sync state tables
+
+## ADR-058: Subscription-Gated Fundamentals Backfill
+
+**Decision:** Historical fundamentals backfills will be scheduled from active `fundamental_subscription` rows, constrained to the tracked portfolio/watchlist ticker universe.
+
+**Context:**
+Backfilling fundamentals for every asset ever seen by the database would waste provider calls and make the job queue noisy.
+
+The system now has explicit portfolio and watchlist ticker tables that define which assets are operationally relevant.
+
+**Rationale:**
+- Keeps backfill scope intentional
+- Prevents obsolete transaction-only assets from consuming API calls
+- Makes user intent visible through subscription state
+- Reuses the same corporate ingestion worker as refresh jobs
+- Allows portfolio and watchlist assets to opt into fundamentals without duplicating ingestion code
+
+**Implementation Notes:**
+- Backfill candidates come from:
+  - `fundamental_subscription`
+  - `portfolio_ticker`
+  - `watchlist_ticker`
+- Backfill jobs use:
+  - `domain = 'corporate'`
+  - `dataset = 'financial_statements'`
+  - `job_type = 'backfill'`
+- Completion updates:
+  - `fundamental_subscription.last_backfill_succeeded_at`
+  - `asset_sync_state`
+
+## ADR-059: Provider Call Budgets for Fundamentals Backfill
+
+**Decision:** Fundamentals backfill must use shared provider rate-limit guards and per-run call budgets.
+
+**Context:**
+Financial statement backfill can fan out quickly because each asset may require multiple FMP endpoints.
+
+Free-tier API limits make unbounded backfills risky, especially when fundamentals, benchmark, metadata, and extended-hours ingestion all share provider capacity.
+
+**Rationale:**
+- Prevents accidental exhaustion of FMP calls
+- Keeps backfills friendly to other ingestion domains
+- Makes provider failures explicit and testable
+- Allows conservative defaults with environment overrides
+- Reduces the chance of dirty partial data from provider throttling
+
+**Implementation Notes:**
+- Use shared rate-limit infrastructure:
+  - `RateLimitPolicy`
+  - `InMemoryRateLimiter`
+  - `RateLimitExceeded`
+- FMP-backed paths share the same default provider budget
+- HTTP 429 and provider limit messages become `RateLimitExceeded`
+- Defaults can be overridden through environment variables:
+  - `FMP_RATE_LIMIT_PER_MINUTE`
+  - `FMP_MIN_SECONDS_BETWEEN_CALLS`
+  - `FMP_MAX_CALLS_PER_RUN`
+
+## ADR-060: Failed Backfill Jobs Are Recorded, Not Process-Crashing
+
+**Decision:** Corporate/fundamentals worker failures will be recorded on the job and sync state without crashing the ingestion command.
+
+**Context:**
+Backfill jobs can fail because of provider limits, missing symbols, malformed payloads, network errors, or partial provider coverage.
+
+The ingestion command should leave a clear audit trail and continue to expose pending/running/failed job state.
+
+**Rationale:**
+- Keeps the developer CLI usable during provider incidents
+- Preserves failure detail on the affected job
+- Avoids losing queue visibility after one bad ticker
+- Aligns corporate ingestion behavior with price-history ingestion
+- Supports retry and repair workflows
+
+**Implementation Notes:**
+- Worker catches provider and persistence exceptions
+- Job status becomes:
+  - `failed`
+- Failure detail is stored in:
+  - `ingestion_job.error_message`
+  - `asset_sync_state.last_error`
+- Commands can inspect job state through the unified job list
