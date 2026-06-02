@@ -157,6 +157,41 @@ class ValuationDepthMetrics:
 
 
 @dataclass(frozen=True)
+class EtfHoldingAnalytics:
+    holding_symbol: str
+    holding_name: str | None
+    weight: float | None
+    sector: str | None
+    country: str | None
+    currency: str | None
+
+
+@dataclass(frozen=True)
+class EtfOverlapAnalytics:
+    holding_symbol: str
+    direct_asset_id: str
+    etf_weight: float | None
+    direct_portfolio_weight: float | None
+
+
+@dataclass(frozen=True)
+class ETFAnalytics:
+    is_etf: bool
+    expense_ratio: float | None
+    benchmark_index_id: str | None
+    annual_distribution_per_share: float | None
+    distribution_yield: float | None
+    tracking_error: float | None
+    holding_count: int
+    top_holdings: list[EtfHoldingAnalytics] = field(default_factory=list)
+    overlap_with_portfolio: list[EtfOverlapAnalytics] = field(default_factory=list)
+    sector_exposure: dict[str, float] = field(default_factory=dict)
+    country_exposure: dict[str, float] = field(default_factory=dict)
+    currency_exposure: dict[str, float] = field(default_factory=dict)
+    missing_inputs: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class ValuationResult:
     method: str
     intrinsic_value_per_share: float | None
@@ -178,6 +213,7 @@ class AssetAnalyticsReport:
     dividend_discount: ValuationResult
     discounted_cash_flow: ValuationResult
     valuation_depth: ValuationDepthMetrics
+    etf: ETFAnalytics | None
 
 
 @dataclass(frozen=True)
@@ -380,6 +416,93 @@ class AnalyticsRepository:
             for row in rows
         ]
 
+    def asset_profile(self, asset_id: str) -> dict[str, str | None]:
+        row = self.conn.execute(
+            """
+            SELECT asset_type, asset_subtype, symbol
+            FROM asset
+            WHERE asset_id = ?
+            """,
+            [asset_id.upper().strip()],
+        ).fetchone()
+        if row is None:
+            return {"asset_type": None, "asset_subtype": None, "symbol": None}
+        return {"asset_type": row[0], "asset_subtype": row[1], "symbol": row[2]}
+
+    def etf_profile(self, asset_id: str) -> dict[str, Any]:
+        if not self._table_exists("etf_profile"):
+            return {}
+        row = self.conn.execute(
+            """
+            SELECT expense_ratio, benchmark_index_id
+            FROM etf_profile
+            WHERE asset_id = ?
+            """,
+            [asset_id.upper().strip()],
+        ).fetchone()
+        if row is None:
+            return {}
+        return {"expense_ratio": row[0], "benchmark_index_id": row[1]}
+
+    def etf_holdings(self, asset_id: str) -> list[EtfHoldingAnalytics]:
+        if not self._table_exists("etf_holding"):
+            return []
+        rows = self.conn.execute(
+            """
+            SELECT
+                holding_symbol,
+                holding_name,
+                weight_pct,
+                sector,
+                country,
+                currency
+            FROM etf_holding
+            WHERE asset_id = ?
+            ORDER BY weight_pct DESC NULLS LAST, holding_symbol
+            """,
+            [asset_id.upper().strip()],
+        ).fetchall()
+        return [
+            EtfHoldingAnalytics(
+                holding_symbol=row[0],
+                holding_name=row[1],
+                weight=normalize_weight(row[2]),
+                sector=row[3],
+                country=row[4],
+                currency=row[5],
+            )
+            for row in rows
+        ]
+
+    def portfolio_direct_holding_weights(self, portfolio_id: int) -> dict[str, tuple[str, float | None]]:
+        rows = self.conn.execute(
+            """
+            SELECT
+                p.asset_id,
+                COALESCE(a.symbol, p.asset_id) AS symbol,
+                p.qty * q.latest_price AS market_value
+            FROM position p
+            JOIN asset a
+              ON a.asset_id = p.asset_id
+            LEFT JOIN (
+                SELECT asset_id, COALESCE(adj_close, close) AS latest_price
+                FROM asset_quote_daily
+                QUALIFY ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY date DESC) = 1
+            ) q
+              ON q.asset_id = p.asset_id
+            WHERE p.portfolio_id = ?
+              AND COALESCE(p.qty, 0) <> 0
+            """,
+            [portfolio_id],
+        ).fetchall()
+        total_value = sum(float(row[2]) for row in rows if row[2] is not None and row[2] > 0)
+        result: dict[str, tuple[str, float | None]] = {}
+        for row in rows:
+            symbol = str(row[1]).upper()
+            weight = float(row[2]) / total_value if row[2] is not None and total_value > 0 else None
+            result[symbol] = (row[0], weight)
+        return result
+
     def portfolio_positions(self, portfolio_id: int) -> list[tuple[int, str, float, float]]:
         rows = self.conn.execute(
             """
@@ -482,6 +605,7 @@ class AnalyticsEngine:
         self,
         asset_id: str,
         benchmark_index_id: str | None = None,
+        portfolio_id: int | None = None,
         risk_free_rate: float = 0.0,
         discount_rate: float = 0.10,
         dividend_growth_rate: float = 0.03,
@@ -513,6 +637,23 @@ class AnalyticsEngine:
             terminal_growth_rate=terminal_growth_rate,
             forecast_years=forecast_years,
         )
+        etf = etf_analytics(
+            asset_id=asset_id,
+            asset_profile=self.repo.asset_profile(asset_id),
+            etf_profile=self.repo.etf_profile(asset_id),
+            holdings=self.repo.etf_holdings(asset_id),
+            annual_distribution_per_share=dividend,
+            latest_price=latest_price,
+            price_history=prices,
+            benchmark_price_history=self.repo.benchmark_price_history(
+                benchmark_index_id or self.repo.etf_profile(asset_id).get("benchmark_index_id")
+            )
+            if (benchmark_index_id or self.repo.etf_profile(asset_id).get("benchmark_index_id"))
+            else [],
+            direct_portfolio_weights=self.repo.portfolio_direct_holding_weights(portfolio_id)
+            if portfolio_id is not None
+            else {},
+        )
 
         return AssetAnalyticsReport(
             asset_id=asset_id,
@@ -538,6 +679,7 @@ class AnalyticsEngine:
                 forecast_years=forecast_years,
             ),
             valuation_depth=valuation_depth,
+            etf=etf,
         )
 
     def portfolio_report(
@@ -1650,6 +1792,124 @@ def valuation_missing_inputs(
     if fcf is None:
         missing.append("free cash flow")
     return missing
+
+
+def etf_analytics(
+    asset_id: str,
+    asset_profile: dict[str, str | None],
+    etf_profile: dict[str, Any],
+    holdings: list[EtfHoldingAnalytics],
+    annual_distribution_per_share: float | None,
+    latest_price: float | None,
+    price_history: list[PricePoint],
+    benchmark_price_history: list[PricePoint],
+    direct_portfolio_weights: dict[str, tuple[str, float | None]],
+) -> ETFAnalytics | None:
+    asset_type = (asset_profile.get("asset_type") or "").lower()
+    asset_subtype = (asset_profile.get("asset_subtype") or "").lower()
+    is_etf = asset_type == "etf" or asset_subtype == "etf" or bool(etf_profile or holdings)
+    if not is_etf:
+        return None
+
+    expense_ratio = (
+        float(etf_profile["expense_ratio"])
+        if etf_profile.get("expense_ratio") is not None
+        else None
+    )
+    benchmark_index_id = etf_profile.get("benchmark_index_id")
+    distribution_yield = safe_div(annual_distribution_per_share, latest_price)
+    tracking = tracking_error(price_history, benchmark_price_history)
+    missing: list[str] = []
+    if expense_ratio is None:
+        missing.append("expense ratio")
+    if not holdings:
+        missing.append("ETF holdings")
+    if annual_distribution_per_share is None:
+        missing.append("distribution history")
+    if tracking is None:
+        missing.append("benchmark price history")
+
+    return ETFAnalytics(
+        is_etf=True,
+        expense_ratio=expense_ratio,
+        benchmark_index_id=benchmark_index_id,
+        annual_distribution_per_share=annual_distribution_per_share,
+        distribution_yield=distribution_yield,
+        tracking_error=tracking,
+        holding_count=len(holdings),
+        top_holdings=holdings[:10],
+        overlap_with_portfolio=etf_portfolio_overlap(holdings, direct_portfolio_weights, asset_id),
+        sector_exposure=holding_dimension_exposure(holdings, "sector"),
+        country_exposure=holding_dimension_exposure(holdings, "country"),
+        currency_exposure=holding_dimension_exposure(holdings, "currency"),
+        missing_inputs=missing,
+    )
+
+
+def tracking_error(asset_prices: list[PricePoint], benchmark_prices: list[PricePoint]) -> float | None:
+    asset_by_date = {point.date: point.close for point in asset_prices if point.close > 0}
+    benchmark_by_date = {point.date: point.close for point in benchmark_prices if point.close > 0}
+    dates = sorted(set(asset_by_date).intersection(benchmark_by_date))
+    if len(dates) < 3:
+        return None
+    asset_returns = simple_returns([asset_by_date[day] for day in dates])
+    benchmark_returns = simple_returns([benchmark_by_date[day] for day in dates])
+    if len(asset_returns) != len(benchmark_returns) or len(asset_returns) < 2:
+        return None
+    active_returns = [
+        asset_return - benchmark_return
+        for asset_return, benchmark_return in zip(asset_returns, benchmark_returns)
+    ]
+    return annualized_volatility(active_returns)
+
+
+def etf_portfolio_overlap(
+    holdings: list[EtfHoldingAnalytics],
+    direct_portfolio_weights: dict[str, tuple[str, float | None]],
+    etf_asset_id: str,
+) -> list[EtfOverlapAnalytics]:
+    overlaps: list[EtfOverlapAnalytics] = []
+    etf_asset_id = etf_asset_id.upper()
+    for holding in holdings:
+        symbol = holding.holding_symbol.upper()
+        direct = direct_portfolio_weights.get(symbol)
+        if direct is None:
+            continue
+        direct_asset_id, direct_weight = direct
+        if direct_asset_id.upper() == etf_asset_id:
+            continue
+        overlaps.append(
+            EtfOverlapAnalytics(
+                holding_symbol=symbol,
+                direct_asset_id=direct_asset_id,
+                etf_weight=holding.weight,
+                direct_portfolio_weight=direct_weight,
+            )
+        )
+    return overlaps
+
+
+def holding_dimension_exposure(
+    holdings: list[EtfHoldingAnalytics],
+    dimension: str,
+) -> dict[str, float]:
+    exposure: dict[str, float] = {}
+    for holding in holdings:
+        weight = holding.weight
+        if weight is None:
+            continue
+        value = getattr(holding, dimension) or "Unknown"
+        exposure[value] = exposure.get(value, 0.0) + weight
+    return dict(sorted(exposure.items()))
+
+
+def normalize_weight(value: Any) -> float | None:
+    if value is None:
+        return None
+    weight = float(value)
+    if weight > 1.0:
+        return weight / 100.0
+    return weight
 
 
 def dividend_discount_model(

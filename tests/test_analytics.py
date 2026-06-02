@@ -121,6 +121,7 @@ def test_asset_report_uses_existing_db_inputs_and_marks_missing_fundamentals(tmp
     assert report.discounted_cash_flow.intrinsic_value_per_share is None
     assert "cash flow per share" in report.discounted_cash_flow.missing_inputs
     assert "income statement" in report.valuation_depth.missing_inputs
+    assert report.etf is None
 
 
 def test_portfolio_report_builds_weighted_return_series(tmp_path):
@@ -396,6 +397,154 @@ def test_asset_report_includes_valuation_depth_from_statement_json(tmp_path):
     assert report.valuation_depth.price_to_free_cash_flow == pytest.approx(20.0)
     assert report.valuation_depth.dcf_scenarios[1].scenario_name == "base"
     assert report.valuation_depth.missing_inputs == []
+
+
+def test_asset_report_includes_etf_profile_holdings_and_overlap(tmp_path):
+    db = DB(str(tmp_path / "etf_analytics.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')")
+    db.conn.execute(
+        """
+        CREATE TABLE etf_profile (
+            asset_id TEXT PRIMARY KEY,
+            expense_ratio DOUBLE,
+            benchmark_index_id TEXT
+        )
+        """
+    )
+    db.conn.execute(
+        """
+        CREATE TABLE etf_holding (
+            asset_id TEXT,
+            holding_symbol TEXT,
+            holding_name TEXT,
+            weight_pct DOUBLE,
+            sector TEXT,
+            country TEXT,
+            currency TEXT
+        )
+        """
+    )
+    db.conn.execute(
+        """
+        CREATE TABLE benchmark_index_daily_price (
+            index_id TEXT,
+            price_date DATE,
+            close DOUBLE,
+            adj_close DOUBLE
+        )
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy)
+        VALUES
+            ('VTI', 'VTI', 'etf', 'USD'),
+            ('AAPL', 'AAPL', 'stock', 'USD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO position(portfolio_id, asset_id, qty, book_cost, created_at, updated_at)
+        VALUES
+            (1, 'VTI', 1, 100, now(), now()),
+            (1, 'AAPL', 1, 150, now(), now())
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO etf_profile(asset_id, expense_ratio, benchmark_index_id)
+        VALUES ('VTI', 0.0003, 'TOTAL_US')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO etf_holding(asset_id, holding_symbol, holding_name, weight_pct, sector, country, currency)
+        VALUES
+            ('VTI', 'AAPL', 'Apple Inc.', 55, 'Technology', 'US', 'USD'),
+            ('VTI', 'RY', 'Royal Bank of Canada', 45, 'Financials', 'CA', 'CAD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO dividend_event(asset_id, ex_date, dividend_per_share, source)
+        VALUES
+            ('VTI', DATE '2024-12-01', 0.25, 'test'),
+            ('VTI', DATE '2024-09-01', 0.25, 'test'),
+            ('VTI', DATE '2024-06-01', 0.25, 'test'),
+            ('VTI', DATE '2024-03-01', 0.25, 'test')
+        """
+    )
+
+    start = date(2025, 1, 1)
+    for i in range(6):
+        db.conn.execute(
+            """
+            INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+            VALUES
+                ('VTI', ?, ?, ?, 'test'),
+                ('AAPL', ?, ?, ?, 'test')
+            """,
+            [
+                start + timedelta(days=i),
+                100.0 + (i * 2),
+                100.0 + (i * 2),
+                start + timedelta(days=i),
+                150.0 + i,
+                150.0 + i,
+            ],
+        )
+        db.conn.execute(
+            """
+            INSERT INTO benchmark_index_daily_price(index_id, price_date, close, adj_close)
+            VALUES ('TOTAL_US', ?, ?, ?)
+            """,
+            [start + timedelta(days=i), 100.0 + (i * 1.8), 100.0 + (i * 1.8)],
+        )
+
+    report = AnalyticsEngine(AnalyticsRepository(db.conn)).asset_report("VTI", portfolio_id=1)
+
+    assert report.etf is not None
+    assert report.etf.is_etf is True
+    assert report.etf.expense_ratio == pytest.approx(0.0003)
+    assert report.etf.benchmark_index_id == "TOTAL_US"
+    assert report.etf.annual_distribution_per_share == pytest.approx(1.0)
+    assert report.etf.distribution_yield == pytest.approx(1.0 / 110.0)
+    assert report.etf.tracking_error is not None
+    assert report.etf.holding_count == 2
+    assert report.etf.top_holdings[0].holding_symbol == "AAPL"
+    assert report.etf.sector_exposure == {
+        "Financials": pytest.approx(0.45),
+        "Technology": pytest.approx(0.55),
+    }
+    assert report.etf.country_exposure == {"CA": pytest.approx(0.45), "US": pytest.approx(0.55)}
+    assert len(report.etf.overlap_with_portfolio) == 1
+    assert report.etf.overlap_with_portfolio[0].holding_symbol == "AAPL"
+    assert report.etf.missing_inputs == []
+
+
+def test_etf_report_marks_missing_optional_holdings_tables(tmp_path):
+    db = DB(str(tmp_path / "etf_missing.db"))
+    init_db(db)
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy)
+        VALUES ('VTI', 'VTI', 'etf', 'USD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+        VALUES ('VTI', DATE '2026-01-05', 100, 100, 'test')
+        """
+    )
+
+    report = AnalyticsEngine(AnalyticsRepository(db.conn)).asset_report("VTI")
+
+    assert report.etf is not None
+    assert report.etf.holding_count == 0
+    assert "ETF holdings" in report.etf.missing_inputs
+    assert "expense ratio" in report.etf.missing_inputs
 
 
 def test_portfolio_risk_decomposition_calculates_concentration_and_exposures():
