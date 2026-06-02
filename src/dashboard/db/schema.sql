@@ -462,4 +462,222 @@ ON fundamental_subscription (is_active, next_refresh_at);
 CREATE INDEX IF NOT EXISTS idx_fundamental_sync_state_asset
 ON fundamental_sync_state (asset_id);
 
+-------------------------------
+-- ingestion domain c: sentiment
+-------------------------------
+
+CREATE SEQUENCE IF NOT EXISTS seq_news_source_id START 1;
+CREATE SEQUENCE IF NOT EXISTS seq_news_article_id START 1;
+CREATE SEQUENCE IF NOT EXISTS seq_social_source_id START 1;
+CREATE SEQUENCE IF NOT EXISTS seq_social_post_id START 1;
+CREATE SEQUENCE IF NOT EXISTS seq_sentiment_observation_id START 1;
+
+CREATE TABLE IF NOT EXISTS news_source (
+    source_id BIGINT PRIMARY KEY DEFAULT nextval('seq_news_source_id'),
+    source_name TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    base_url TEXT,
+    is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS news_article (
+    article_id BIGINT PRIMARY KEY DEFAULT nextval('seq_news_article_id'),
+    source_item_id TEXT,
+    source_name TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    title TEXT NOT NULL,
+    summary TEXT,
+    url TEXT,
+    author TEXT,
+    published_at TIMESTAMP,
+    fetched_at TIMESTAMP NOT NULL DEFAULT now(),
+    raw_payload_json TEXT,
+    content_hash TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+    UNIQUE(provider, source_item_id),
+    UNIQUE(content_hash)
+);
+
+CREATE TABLE IF NOT EXISTS news_article_asset_mention (
+    article_id BIGINT NOT NULL,
+    asset_id TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    relevance_score DOUBLE NOT NULL DEFAULT 1.0,
+    mention_reason TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    PRIMARY KEY (article_id, asset_id),
+    FOREIGN KEY(article_id) REFERENCES news_article(article_id),
+    FOREIGN KEY(asset_id) REFERENCES asset(asset_id)
+);
+
+CREATE TABLE IF NOT EXISTS social_source (
+    social_source_id BIGINT PRIMARY KEY DEFAULT nextval('seq_social_source_id'),
+    source_name TEXT NOT NULL,
+    is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS social_post (
+    post_id BIGINT PRIMARY KEY DEFAULT nextval('seq_social_post_id'),
+    provider TEXT NOT NULL,
+    source_post_id TEXT NOT NULL,
+    source_name TEXT NOT NULL,
+    author TEXT,
+    title TEXT,
+    body TEXT,
+    url TEXT,
+    published_at TIMESTAMP,
+    fetched_at TIMESTAMP NOT NULL DEFAULT now(),
+    score INTEGER,
+    comment_count INTEGER,
+    like_count INTEGER,
+    repost_count INTEGER,
+    reply_count INTEGER,
+    raw_payload_json TEXT,
+    content_hash TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+    UNIQUE(provider, source_post_id)
+);
+
+CREATE TABLE IF NOT EXISTS social_post_asset_mention (
+    post_id BIGINT NOT NULL,
+    asset_id TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    relevance_score DOUBLE NOT NULL DEFAULT 1.0,
+    mention_reason TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    PRIMARY KEY (post_id, asset_id),
+    FOREIGN KEY(post_id) REFERENCES social_post(post_id),
+    FOREIGN KEY(asset_id) REFERENCES asset(asset_id)
+);
+
+CREATE TABLE IF NOT EXISTS sentiment_observation (
+    observation_id BIGINT PRIMARY KEY DEFAULT nextval('seq_sentiment_observation_id'),
+    asset_id TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    item_type TEXT NOT NULL,
+    item_id BIGINT NOT NULL,
+    provider TEXT NOT NULL,
+    sentiment_label TEXT NOT NULL,
+    sentiment_score DOUBLE NOT NULL,
+    confidence DOUBLE NOT NULL DEFAULT 0.5,
+    relevance_score DOUBLE NOT NULL DEFAULT 1.0,
+    source_weight DOUBLE NOT NULL DEFAULT 1.0,
+    engagement_weight DOUBLE NOT NULL DEFAULT 1.0,
+    explanation TEXT,
+    observed_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    FOREIGN KEY(asset_id) REFERENCES asset(asset_id)
+);
+
+CREATE TABLE IF NOT EXISTS ticker_sentiment_daily (
+    asset_id TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    date DATE NOT NULL,
+    retail_sentiment_score DOUBLE,
+    news_sentiment_score DOUBLE,
+    analyst_sentiment_score DOUBLE,
+    blended_sentiment_score DOUBLE,
+    reddit_post_count INTEGER NOT NULL DEFAULT 0,
+    x_post_count INTEGER NOT NULL DEFAULT 0,
+    article_count INTEGER NOT NULL DEFAULT 0,
+    bullish_count INTEGER NOT NULL DEFAULT 0,
+    neutral_count INTEGER NOT NULL DEFAULT 0,
+    bearish_count INTEGER NOT NULL DEFAULT 0,
+    sentiment_momentum_1d DOUBLE,
+    sentiment_momentum_7d DOUBLE,
+    sentiment_momentum_30d DOUBLE,
+    unusual_volume_flag BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+    PRIMARY KEY (asset_id, date),
+    FOREIGN KEY(asset_id) REFERENCES asset(asset_id)
+);
+
+CREATE TABLE IF NOT EXISTS ticker_news_daily (
+    asset_id TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    date DATE NOT NULL,
+    article_count INTEGER NOT NULL DEFAULT 0,
+    high_relevance_article_count INTEGER NOT NULL DEFAULT 0,
+    bullish_article_count INTEGER NOT NULL DEFAULT 0,
+    bearish_article_count INTEGER NOT NULL DEFAULT 0,
+    neutral_article_count INTEGER NOT NULL DEFAULT 0,
+    top_article_ids_json TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+    PRIMARY KEY (asset_id, date),
+    FOREIGN KEY(asset_id) REFERENCES asset(asset_id)
+);
+
+CREATE TABLE IF NOT EXISTS ticker_factor_snapshot (
+    asset_id TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    snapshot_date DATE NOT NULL,
+    growth_score DOUBLE,
+    value_score DOUBLE,
+    quality_score DOUBLE,
+    momentum_score DOUBLE,
+    defensive_score DOUBLE,
+    dividend_score DOUBLE,
+    volatility_score DOUBLE,
+    revision_score DOUBLE,
+    overall_factor_score DOUBLE,
+    factor_labels_json TEXT,
+    explanation TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+    PRIMARY KEY (asset_id, snapshot_date),
+    FOREIGN KEY(asset_id) REFERENCES asset(asset_id)
+);
+
+CREATE TABLE IF NOT EXISTS ticker_quant_rating_snapshot (
+    asset_id TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    snapshot_date DATE NOT NULL,
+    overall_quant_score DOUBLE,
+    overall_quant_rating TEXT,
+    growth_rating TEXT,
+    value_rating TEXT,
+    quality_rating TEXT,
+    momentum_rating TEXT,
+    defensive_rating TEXT,
+    dividend_rating TEXT,
+    volatility_rating TEXT,
+    factor_profile TEXT,
+    explanation TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+    PRIMARY KEY (asset_id, snapshot_date),
+    FOREIGN KEY(asset_id) REFERENCES asset(asset_id)
+);
+
+CREATE TABLE IF NOT EXISTS sentiment_ingestion_state (
+    source_name TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    universe_type TEXT NOT NULL,
+    last_attempted_at TIMESTAMP,
+    last_succeeded_at TIMESTAMP,
+    last_cursor TEXT,
+    sync_status TEXT,
+    error_message TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+    PRIMARY KEY (source_name, provider, universe_type)
+);
+
+CREATE INDEX IF NOT EXISTS sentiment_observation_asset_date_idx
+ON sentiment_observation(asset_id, observed_at);
+
+CREATE INDEX IF NOT EXISTS news_article_published_idx
+ON news_article(published_at);
+
+CREATE INDEX IF NOT EXISTS social_post_published_idx
+ON social_post(published_at);
+
 COMMIT; 

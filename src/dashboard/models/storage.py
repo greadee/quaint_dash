@@ -471,6 +471,11 @@ class DashboardManager:
         if domain == "corporate":
             return CorporateCalendarIngestionService(self.conn).process_jobs(max_jobs=max_jobs)
 
+        if domain == "sentiment":
+            from dashboard.ingestion_sentiment.scheduler import SentimentIngestionScheduler
+
+            return SentimentIngestionScheduler(self.conn).run_sentiment_jobs(max_jobs=max_jobs)
+
         if domain != "all":
             raise ValueError(f"Unsupported ingestion job domain: {domain}")
 
@@ -486,9 +491,159 @@ class DashboardManager:
                 completed += did_corporate
                 continue
 
+            from dashboard.ingestion_sentiment.scheduler import SentimentIngestionScheduler
+
+            did_sentiment = SentimentIngestionScheduler(self.conn).run_sentiment_jobs(max_jobs=1)
+            if did_sentiment:
+                completed += did_sentiment
+                continue
+
             break
 
         return completed
+
+    def sentiment_refresh(self, target: str, source: str = "all") -> int:
+        from dashboard.ingestion_sentiment.scheduler import SentimentIngestionScheduler
+        from dashboard.ingestion_sentiment.service import SentimentIngestionService
+
+        target = target.upper().strip()
+        source = source.lower().strip()
+
+        if target == "ALL":
+            scheduler = SentimentIngestionScheduler(self.conn)
+            total = 0
+            if source in {"all", "news"}:
+                total += len(scheduler.enqueue_news_refresh_for_universe())
+            if source in {"all", "reddit", "x", "social", "retail"}:
+                total += len(
+                    scheduler.enqueue_retail_sentiment_refresh_for_universe(
+                        source="all" if source in {"all", "social", "retail"} else source
+                    )
+                )
+            return total
+
+        return SentimentIngestionService(self.conn).refresh_ticker(target, source=source)
+
+    def run_sentiment_jobs(self, max_jobs: int = 1) -> int:
+        from dashboard.ingestion_sentiment.scheduler import SentimentIngestionScheduler
+
+        return SentimentIngestionScheduler(self.conn).run_sentiment_jobs(max_jobs=max_jobs)
+
+    def list_news_for_ticker(self, ticker: str, limit: int = 10, days: int = 30):
+        from dashboard.ingestion_sentiment.repo import SentimentIngestionRepository
+
+        return SentimentIngestionRepository(self.conn).list_news_for_ticker(ticker, limit=limit)
+
+    def list_social_for_ticker(self, ticker: str, limit: int = 10, days: int = 30):
+        from dashboard.ingestion_sentiment.repo import SentimentIngestionRepository
+
+        return SentimentIngestionRepository(self.conn).list_social_for_ticker(ticker, limit=limit)
+
+    def refresh_factor_snapshot(self, target: str) -> int:
+        from datetime import date
+        from dashboard.ingestion_sentiment.scheduler import SentimentIngestionScheduler
+        from dashboard.ingestion_sentiment.service import SentimentIngestionService
+
+        target = target.upper().strip()
+        if target == "ALL":
+            return len(
+                SentimentIngestionScheduler(self.conn).enqueue_factor_snapshot_refresh(
+                    snapshot_date=date.today()
+                )
+            )
+        return SentimentIngestionService(self.conn).refresh_factor_snapshot(target, date.today())
+
+    def refresh_quant_rating(self, target: str) -> int:
+        from datetime import date
+        from dashboard.ingestion_sentiment.scheduler import SentimentIngestionScheduler
+        from dashboard.ingestion_sentiment.service import SentimentIngestionService
+
+        target = target.upper().strip()
+        if target == "ALL":
+            return len(
+                SentimentIngestionScheduler(self.conn).enqueue_quant_rating_refresh(
+                    snapshot_date=date.today()
+                )
+            )
+        return SentimentIngestionService(self.conn).refresh_quant_rating(target, date.today())
+
+    def sentiment_summary(self, ticker: str) -> str:
+        ticker = ticker.upper().strip()
+        row = self.conn.execute(
+            """
+            SELECT ticker, blended_sentiment_score, retail_sentiment_score, news_sentiment_score
+            FROM ticker_sentiment_daily
+            WHERE ticker = ?
+            ORDER BY date DESC
+            LIMIT 1
+            """,
+            [ticker],
+        ).fetchone()
+        if row is None:
+            return f"Ticker: {ticker}\nNo sentiment summary found."
+
+        return (
+            f"Ticker: {row[0]}\n"
+            f"Blended sentiment: {self._sentiment_label(row[1])} ({self._fmt_score(row[1])})\n"
+            f"Retail sentiment: {self._sentiment_label(row[2])} ({self._fmt_score(row[2])})\n"
+            f"News sentiment: {self._sentiment_label(row[3])} ({self._fmt_score(row[3])})"
+        )
+
+    def quant_summary(self, ticker: str) -> str:
+        ticker = ticker.upper().strip()
+        row = self.conn.execute(
+            """
+            SELECT
+                ticker,
+                overall_quant_score,
+                overall_quant_rating,
+                factor_profile,
+                growth_rating,
+                value_rating,
+                quality_rating,
+                momentum_rating,
+                defensive_rating,
+                dividend_rating,
+                volatility_rating
+            FROM ticker_quant_rating_snapshot
+            WHERE ticker = ?
+            ORDER BY snapshot_date DESC
+            LIMIT 1
+            """,
+            [ticker],
+        ).fetchone()
+        if row is None:
+            return f"Ticker: {ticker}\nNo quant summary found."
+
+        return (
+            f"Ticker: {row[0]}\n"
+            f"Internal quant rating: {row[2]} ({self._fmt_score(row[1])})\n"
+            f"Quant profile: {row[3] or 'Unclassified'}\n"
+            f"Factor ratings: Growth {row[4] or '-'}, Value {row[5] or '-'}, "
+            f"Quality {row[6] or '-'}, Momentum {row[7] or '-'}, "
+            f"Defensive {row[8] or '-'}, Dividend {row[9] or '-'}, "
+            f"Volatility {row[10] or '-'}"
+        )
+
+    @staticmethod
+    def _fmt_score(score) -> str:
+        if score is None:
+            return "n/a"
+        return f"{score:+.2f}" if abs(score) <= 1 else f"{score:.0f}"
+
+    @staticmethod
+    def _sentiment_label(score) -> str:
+        if score is None:
+            return "No data"
+        if score >= 0.4:
+            return "Bullish"
+        if score > 0.05:
+            return "Neutral / Positive"
+        if score <= -0.4:
+            return "Bearish"
+        if score < -0.05:
+            return "Neutral / Negative"
+        return "Neutral"
 
     def run_market_backfill_jobs(self, max_jobs: int = 1) -> int:
         """

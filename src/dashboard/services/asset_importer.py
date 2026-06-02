@@ -184,7 +184,7 @@ class AssetImporter:
         if profile.get("isFund") is True:
             return "fund"
         if profile.get("isAdr") is True:
-            return "adr"
+            return "stock"
 
         return "stock"
 
