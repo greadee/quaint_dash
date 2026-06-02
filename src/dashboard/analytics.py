@@ -63,6 +63,24 @@ class RelativeRiskMetrics:
 
 
 @dataclass(frozen=True)
+class PortfolioPerformanceMetrics:
+    start_date: date | None
+    end_date: date | None
+    beginning_market_value: float
+    ending_market_value: float
+    net_contributions: float
+    net_withdrawals: float
+    net_external_cash_flow: float
+    dividend_income: float
+    realized_gain: float | None
+    unrealized_gain: float | None
+    total_gain: float | None
+    modified_dietz_return: float | None
+    money_weighted_return: float | None
+    missing_inputs: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class ValuationResult:
     method: str
     intrinsic_value_per_share: float | None
@@ -102,6 +120,7 @@ class PortfolioAnalyticsReport:
     portfolio_id: int
     positions: list[PositionAnalytics]
     market_value: float
+    performance: PortfolioPerformanceMetrics
     risk: RiskReturnMetrics | None
     relative: RelativeRiskMetrics | None
     missing_inputs: list[str]
@@ -274,6 +293,28 @@ class AnalyticsRepository:
         ).fetchall()
         return [(int(row[0]), row[1], float(row[2]), float(row[3])) for row in rows]
 
+    def portfolio_transactions(self, portfolio_id: int) -> list[tuple[Any, ...]]:
+        rows = self.conn.execute(
+            """
+            SELECT
+                txn_id,
+                portfolio_id,
+                time_stamp,
+                txn_type,
+                asset_id,
+                qty,
+                price,
+                ccy,
+                cash_amt,
+                fee_amt
+            FROM txn
+            WHERE portfolio_id = ?
+            ORDER BY time_stamp, txn_id
+            """,
+            [portfolio_id],
+        ).fetchall()
+        return rows
+
     def tracked_asset_ids(self) -> list[str]:
         rows = self.conn.execute(
             """
@@ -411,6 +452,15 @@ class AnalyticsEngine:
         ]
 
         portfolio_prices = self._synthetic_portfolio_prices(weighted_positions)
+        performance = portfolio_performance_metrics(
+            transactions=self.repo.portfolio_transactions(portfolio_id),
+            ending_market_value=total_value,
+            unrealized_gain=sum(
+                p.unrealized_gain for p in weighted_positions if p.unrealized_gain is not None
+            )
+            if weighted_positions
+            else None,
+        )
         benchmark = (
             self.repo.benchmark_price_history(benchmark_index_id)
             if benchmark_index_id is not None
@@ -432,6 +482,7 @@ class AnalyticsEngine:
             portfolio_id=portfolio_id,
             positions=weighted_positions,
             market_value=total_value,
+            performance=performance,
             risk=risk,
             relative=relative,
             missing_inputs=missing,
@@ -887,6 +938,201 @@ def relative_risk_metrics(
     )
 
 
+def portfolio_performance_metrics(
+    transactions: list[tuple[Any, ...]],
+    ending_market_value: float,
+    unrealized_gain: float | None,
+) -> PortfolioPerformanceMetrics:
+    if not transactions:
+        return PortfolioPerformanceMetrics(
+            start_date=None,
+            end_date=None,
+            beginning_market_value=0.0,
+            ending_market_value=ending_market_value,
+            net_contributions=0.0,
+            net_withdrawals=0.0,
+            net_external_cash_flow=0.0,
+            dividend_income=0.0,
+            realized_gain=None,
+            unrealized_gain=unrealized_gain,
+            total_gain=unrealized_gain,
+            modified_dietz_return=None,
+            money_weighted_return=None,
+            missing_inputs=["portfolio transactions"],
+        )
+
+    start_date = _txn_date(transactions[0])
+    end_date = date.today()
+    contributions = 0.0
+    withdrawals = 0.0
+    dividend_income = 0.0
+    dated_external_flows: list[tuple[date, float]] = []
+    investor_cash_flows: list[tuple[date, float]] = []
+
+    for txn in transactions:
+        txn_type = str(txn[3]).lower()
+        txn_date = _txn_date(txn)
+        amount = _txn_cash_value(txn)
+        if txn_type == "contribution" and amount is not None:
+            value = abs(amount)
+            contributions += value
+            dated_external_flows.append((txn_date, value))
+            investor_cash_flows.append((txn_date, -value))
+        elif txn_type == "withdrawal" and amount is not None:
+            value = abs(amount)
+            withdrawals += value
+            dated_external_flows.append((txn_date, -value))
+            investor_cash_flows.append((txn_date, value))
+        elif txn_type == "dividend":
+            dividend_income += max(0.0, (amount or 0.0) - _txn_fee(txn))
+
+    realized_gain, realized_missing = average_cost_realized_gain(transactions)
+    total_gain = None
+    if realized_gain is not None or unrealized_gain is not None:
+        total_gain = (realized_gain or 0.0) + (unrealized_gain or 0.0) + dividend_income
+
+    external_flow = contributions - withdrawals
+    dietz = modified_dietz_return(
+        beginning_market_value=0.0,
+        ending_market_value=ending_market_value,
+        external_flows=dated_external_flows,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    if ending_market_value > 0:
+        investor_cash_flows.append((end_date, ending_market_value))
+    mwr = money_weighted_return(investor_cash_flows)
+
+    missing = []
+    if realized_missing:
+        missing.extend(realized_missing)
+    if not dated_external_flows and ending_market_value > 0:
+        missing.append("external cash flows")
+
+    return PortfolioPerformanceMetrics(
+        start_date=start_date,
+        end_date=end_date,
+        beginning_market_value=0.0,
+        ending_market_value=ending_market_value,
+        net_contributions=contributions,
+        net_withdrawals=withdrawals,
+        net_external_cash_flow=external_flow,
+        dividend_income=dividend_income,
+        realized_gain=realized_gain,
+        unrealized_gain=unrealized_gain,
+        total_gain=total_gain,
+        modified_dietz_return=dietz,
+        money_weighted_return=mwr,
+        missing_inputs=missing,
+    )
+
+
+def average_cost_realized_gain(transactions: list[tuple[Any, ...]]) -> tuple[float | None, list[str]]:
+    lots: dict[str, dict[str, float]] = {}
+    realized = 0.0
+    saw_sell = False
+    missing: list[str] = []
+
+    for txn in transactions:
+        txn_type = str(txn[3]).lower()
+        asset_id = txn[4]
+        if asset_id is None or txn_type not in {"buy", "sell"}:
+            continue
+
+        qty = abs(float(txn[5] or 0.0))
+        price = float(txn[6] or 0.0)
+        fee = _txn_fee(txn)
+        if qty <= 0 or price <= 0:
+            missing.append(f"{asset_id}: {txn_type} quantity or price")
+            continue
+
+        lot = lots.setdefault(asset_id, {"qty": 0.0, "cost": 0.0})
+        if txn_type == "buy":
+            lot["qty"] += qty
+            lot["cost"] += qty * price + fee
+            continue
+
+        saw_sell = True
+        if lot["qty"] <= 0:
+            missing.append(f"{asset_id}: sell without tracked cost basis")
+            continue
+
+        sell_qty = min(qty, lot["qty"])
+        average_cost = lot["cost"] / lot["qty"]
+        basis = average_cost * sell_qty
+        proceeds = sell_qty * price - fee
+        realized += proceeds - basis
+        lot["qty"] -= sell_qty
+        lot["cost"] -= basis
+
+        if qty > sell_qty:
+            missing.append(f"{asset_id}: partial sell without enough tracked cost basis")
+
+    return (realized if saw_sell else 0.0), sorted(set(missing))
+
+
+def modified_dietz_return(
+    beginning_market_value: float,
+    ending_market_value: float,
+    external_flows: list[tuple[date, float]],
+    start_date: date | None,
+    end_date: date | None,
+) -> float | None:
+    if start_date is None or end_date is None:
+        return None
+    total_days = max(1, (end_date - start_date).days)
+    weighted_flows = 0.0
+    total_flows = 0.0
+    for flow_date, amount in external_flows:
+        days_remaining = max(0, (end_date - flow_date).days)
+        weight = days_remaining / total_days
+        weighted_flows += amount * weight
+        total_flows += amount
+
+    denominator = beginning_market_value + weighted_flows
+    if denominator == 0:
+        return None
+    return (ending_market_value - beginning_market_value - total_flows) / denominator
+
+
+def money_weighted_return(cash_flows: list[tuple[date, float]]) -> float | None:
+    if len(cash_flows) < 2:
+        return None
+
+    values = [amount for _flow_date, amount in cash_flows]
+    if not any(value < 0 for value in values) or not any(value > 0 for value in values):
+        return None
+
+    start_date = min(flow_date for flow_date, _amount in cash_flows)
+
+    def npv(rate: float) -> float:
+        total = 0.0
+        for flow_date, amount in cash_flows:
+            years = max(0.0, (flow_date - start_date).days / 365.25)
+            total += amount / ((1 + rate) ** years)
+        return total
+
+    low = -0.999
+    high = 10.0
+    low_value = npv(low)
+    high_value = npv(high)
+    if low_value * high_value > 0:
+        return None
+
+    for _ in range(100):
+        mid = (low + high) / 2
+        mid_value = npv(mid)
+        if abs(mid_value) < 1e-8:
+            return mid
+        if low_value * mid_value <= 0:
+            high = mid
+            high_value = mid_value
+        else:
+            low = mid
+            low_value = mid_value
+    return (low + high) / 2
+
+
 def dividend_discount_model(
     annual_dividend: float | None,
     market_price: float | None,
@@ -1158,6 +1404,30 @@ def _years_between(start_date: date | None, end_date: date | None) -> float | No
     if days <= 0:
         return None
     return days / 365.25
+
+
+def _txn_date(txn: tuple[Any, ...]) -> date:
+    stamp = txn[2]
+    if isinstance(stamp, datetime):
+        return stamp.date()
+    if isinstance(stamp, date):
+        return stamp
+    return datetime.fromisoformat(str(stamp)).date()
+
+
+def _txn_cash_value(txn: tuple[Any, ...]) -> float | None:
+    cash_amt = txn[8]
+    if cash_amt is not None:
+        return float(cash_amt)
+    qty = txn[5]
+    price = txn[6]
+    if qty is None or price is None:
+        return None
+    return abs(float(qty)) * float(price)
+
+
+def _txn_fee(txn: tuple[Any, ...]) -> float:
+    return float(txn[9] or 0.0)
 
 
 def _json_object(value: Any) -> dict[str, Any]:

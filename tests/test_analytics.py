@@ -12,6 +12,8 @@ from dashboard.analytics import (
     discounted_cash_flow_model,
     dividend_discount_model,
     implied_dcf_growth_rate,
+    money_weighted_return,
+    portfolio_performance_metrics,
     relative_risk_metrics,
     risk_return_metrics,
 )
@@ -163,7 +165,102 @@ def test_portfolio_report_builds_weighted_return_series(tmp_path):
     assert sum(p.weight for p in report.positions if p.weight is not None) == pytest.approx(1.0)
     assert report.risk is not None
     assert report.risk.observations == 10
+    assert report.performance.ending_market_value == pytest.approx(report.market_value)
     assert report.missing_inputs == []
+
+
+def test_portfolio_performance_tracks_cash_flows_income_and_gains():
+    transactions = [
+        (1, 1, date(2025, 1, 1), "contribution", None, None, None, "USD", 1000.0, 0.0),
+        (2, 1, date(2025, 1, 2), "buy", "AAA", 5.0, 100.0, "USD", None, 5.0),
+        (3, 1, date(2025, 2, 1), "dividend", "AAA", 5.0, 1.0, "USD", None, 0.0),
+        (4, 1, date(2025, 3, 1), "sell", "AAA", 2.0, 120.0, "USD", None, 2.0),
+        (5, 1, date(2025, 3, 15), "withdrawal", None, None, None, "USD", 100.0, 0.0),
+    ]
+
+    metrics = portfolio_performance_metrics(
+        transactions=transactions,
+        ending_market_value=360.0,
+        unrealized_gain=57.0,
+    )
+
+    assert metrics.net_contributions == pytest.approx(1000.0)
+    assert metrics.net_withdrawals == pytest.approx(100.0)
+    assert metrics.net_external_cash_flow == pytest.approx(900.0)
+    assert metrics.dividend_income == pytest.approx(5.0)
+    assert metrics.realized_gain == pytest.approx(36.0)
+    assert metrics.unrealized_gain == pytest.approx(57.0)
+    assert metrics.total_gain == pytest.approx(98.0)
+    assert metrics.modified_dietz_return is not None
+    assert metrics.money_weighted_return is not None
+    assert metrics.missing_inputs == []
+
+
+def test_money_weighted_return_solves_cash_flow_irr():
+    flows = [
+        (date(2025, 1, 1), -100.0),
+        (date(2026, 1, 1), 110.0),
+    ]
+
+    assert money_weighted_return(flows) == pytest.approx(0.10, abs=0.001)
+
+
+def test_portfolio_report_includes_ledger_performance_metrics(tmp_path):
+    db = DB(str(tmp_path / "portfolio_performance.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')")
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy)
+        VALUES ('AAA', 'AAA', 'stock', 'USD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO txn(
+            txn_id,
+            portfolio_id,
+            time_stamp,
+            txn_type,
+            asset_id,
+            qty,
+            price,
+            ccy,
+            cash_amt,
+            fee_amt,
+            batch_id
+        )
+        VALUES
+            (1, 1, '2025-01-01 09:00:00', 'contribution', NULL, NULL, NULL, 'USD', 1000, 0, 1),
+            (2, 1, '2025-01-02 09:00:00', 'buy', 'AAA', 5, 100, 'USD', NULL, 5, 1),
+            (3, 1, '2025-02-01 09:00:00', 'dividend', 'AAA', 5, 1, 'USD', NULL, 0, 1),
+            (4, 1, '2025-03-01 09:00:00', 'sell', 'AAA', 2, 120, 'USD', NULL, 2, 1)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO position(portfolio_id, asset_id, qty, book_cost, created_at, updated_at)
+        VALUES (1, 'AAA', 3, 303, now(), now())
+        """
+    )
+    start = date(2025, 1, 1)
+    for i in range(10):
+        close = 100.0 + i
+        db.conn.execute(
+            """
+            INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+            VALUES ('AAA', ?, ?, ?, 'test')
+            """,
+            [start + timedelta(days=i), close, close],
+        )
+
+    report = AnalyticsEngine(AnalyticsRepository(db.conn)).portfolio_report(1)
+
+    assert report.performance.net_contributions == pytest.approx(1000.0)
+    assert report.performance.dividend_income == pytest.approx(5.0)
+    assert report.performance.realized_gain == pytest.approx(36.0)
+    assert report.performance.unrealized_gain == pytest.approx((3 * 109.0) - 303.0)
 
 
 def test_analytics_storage_is_disabled_by_default(tmp_path):
