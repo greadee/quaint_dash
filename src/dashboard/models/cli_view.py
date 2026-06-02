@@ -124,6 +124,14 @@ class DashboardView(View):
                 job list [--status pending|running|done|failed] [--domain market|corporate],
                 job schedule [pipeline] [--target asset-id|all] [--max-assets N],
                 job run [all|market|corporate] [--max-jobs N],
+                sentiment-refresh <ticker|all> [--source reddit|x|news|all],
+                sentiment-run [--max-jobs N],
+                sentiment-summary <ticker>,
+                news-list <ticker> [--limit N] [--days N],
+                social-list <ticker> [--limit N] [--days N],
+                factor-refresh <ticker|all>,
+                quant-refresh <ticker|all>,
+                quant-summary <ticker>,
                 live-price-stream [--include-watchlist] [--no-extended-hours],
 
                 help [command-name], 
@@ -270,6 +278,54 @@ class DashboardView(View):
 
                 print(f"Processed {n_done} ingestion job(s).")
                 return self
+
+        if cmd == "sentiment-refresh":
+            n = self.access.sentiment_refresh(ns.target, source=ns.source)
+            print(f"Scheduled/refreshed {n} sentiment item(s).")
+            return self
+
+        if cmd == "sentiment-run":
+            n = self.access.run_sentiment_jobs(max_jobs=ns.max_jobs)
+            print(f"Processed {n} sentiment job(s).")
+            return self
+
+        if cmd == "sentiment-summary":
+            print(self.access.sentiment_summary(ns.ticker))
+            return self
+
+        if cmd == "news-list":
+            self._print_news_rows(
+                self.access.list_news_for_ticker(
+                    ns.ticker,
+                    limit=ns.limit,
+                    days=ns.days,
+                )
+            )
+            return self
+
+        if cmd == "social-list":
+            self._print_social_rows(
+                self.access.list_social_for_ticker(
+                    ns.ticker,
+                    limit=ns.limit,
+                    days=ns.days,
+                )
+            )
+            return self
+
+        if cmd == "factor-refresh":
+            n = self.access.refresh_factor_snapshot(ns.target)
+            print(f"Scheduled/refreshed {n} factor item(s).")
+            return self
+
+        if cmd == "quant-refresh":
+            n = self.access.refresh_quant_rating(ns.target)
+            print(f"Scheduled/refreshed {n} quant item(s).")
+            return self
+
+        if cmd == "quant-summary":
+            print(self.access.quant_summary(ns.ticker))
+            return self
         
         if cmd == "live-price-stream":
             print("Starting live price stream.")
@@ -344,6 +400,23 @@ class DashboardView(View):
             )
 
     @staticmethod
+    def _print_news_rows(rows) -> None:
+        if not rows:
+            print("No news found.")
+            return
+        for i, row in enumerate(rows, start=1):
+            print(f"{i}. [{row[1]}] {row[3]} - {row[5] or ''}")
+
+    @staticmethod
+    def _print_social_rows(rows) -> None:
+        if not rows:
+            print("No social posts found.")
+            return
+        for i, row in enumerate(rows, start=1):
+            text = row[3] or row[4] or ""
+            print(f"{i}. [{row[1]}] {text} - score {row[7] or 0} - {row[5] or ''}")
+
+    @staticmethod
     def build_dash_parsers():
         """
         Create and return the argparse parsers for dashboard commands.
@@ -407,7 +480,7 @@ class DashboardView(View):
 
         p_list = job_subp.add_parser("list", add_help=True, description="List ingestion jobs.")
         p_list.add_argument("--status", dest="status", action="append", default=None)
-        p_list.add_argument("--domain", dest="domain", choices=["market", "corporate"], default=None)
+        p_list.add_argument("--domain", dest="domain", choices=["market", "corporate", "sentiment"], default=None)
         p_list.add_argument("--all", dest="all", action="store_true")
         p_list.add_argument("-n", "--n", dest="n", type=int, default=None)
 
@@ -436,10 +509,47 @@ class DashboardView(View):
         p_schedule.add_argument("--year", dest="year", type=int, default=None)
 
         p_run = job_subp.add_parser("run", add_help=True, description="Process pending ingestion jobs.")
-        p_run.add_argument("domain", nargs="?", choices=["all", "market", "corporate"], default="all")
+        p_run.add_argument("domain", nargs="?", choices=["all", "market", "corporate", "sentiment"], default="all")
         p_run.add_argument("--max-jobs", dest="max_jobs", type=int, default=1)
 
         parsers["job"] = p
+
+        p = _NoExitParser(prog="sentiment-refresh", add_help=True, description="Refresh or schedule sentiment ingestion.")
+        p.add_argument("target", help="Ticker/asset id or all.")
+        p.add_argument("--source", choices=["all", "reddit", "x", "news", "social", "retail"], default="all")
+        parsers["sentiment-refresh"] = p
+
+        p = _NoExitParser(prog="sentiment-run", add_help=True, description="Run sentiment ingestion jobs.")
+        p.add_argument("--max-jobs", dest="max_jobs", type=int, default=1)
+        parsers["sentiment-run"] = p
+
+        p = _NoExitParser(prog="sentiment-summary", add_help=True, description="Show sentiment summary for a ticker.")
+        p.add_argument("ticker")
+        parsers["sentiment-summary"] = p
+
+        p = _NoExitParser(prog="news-list", add_help=True, description="List news for a ticker.")
+        p.add_argument("ticker")
+        p.add_argument("--limit", type=int, default=10)
+        p.add_argument("--days", type=int, default=30)
+        parsers["news-list"] = p
+
+        p = _NoExitParser(prog="social-list", add_help=True, description="List social posts for a ticker.")
+        p.add_argument("ticker")
+        p.add_argument("--limit", type=int, default=10)
+        p.add_argument("--days", type=int, default=30)
+        parsers["social-list"] = p
+
+        p = _NoExitParser(prog="factor-refresh", add_help=True, description="Refresh factor snapshot for a ticker or all.")
+        p.add_argument("target")
+        parsers["factor-refresh"] = p
+
+        p = _NoExitParser(prog="quant-refresh", add_help=True, description="Refresh quant rating for a ticker or all.")
+        p.add_argument("target")
+        parsers["quant-refresh"] = p
+
+        p = _NoExitParser(prog="quant-summary", add_help=True, description="Show quant summary for a ticker.")
+        p.add_argument("ticker")
+        parsers["quant-summary"] = p
 
         p = _NoExitParser(prog="live-price-stream", add_help=True, description="Start the live price streaming worker for portfolio assets.",)
         p.add_argument("--include-watchlist", dest="include_watchlist", action="store_true", help="Also stream active watchlist assets. Default: portfolio assets only.",)
