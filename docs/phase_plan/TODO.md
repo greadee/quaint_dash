@@ -15,18 +15,22 @@ Design Decisions: [ADR's](../adr/adr_ph3.md)
     - Forecast metrics with blended expected CAGR and simulation bands
     - AI-ready facts, explanations, anomaly flags, and snapshot comparisons
     - Portfolio weighted return series
+    - Portfolio valuation rollups and holding expected-return contributions
+    - Default benchmark selection by ETF profile, benchmark metadata, geography, and currency
+    - Stable analytics report payload schema
 - Data coverage and missing-input reporting
 - Optional analytics snapshot storage
     - Disabled by default
     - Stores compact metric columns and JSON payloads when enabled
     - Refreshes daily
     - Refreshes same-day portfolio snapshots when portfolio state changes
+- Dashboard CLI analytics commands
+    - Asset and portfolio analytics reports
+    - JSON report output
+    - Storage status, enable, disable, and refresh
 
 ### Tasks:
-- Add CLI/dashboard commands for analytics reports
-- Add user-facing configuration for enabling analytics storage
 - Add migration/schema docs for analytics snapshot tables once the storage surface is promoted beyond service-level opt-in
-- Add benchmark default selection per portfolio or asset geography
 
 ## Phase 2 - Metric Ingestion
 Design Decisions: [ADR's](../adr/adr_ph2.md)

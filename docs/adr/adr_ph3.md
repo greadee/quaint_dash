@@ -147,6 +147,57 @@ The future AI layer should be able to answer questions from a predictable, compa
 - `compare_ai_snapshot_facts()` reports fact changes between two contexts with absolute and relative change values when both sides are numeric.
 - Anomaly flags currently cover missing inputs, high volatility, drawdown, valuation downside, high P/E, leverage, ETF tracking error, concentration, low diversification, and portfolio volatility.
 
+## ADR-066: User-Facing Analytics Commands and Stable Payloads
+
+**Decision:** Analytics reports are available through dashboard CLI commands and can be emitted as a stable JSON payload.
+
+**Context:**
+The analytics engine is useful only if users and future application layers can access it through a predictable public boundary. Human-readable command output is useful for quick inspection, while JSON output is needed for dashboard, API, and AI integrations.
+
+**Rationale:**
+- Gives users direct asset and portfolio analytics access
+- Keeps optional analytics storage configurable without code changes
+- Provides a stable report shape for future UI/API/AI consumers
+- Avoids coupling downstream layers to internal dataclass layout changes
+
+**Implementation Notes:**
+- `analytics asset <asset-id>` prints an asset analytics summary.
+- `analytics portfolio <portfolio-id>` prints a portfolio analytics summary.
+- `--json` emits `phase3.analytics.v1` payloads with:
+  - schema version
+  - report type
+  - subject id
+  - selected benchmark id
+  - AI context
+  - full report payload
+- `analytics storage status|enable|disable|refresh` manages optional analytics snapshot storage.
+
+## ADR-067: Benchmark Defaults and Portfolio Valuation Rollups
+
+**Decision:** Asset and portfolio analytics can select default benchmarks, and portfolio reports include weighted valuation rollups.
+
+**Context:**
+Alpha, beta, and relative return metrics are easier to use when the system can infer a reasonable benchmark from available data. Portfolio analytics also need a valuation posture, not only risk and return metrics, so users can see how much of the portfolio appears undervalued, overvalued, income-producing, or dependent on expected growth.
+
+**Rationale:**
+- Reduces manual benchmark setup for common workflows
+- Uses stored ETF profile benchmark IDs when available
+- Uses benchmark metadata, geography, and currency before falling back to common core indices
+- Makes portfolio valuation explainable through weighted holding metrics
+- Adds expected-return contribution by holding for future allocation analysis
+
+**Implementation Notes:**
+- Asset reports prefer explicit benchmark, then ETF profile benchmark, then stored benchmark metadata, then available static core index defaults.
+- Portfolio reports choose a default benchmark from dominant valued position geography/currency.
+- Portfolio valuation rollups include:
+  - weighted margin of safety
+  - weighted P/E
+  - weighted price/free cash flow
+  - weighted dividend yield
+  - weighted expected CAGR
+  - undervalued, fair-value, and overvalued weights
+  - holding-level expected CAGR contribution
+
 ## ADR-064: Daily and Portfolio-Change Refresh Cadence
 
 **Decision:** Stored analytics snapshots should refresh at least daily, and portfolio snapshots should refresh again when portfolio state changes.

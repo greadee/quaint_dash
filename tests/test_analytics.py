@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+import json
 
 import pytest
 
 from dashboard.analytics import (
+    ANALYTICS_REPORT_SCHEMA_VERSION,
     AIReadinessContext,
     AnalyticsFact,
     AnalyticsEngine,
     AnalyticsRepository,
     AnalyticsStorageService,
     PricePoint,
+    analytics_report_payload,
     compare_ai_snapshot_facts,
     discounted_cash_flow_model,
     dividend_discount_model,
@@ -134,6 +137,66 @@ def test_asset_report_uses_existing_db_inputs_and_marks_missing_fundamentals(tmp
     assert any(anomaly.metric == "missing_inputs" for anomaly in report.ai_context.anomalies)
 
 
+def test_asset_report_uses_default_benchmark_from_asset_metadata(tmp_path):
+    db = DB(str(tmp_path / "analytics_default_benchmark.db"))
+    init_db(db)
+    db.conn.execute(
+        """
+        CREATE TABLE benchmark_index (
+            index_id TEXT PRIMARY KEY,
+            country_code TEXT,
+            currency TEXT,
+            is_core BOOLEAN,
+            is_active BOOLEAN
+        )
+        """
+    )
+    db.conn.execute(
+        """
+        CREATE TABLE benchmark_index_daily_price (
+            index_id TEXT,
+            price_date DATE,
+            close DOUBLE,
+            adj_close DOUBLE
+        )
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO benchmark_index(index_id, country_code, currency, is_core, is_active)
+        VALUES ('SP500', 'US', 'USD', TRUE, TRUE)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, country)
+        VALUES ('AAPL', 'AAPL', 'stock', 'USD', 'US')
+        """
+    )
+    start = date(2025, 1, 1)
+    for i in range(6):
+        db.conn.execute(
+            """
+            INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+            VALUES ('AAPL', ?, ?, ?, 'test')
+            """,
+            [start + timedelta(days=i), 100.0 + i, 100.0 + i],
+        )
+        db.conn.execute(
+            """
+            INSERT INTO benchmark_index_daily_price(index_id, price_date, close, adj_close)
+            VALUES ('SP500', ?, ?, ?)
+            """,
+            [start + timedelta(days=i), 200.0 + i, 200.0 + i],
+        )
+
+    report = AnalyticsEngine(AnalyticsRepository(db.conn)).asset_report("AAPL")
+
+    assert report.benchmark_index_id == "SP500"
+    assert report.relative is not None
+    assert report.relative.beta is not None
+
+
 def test_portfolio_report_builds_weighted_return_series(tmp_path):
     db = DB(str(tmp_path / "portfolio_analytics.db"))
     init_db(db)
@@ -175,6 +238,7 @@ def test_portfolio_report_builds_weighted_return_series(tmp_path):
     report = AnalyticsEngine(AnalyticsRepository(db.conn)).portfolio_report(1)
 
     assert report.market_value == pytest.approx((2 * 109.0) + 54.5)
+    assert report.benchmark_index_id is None
     assert len(report.positions) == 2
     assert sum(p.weight for p in report.positions if p.weight is not None) == pytest.approx(1.0)
     assert report.risk is not None
@@ -183,6 +247,7 @@ def test_portfolio_report_builds_weighted_return_series(tmp_path):
     assert report.risk_decomposition.asset_count == 2
     assert report.risk_decomposition.diversification_score == pytest.approx(64.0)
     assert report.forecast.simulation is not None
+    assert report.valuation.weighted_pe_ratio is None
     assert report.missing_inputs == []
     assert report.ai_context.subject_type == "portfolio"
     assert report.ai_context.snapshot_hash is not None
@@ -417,6 +482,97 @@ def test_asset_report_includes_valuation_depth_from_statement_json(tmp_path):
     assert report.forecast.blended_expected_cagr is not None
     assert report.ai_context.summary.startswith("AAPL has latest price")
     assert any(explanation.topic == "valuation" for explanation in report.ai_context.explanations)
+
+
+def test_portfolio_report_rolls_up_holding_valuation_metrics(tmp_path):
+    db = DB(str(tmp_path / "portfolio_valuation_rollup.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, shares_outstanding)
+        VALUES
+            ('AAA', 'AAA', 'stock', 'USD', 100),
+            ('BBB', 'BBB', 'stock', 'USD', 100)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO position(portfolio_id, asset_id, qty, book_cost, created_at, updated_at)
+        VALUES
+            (1, 'AAA', 1, 20, now(), now()),
+            (1, 'BBB', 1, 10, now(), now())
+        """
+    )
+    for asset_id, close, net_income, fcf in [
+        ("AAA", 20.0, 100.0, 100.0),
+        ("BBB", 10.0, 50.0, 50.0),
+    ]:
+        db.conn.execute(
+            """
+            INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+            VALUES
+                (?, DATE '2026-01-01', ?, ?, 'test'),
+                (?, DATE '2026-01-02', ?, ?, 'test')
+            """,
+            [asset_id, close - 1, close - 1, asset_id, close, close],
+        )
+        db.conn.execute(
+            """
+            INSERT INTO financial_statement(asset_id, statement_type, year, quarter, data_json, source)
+            VALUES
+                (?, 'income', 2025, 4, ?, 'test'),
+                (?, 'balance', 2025, 4, ?, 'test'),
+                (?, 'cashflow', 2025, 4, ?, 'test'),
+                (?, 'cashflow', 2024, 4, ?, 'test')
+            """,
+            [
+                asset_id,
+                f'{{"revenue":500,"netIncome":{net_income},"eps":{net_income / 100}}}',
+                asset_id,
+                '{"totalStockholdersEquity":250,"totalAssets":500,"totalDebt":50}',
+                asset_id,
+                f'{{"freeCashFlow":{fcf}}}',
+                asset_id,
+                f'{{"freeCashFlow":{fcf * 0.9}}}',
+            ],
+        )
+
+    report = AnalyticsEngine(AnalyticsRepository(db.conn)).portfolio_report(1)
+
+    assert report.valuation.weighted_pe_ratio == pytest.approx(20.0)
+    assert report.valuation.weighted_price_to_free_cash_flow == pytest.approx(20.0)
+    assert report.valuation.weighted_expected_cagr is not None
+    assert len(report.valuation.position_contributions) == 2
+    assert any(fact.key == "weighted_pe_ratio" for fact in report.ai_context.facts)
+    assert any(explanation.topic == "portfolio_valuation" for explanation in report.ai_context.explanations)
+
+
+def test_analytics_report_payload_has_stable_public_shape(tmp_path):
+    db = DB(str(tmp_path / "analytics_payload.db"))
+    init_db(db)
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy)
+        VALUES ('AAPL', 'AAPL', 'stock', 'USD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+        VALUES ('AAPL', DATE '2026-01-05', 100, 100, 'test')
+        """
+    )
+
+    report = AnalyticsEngine(AnalyticsRepository(db.conn)).asset_report("AAPL")
+    payload = analytics_report_payload(report)
+
+    assert payload["schema_version"] == ANALYTICS_REPORT_SCHEMA_VERSION
+    assert payload["report_type"] == "asset"
+    assert payload["subject_id"] == "AAPL"
+    assert payload["ai_context"]["subject_type"] == "asset"
+    assert payload["report"]["asset_id"] == "AAPL"
+    json.dumps(payload)
 
 
 def test_ai_snapshot_fact_comparison_reports_metric_changes():

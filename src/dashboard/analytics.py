@@ -18,6 +18,7 @@ from typing import Any
 
 
 TRADING_DAYS_PER_YEAR = 252
+ANALYTICS_REPORT_SCHEMA_VERSION = "phase3.analytics.v1"
 REVENUE_ALIASES = ("revenue", "totalRevenue", "total_revenue")
 GROSS_PROFIT_ALIASES = ("grossProfit", "gross_profit")
 OPERATING_INCOME_ALIASES = ("operatingIncome", "operating_income")
@@ -35,6 +36,25 @@ OPERATING_CASH_FLOW_ALIASES = (
     "netCashProvidedByOperatingActivities",
 )
 CAPEX_ALIASES = ("capitalExpenditure", "capital_expenditure", "capex")
+DEFAULT_BENCHMARK_BY_COUNTRY = {
+    "US": "SP500",
+    "USA": "SP500",
+    "UNITED STATES": "SP500",
+    "CA": "TSXCOMP",
+    "CAN": "TSXCOMP",
+    "CANADA": "TSXCOMP",
+    "GB": "FTSE100",
+    "UK": "FTSE100",
+    "UNITED KINGDOM": "FTSE100",
+    "JP": "NIKKEI225",
+    "JAPAN": "NIKKEI225",
+}
+DEFAULT_BENCHMARK_BY_CURRENCY = {
+    "USD": "SP500",
+    "CAD": "TSXCOMP",
+    "GBP": "FTSE100",
+    "JPY": "NIKKEI225",
+}
 
 
 @dataclass(frozen=True)
@@ -217,6 +237,32 @@ class ForecastMetrics:
 
 
 @dataclass(frozen=True)
+class PositionValuationContribution:
+    asset_id: str
+    weight: float | None
+    margin_of_safety: float | None
+    pe_ratio: float | None
+    price_to_free_cash_flow: float | None
+    dividend_yield: float | None
+    expected_cagr: float | None
+    weighted_expected_cagr_contribution: float | None
+
+
+@dataclass(frozen=True)
+class PortfolioValuationRollup:
+    weighted_margin_of_safety: float | None
+    weighted_pe_ratio: float | None
+    weighted_price_to_free_cash_flow: float | None
+    weighted_dividend_yield: float | None
+    weighted_expected_cagr: float | None
+    undervalued_weight: float
+    overvalued_weight: float
+    fair_value_weight: float
+    position_contributions: list[PositionValuationContribution] = field(default_factory=list)
+    missing_inputs: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class AnalyticsFact:
     key: str
     label: str
@@ -277,6 +323,7 @@ class ValuationResult:
 @dataclass(frozen=True)
 class AssetAnalyticsReport:
     asset_id: str
+    benchmark_index_id: str | None
     latest_price: float | None
     data_coverage: DataCoverage
     risk: RiskReturnMetrics
@@ -304,10 +351,12 @@ class PositionAnalytics:
 @dataclass(frozen=True)
 class PortfolioAnalyticsReport:
     portfolio_id: int
+    benchmark_index_id: str | None
     positions: list[PositionAnalytics]
     market_value: float
     performance: PortfolioPerformanceMetrics
     risk_decomposition: PortfolioRiskDecomposition
+    valuation: PortfolioValuationRollup
     risk: RiskReturnMetrics | None
     relative: RelativeRiskMetrics | None
     forecast: ForecastMetrics
@@ -394,6 +443,107 @@ class AnalyticsRepository:
             params,
         ).fetchall()
         return [PricePoint(row[0], float(row[1])) for row in rows if row[1] and row[1] > 0]
+
+    def default_benchmark_for_asset(self, asset_id: str) -> str | None:
+        asset_id = asset_id.upper().strip()
+        etf_benchmark = self.etf_profile(asset_id).get("benchmark_index_id")
+        if etf_benchmark and self.benchmark_price_history(str(etf_benchmark)):
+            return str(etf_benchmark)
+
+        row = self.conn.execute(
+            """
+            SELECT country, ccy
+            FROM asset
+            WHERE asset_id = ?
+            """,
+            [asset_id],
+        ).fetchone()
+        if not row:
+            return self._available_static_benchmark(None, None)
+        return self._default_benchmark_for_country_currency(row[0], row[1])
+
+    def default_benchmark_for_portfolio(self, positions: list[PositionAnalytics]) -> str | None:
+        weights = {p.asset_id: p.weight for p in positions if p.weight is not None and p.weight > 0}
+        if not weights:
+            return self._available_static_benchmark(None, None)
+
+        metadata = self.asset_exposure_metadata(list(weights))
+        country_weights: dict[str, float] = {}
+        currency_weights: dict[str, float] = {}
+        for asset_id, weight in weights.items():
+            meta = metadata.get(asset_id, {})
+            country = _normalize_code(meta.get("country"))
+            currency = _normalize_code(meta.get("currency"))
+            if country:
+                country_weights[country] = country_weights.get(country, 0.0) + weight
+            if currency:
+                currency_weights[currency] = currency_weights.get(currency, 0.0) + weight
+
+        dominant_country = max(country_weights, key=country_weights.get) if country_weights else None
+        dominant_currency = max(currency_weights, key=currency_weights.get) if currency_weights else None
+        return self._default_benchmark_for_country_currency(dominant_country, dominant_currency)
+
+    def _default_benchmark_for_country_currency(
+        self,
+        country: str | None,
+        currency: str | None,
+    ) -> str | None:
+        country = _normalize_code(country)
+        currency = _normalize_code(currency)
+        metadata_match = self._benchmark_metadata_match(country, currency)
+        if metadata_match:
+            return metadata_match
+        return self._available_static_benchmark(country, currency)
+
+    def _benchmark_metadata_match(self, country: str | None, currency: str | None) -> str | None:
+        if not self._table_exists("benchmark_index") or not self._table_exists("benchmark_index_daily_price"):
+            return None
+        if not country and not currency:
+            return None
+
+        match_clauses = []
+        params: list[Any] = []
+        if country:
+            match_clauses.append("UPPER(b.country_code) = ?")
+            params.append(country)
+        if currency:
+            match_clauses.append("UPPER(b.currency) = ?")
+            params.append(currency)
+
+        rows = self.conn.execute(
+            f"""
+            SELECT b.index_id
+            FROM benchmark_index b
+            WHERE b.is_active = TRUE
+              AND ({" OR ".join(match_clauses)})
+              AND EXISTS (
+                  SELECT 1
+                  FROM benchmark_index_daily_price p
+                  WHERE p.index_id = b.index_id
+              )
+            ORDER BY
+                CASE WHEN UPPER(COALESCE(b.country_code, '')) = ? THEN 0 ELSE 1 END,
+                CASE WHEN b.is_core THEN 0 ELSE 1 END,
+                b.index_id
+            LIMIT 1
+            """,
+            [*params, country or ""],
+        ).fetchall()
+        return rows[0][0] if rows else None
+
+    def _available_static_benchmark(self, country: str | None, currency: str | None) -> str | None:
+        candidates = []
+        country_key = _normalize_code(country)
+        currency_key = _normalize_code(currency)
+        if country_key and country_key in DEFAULT_BENCHMARK_BY_COUNTRY:
+            candidates.append(DEFAULT_BENCHMARK_BY_COUNTRY[country_key])
+        if currency_key and currency_key in DEFAULT_BENCHMARK_BY_CURRENCY:
+            candidates.append(DEFAULT_BENCHMARK_BY_CURRENCY[currency_key])
+        candidates.extend(["SP500", "TSXCOMP", "DEV_INTL"])
+        for candidate in dict.fromkeys(candidates):
+            if self.benchmark_price_history(candidate):
+                return candidate
+        return None
 
     def latest_price(self, asset_id: str) -> float | None:
         row = self.conn.execute(
@@ -702,6 +852,7 @@ class AnalyticsEngine:
         forecast_years: int = 5,
     ) -> AssetAnalyticsReport:
         asset_id = asset_id.upper().strip()
+        benchmark_index_id = benchmark_index_id or self.repo.default_benchmark_for_asset(asset_id)
         prices = self.repo.price_history(asset_id)
         benchmark = (
             self.repo.benchmark_price_history(benchmark_index_id)
@@ -782,6 +933,7 @@ class AnalyticsEngine:
 
         return AssetAnalyticsReport(
             asset_id=asset_id,
+            benchmark_index_id=benchmark_index_id,
             latest_price=latest_price,
             data_coverage=self.repo.data_coverage(),
             risk=risk,
@@ -838,6 +990,7 @@ class AnalyticsEngine:
             )
             for p in positions
         ]
+        benchmark_index_id = benchmark_index_id or self.repo.default_benchmark_for_portfolio(weighted_positions)
 
         portfolio_prices = self._synthetic_portfolio_prices(weighted_positions)
         performance = portfolio_performance_metrics(
@@ -860,6 +1013,7 @@ class AnalyticsEngine:
                 [p.asset_id for p in weighted_positions]
             ),
         )
+        valuation = self._portfolio_valuation_rollup(weighted_positions)
         benchmark = (
             self.repo.benchmark_price_history(benchmark_index_id)
             if benchmark_index_id is not None
@@ -888,6 +1042,7 @@ class AnalyticsEngine:
             market_value=total_value,
             performance=performance,
             risk_decomposition=risk_decomposition,
+            valuation=valuation,
             risk=risk,
             relative=relative,
             forecast=forecast,
@@ -896,10 +1051,12 @@ class AnalyticsEngine:
 
         return PortfolioAnalyticsReport(
             portfolio_id=portfolio_id,
+            benchmark_index_id=benchmark_index_id,
             positions=weighted_positions,
             market_value=total_value,
             performance=performance,
             risk_decomposition=risk_decomposition,
+            valuation=valuation,
             risk=risk,
             relative=relative,
             forecast=forecast,
@@ -937,6 +1094,104 @@ class AnalyticsEngine:
                 normalized_value += position.weight * (price / bases[position.asset_id])
             points.append(PricePoint(point_date, normalized_value))
         return points
+
+    def _portfolio_valuation_rollup(
+        self,
+        positions: list[PositionAnalytics],
+        discount_rate: float = 0.10,
+        growth_rate: float = 0.03,
+        terminal_growth_rate: float = 0.03,
+        forecast_years: int = 5,
+    ) -> PortfolioValuationRollup:
+        contributions: list[PositionValuationContribution] = []
+        missing: list[str] = []
+
+        for position in positions:
+            if position.weight is None or position.weight <= 0:
+                continue
+            asset_id = position.asset_id
+            latest_price = position.latest_price
+            annual_dividend = self.repo.annual_dividend_per_share(asset_id)
+            dividend_yield = safe_div(annual_dividend, latest_price)
+            shares = self.repo.shares_outstanding(asset_id)
+            fcf = self.repo.latest_free_cash_flow(asset_id)
+            fcf_per_share = fcf / shares if fcf is not None and shares else None
+            dcf = discounted_cash_flow_model(
+                cashflow_per_share=fcf_per_share,
+                market_price=latest_price,
+                discount_rate=discount_rate,
+                growth_rate=growth_rate,
+                terminal_growth_rate=terminal_growth_rate,
+                forecast_years=forecast_years,
+            )
+            valuation_depth = valuation_depth_metrics(
+                income_statements=self.repo.financial_statement_history(asset_id, "income"),
+                balance_sheets=self.repo.financial_statement_history(asset_id, "balance"),
+                cashflow_statements=self.repo.financial_statement_history(asset_id, "cashflow"),
+                market_price=latest_price,
+                shares_outstanding=shares,
+                annual_dividend=annual_dividend,
+                discount_rate=discount_rate,
+                base_growth_rate=growth_rate,
+                terminal_growth_rate=terminal_growth_rate,
+                forecast_years=forecast_years,
+            )
+            risk = risk_return_metrics(self.repo.price_history(asset_id))
+            forecast = asset_forecast_metrics(
+                market_price=latest_price,
+                risk=risk,
+                valuation_depth=valuation_depth,
+                dividend_history=self.repo.dividend_history(asset_id),
+                annual_dividend=annual_dividend,
+                forecast_years=forecast_years,
+            )
+            expected = forecast.blended_expected_cagr
+            contributions.append(
+                PositionValuationContribution(
+                    asset_id=asset_id,
+                    weight=position.weight,
+                    margin_of_safety=dcf.margin_of_safety,
+                    pe_ratio=valuation_depth.pe_ratio,
+                    price_to_free_cash_flow=valuation_depth.price_to_free_cash_flow,
+                    dividend_yield=dividend_yield,
+                    expected_cagr=expected,
+                    weighted_expected_cagr_contribution=position.weight * expected
+                    if expected is not None
+                    else None,
+                )
+            )
+            missing.extend(f"{asset_id}: {item}" for item in dcf.missing_inputs)
+            missing.extend(f"{asset_id}: {item}" for item in valuation_depth.missing_inputs)
+            missing.extend(f"{asset_id}: {item}" for item in forecast.missing_inputs)
+
+        undervalued_weight = sum(
+            item.weight or 0.0
+            for item in contributions
+            if item.margin_of_safety is not None and item.margin_of_safety >= 0.10
+        )
+        overvalued_weight = sum(
+            item.weight or 0.0
+            for item in contributions
+            if item.margin_of_safety is not None and item.margin_of_safety <= -0.10
+        )
+        fair_value_weight = sum(
+            item.weight or 0.0
+            for item in contributions
+            if item.margin_of_safety is not None and -0.10 < item.margin_of_safety < 0.10
+        )
+
+        return PortfolioValuationRollup(
+            weighted_margin_of_safety=_weighted_average(contributions, "margin_of_safety"),
+            weighted_pe_ratio=_weighted_average(contributions, "pe_ratio"),
+            weighted_price_to_free_cash_flow=_weighted_average(contributions, "price_to_free_cash_flow"),
+            weighted_dividend_yield=_weighted_average(contributions, "dividend_yield"),
+            weighted_expected_cagr=_weighted_average(contributions, "expected_cagr"),
+            undervalued_weight=undervalued_weight,
+            overvalued_weight=overvalued_weight,
+            fair_value_weight=fair_value_weight,
+            position_contributions=contributions,
+            missing_inputs=sorted(set(missing)),
+        )
 
 
 class AnalyticsStorageService:
@@ -2411,12 +2666,20 @@ def portfolio_ai_context(
     market_value: float,
     performance: PortfolioPerformanceMetrics,
     risk_decomposition: PortfolioRiskDecomposition,
+    valuation: PortfolioValuationRollup,
     risk: RiskReturnMetrics | None,
     relative: RelativeRiskMetrics | None,
     forecast: ForecastMetrics,
     missing_inputs: list[str],
 ) -> AIReadinessContext:
-    missing = sorted(set(missing_inputs + risk_decomposition.missing_inputs + forecast.missing_inputs))
+    missing = sorted(
+        set(
+            missing_inputs
+            + risk_decomposition.missing_inputs
+            + valuation.missing_inputs
+            + forecast.missing_inputs
+        )
+    )
     facts = [
         _analytics_fact("market_value", "Market value", market_value, "currency", "portfolio_positions"),
         _analytics_fact("position_count", "Position count", len(positions), "count", "portfolio_positions"),
@@ -2480,6 +2743,48 @@ def portfolio_ai_context(
             "risk_decomposition",
         ),
         _analytics_fact(
+            "weighted_margin_of_safety",
+            "Weighted margin of safety",
+            valuation.weighted_margin_of_safety,
+            "percent",
+            "portfolio_valuation",
+        ),
+        _analytics_fact(
+            "weighted_pe_ratio",
+            "Weighted P/E ratio",
+            valuation.weighted_pe_ratio,
+            "ratio",
+            "portfolio_valuation",
+        ),
+        _analytics_fact(
+            "weighted_price_to_free_cash_flow",
+            "Weighted price to free cash flow",
+            valuation.weighted_price_to_free_cash_flow,
+            "ratio",
+            "portfolio_valuation",
+        ),
+        _analytics_fact(
+            "weighted_dividend_yield",
+            "Weighted dividend yield",
+            valuation.weighted_dividend_yield,
+            "percent",
+            "portfolio_valuation",
+        ),
+        _analytics_fact(
+            "weighted_expected_cagr",
+            "Weighted expected CAGR",
+            valuation.weighted_expected_cagr,
+            "percent",
+            "portfolio_valuation",
+        ),
+        _analytics_fact(
+            "overvalued_weight",
+            "Overvalued weight",
+            valuation.overvalued_weight,
+            "percent",
+            "portfolio_valuation",
+        ),
+        _analytics_fact(
             "blended_expected_cagr",
             "Blended expected CAGR",
             forecast.blended_expected_cagr,
@@ -2502,12 +2807,20 @@ def portfolio_ai_context(
             ),
         ),
         AnalyticsExplanation(
+            topic="portfolio_valuation",
+            summary=_portfolio_valuation_summary(valuation),
+            evidence=_present_fact_labels(
+                facts,
+                ["weighted_margin_of_safety", "weighted_pe_ratio", "weighted_dividend_yield"],
+            ),
+        ),
+        AnalyticsExplanation(
             topic="forecast",
             summary=_forecast_summary(forecast),
             evidence=_present_fact_labels(facts, ["blended_expected_cagr"]),
         ),
     ]
-    anomalies = portfolio_ai_anomalies(risk_decomposition, risk, missing)
+    anomalies = portfolio_ai_anomalies(risk_decomposition, risk, missing, valuation=valuation)
     summary = _portfolio_ai_summary(portfolio_id, market_value, positions, anomalies, missing)
     snapshot_hash = _ai_snapshot_hash(facts, anomalies, missing)
     return AIReadinessContext(
@@ -2549,6 +2862,30 @@ def compare_ai_snapshot_facts(
             )
         )
     return changes
+
+
+def analytics_report_payload(
+    report: AssetAnalyticsReport | PortfolioAnalyticsReport,
+) -> dict[str, Any]:
+    if isinstance(report, AssetAnalyticsReport):
+        report_type = "asset"
+        subject_id = report.asset_id
+    else:
+        report_type = "portfolio"
+        subject_id = str(report.portfolio_id)
+
+    return {
+        "schema_version": ANALYTICS_REPORT_SCHEMA_VERSION,
+        "report_type": report_type,
+        "subject_id": subject_id,
+        "benchmark_index_id": report.benchmark_index_id,
+        "ai_context": _json_ready(asdict(report.ai_context)),
+        "report": _json_ready(asdict(report)),
+    }
+
+
+def analytics_report_json(report: AssetAnalyticsReport | PortfolioAnalyticsReport) -> str:
+    return json.dumps(analytics_report_payload(report), sort_keys=True)
 
 
 def asset_ai_anomalies(
@@ -2595,6 +2932,7 @@ def portfolio_ai_anomalies(
     risk_decomposition: PortfolioRiskDecomposition,
     risk: RiskReturnMetrics | None,
     missing_inputs: list[str],
+    valuation: PortfolioValuationRollup | None = None,
 ) -> list[AnalyticsAnomaly]:
     anomalies: list[AnalyticsAnomaly] = []
     largest = risk_decomposition.largest_position_weight
@@ -2609,6 +2947,15 @@ def portfolio_ai_anomalies(
     volatility = risk_decomposition.portfolio_volatility or (risk.annualized_volatility if risk else None)
     if volatility is not None and volatility > 0.35:
         anomalies.append(AnalyticsAnomaly("medium", "portfolio_volatility", "Portfolio volatility is above 35%.", volatility))
+    if valuation and valuation.overvalued_weight > 0.50:
+        anomalies.append(
+            AnalyticsAnomaly(
+                "medium",
+                "overvalued_weight",
+                "More than half of the portfolio has negative valuation margin of safety.",
+                valuation.overvalued_weight,
+            )
+        )
     if missing_inputs:
         anomalies.append(
             AnalyticsAnomaly("low", "missing_inputs", "Some portfolio analytics inputs are unavailable.", len(missing_inputs))
@@ -2712,6 +3059,17 @@ def _portfolio_risk_summary(risk_decomposition: PortfolioRiskDecomposition) -> s
     )
 
 
+def _portfolio_valuation_summary(valuation: PortfolioValuationRollup) -> str:
+    if valuation.weighted_margin_of_safety is not None:
+        return (
+            f"Weighted margin of safety is {valuation.weighted_margin_of_safety:.2%}; "
+            f"overvalued weight is {valuation.overvalued_weight:.2%}."
+        )
+    if valuation.weighted_pe_ratio is not None:
+        return f"Weighted P/E ratio is {valuation.weighted_pe_ratio:.2f}."
+    return "Portfolio valuation rollup needs more holding-level fundamentals."
+
+
 def _forecast_summary(forecast: ForecastMetrics) -> str:
     if forecast.blended_expected_cagr is None:
         return "Forecast inputs are incomplete."
@@ -2736,6 +3094,29 @@ def _ai_snapshot_hash(
 
 def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _normalize_code(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.upper().strip()
+    return normalized or None
+
+
+def _weighted_average(
+    contributions: list[PositionValuationContribution],
+    attr: str,
+) -> float | None:
+    weighted_sum = 0.0
+    total_weight = 0.0
+    for contribution in contributions:
+        value = getattr(contribution, attr)
+        weight = contribution.weight
+        if value is None or weight is None:
+            continue
+        weighted_sum += value * weight
+        total_weight += weight
+    return safe_div(weighted_sum, total_weight)
 
 
 def dividend_discount_model(

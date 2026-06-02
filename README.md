@@ -94,10 +94,14 @@ dashboard           # or python -m dashboard
 - ETF analytics including expense ratio, distribution yield, tracking error, top holdings, exposures, and direct-holding overlap
 - Forecast analytics including valuation mean reversion, dividend growth projection, blended expected CAGR, and deterministic simulation bands
 - Portfolio analytics with weighted synthetic return series from current positions
+- Portfolio valuation posture with weighted valuation multiples, margin of safety, dividend yield, expected CAGR, and holding-level return contributions
 - Explicit missing-input reporting when dividends, fundamentals, benchmarks, or positions are unavailable
+- Default benchmark selection from stored ETF profile, benchmark metadata, or asset/portfolio geography and currency
 - Optional analytics snapshot storage for future AI-layer context, disabled by default
+- Dashboard CLI commands for analytics reports, JSON output, storage status, storage toggle, and storage refresh
 - Daily snapshot refresh behavior with same-day portfolio-change refreshes when storage is enabled
 - AI-ready report context with structured facts, explanations, anomaly flags, and snapshot fact comparisons
+- Stable analytics report payload schema: `phase3.analytics.v1`
 ```
 
 #### Architectural Decision Records: [Main Decisions](docs/adr/adr_ph3.md)
