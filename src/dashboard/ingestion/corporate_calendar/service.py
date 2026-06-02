@@ -124,3 +124,16 @@ class CorporateCalendarIngestionService:
         return scheduler.schedule_due_fundamental_subscription_refreshes(
             max_assets=max_assets,
         )
+
+    def schedule_due_fundamental_subscription_backfills(
+        self,
+        max_assets: int = 25,
+    ) -> list[int]:
+        """
+        Scheduler entry point for subscribed fundamentals historical backfills.
+        """
+        scheduler = CorporateCalendarScheduler(self.conn)
+
+        return scheduler.schedule_due_fundamental_subscription_backfills(
+            max_assets=max_assets,
+        )

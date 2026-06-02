@@ -24,6 +24,20 @@ def ensure_fundamental_phase1_schema(conn) -> None:
 
     conn.execute(
         """
+        ALTER TABLE fundamental_subscription
+        ADD COLUMN IF NOT EXISTS last_backfill_requested_at TIMESTAMP;
+        """
+    )
+
+    conn.execute(
+        """
+        ALTER TABLE fundamental_subscription
+        ADD COLUMN IF NOT EXISTS last_backfill_succeeded_at TIMESTAMP;
+        """
+    )
+
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS fundamental_sync_state (
             asset_id TEXT NOT NULL,
             dataset VARCHAR NOT NULL,

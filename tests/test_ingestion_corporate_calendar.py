@@ -413,3 +413,186 @@ def test_scheduler_recurring_fundamental_refreshes_respect_ticker_universe():
     assert rows == [
         ("AAPL", "refresh", "financial_statements", "pending"),
     ]
+
+
+def test_scheduler_fundamental_backfill_queues_only_active_subscribed_universe_assets():
+    conn = make_conn()
+    ensure_fundamental_phase1_schema(conn)
+    service = CorporateCalendarIngestionService(conn, provider=FakeCorporateProvider())
+
+    conn.execute(
+        """
+        INSERT INTO asset(asset_id, asset_type, ccy, track)
+        VALUES
+            ('MSFT', 'stock', 'USD', TRUE),
+            ('SPY', 'etf', 'USD', TRUE)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE portfolio_ticker (
+            portfolio_id BIGINT,
+            asset_id TEXT,
+            is_active BOOLEAN,
+            source TEXT,
+            created_at TIMESTAMP DEFAULT now(),
+            updated_at TIMESTAMP DEFAULT now(),
+            PRIMARY KEY(portfolio_id, asset_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE watchlist_ticker (
+            asset_id TEXT PRIMARY KEY,
+            is_active BOOLEAN,
+            source TEXT,
+            created_at TIMESTAMP DEFAULT now(),
+            updated_at TIMESTAMP DEFAULT now()
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'AAPL', TRUE, 'position')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO watchlist_ticker(asset_id, is_active, source)
+        VALUES
+            ('MSFT', TRUE, 'manual'),
+            ('SPY', TRUE, 'manual')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO fundamental_subscription(asset_id, is_active, next_refresh_at)
+        VALUES
+            ('AAPL', TRUE, now()),
+            ('MSFT', FALSE, now()),
+            ('SPY', TRUE, now())
+        """
+    )
+
+    job_ids = service.schedule_due_fundamental_subscription_backfills(max_assets=10)
+
+    rows = conn.execute(
+        """
+        SELECT asset_id, job_type, dataset, status
+        FROM ingestion_job
+        ORDER BY asset_id
+        """
+    ).fetchall()
+
+    assert len(job_ids) == 1
+    assert rows == [
+        ("AAPL", "backfill", "financial_statements", "pending"),
+    ]
+
+    requested_at = conn.execute(
+        """
+        SELECT last_backfill_requested_at
+        FROM fundamental_subscription
+        WHERE asset_id = 'AAPL'
+        """
+    ).fetchone()[0]
+
+    assert requested_at is not None
+
+
+def test_scheduler_fundamental_backfill_does_not_duplicate_open_jobs():
+    conn = make_conn()
+    ensure_fundamental_phase1_schema(conn)
+    service = CorporateCalendarIngestionService(conn, provider=FakeCorporateProvider())
+
+    conn.execute(
+        """
+        INSERT INTO fundamental_subscription(asset_id, is_active, next_refresh_at)
+        VALUES ('AAPL', TRUE, now())
+        """
+    )
+
+    first_job_ids = service.schedule_due_fundamental_subscription_backfills(max_assets=10)
+    second_job_ids = service.schedule_due_fundamental_subscription_backfills(max_assets=10)
+
+    count = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM ingestion_job
+        WHERE job_type = 'backfill'
+          AND dataset = 'financial_statements'
+        """
+    ).fetchone()[0]
+
+    assert len(first_job_ids) == 1
+    assert second_job_ids == []
+    assert count == 1
+
+
+def test_worker_marks_fundamental_backfill_succeeded_after_statement_ingestion():
+    conn = make_conn()
+    ensure_fundamental_phase1_schema(conn)
+    service = CorporateCalendarIngestionService(conn, provider=FakeCorporateProvider())
+
+    conn.execute(
+        """
+        INSERT INTO fundamental_subscription(asset_id, is_active, next_refresh_at)
+        VALUES ('AAPL', TRUE, now())
+        """
+    )
+
+    job_ids = service.schedule_due_fundamental_subscription_backfills(max_assets=10)
+    assert len(job_ids) == 1
+
+    processed = service.process_jobs(max_jobs=1)
+
+    subscription_row = conn.execute(
+        """
+        SELECT last_backfill_requested_at, last_backfill_succeeded_at
+        FROM fundamental_subscription
+        WHERE asset_id = 'AAPL'
+        """
+    ).fetchone()
+    statement_count = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM financial_statement
+        WHERE asset_id = 'AAPL'
+        """
+    ).fetchone()[0]
+
+    assert processed == 1
+    assert subscription_row[0] is not None
+    assert subscription_row[1] is not None
+    assert statement_count == 1
+
+
+def test_worker_marks_fundamental_refresh_succeeded_after_statement_ingestion():
+    conn = make_conn()
+    ensure_fundamental_phase1_schema(conn)
+    service = CorporateCalendarIngestionService(conn, provider=FakeCorporateProvider())
+
+    conn.execute(
+        """
+        INSERT INTO fundamental_subscription(asset_id, is_active, next_refresh_at)
+        VALUES ('AAPL', TRUE, now() - INTERVAL 1 DAY)
+        """
+    )
+
+    job_ids = service.schedule_due_fundamental_subscription_refreshes(max_assets=10)
+    assert len(job_ids) == 1
+
+    processed = service.process_jobs(max_jobs=1)
+
+    last_refresh_succeeded_at = conn.execute(
+        """
+        SELECT last_refresh_succeeded_at
+        FROM fundamental_subscription
+        WHERE asset_id = 'AAPL'
+        """
+    ).fetchone()[0]
+
+    assert processed == 1
+    assert last_refresh_succeeded_at is not None

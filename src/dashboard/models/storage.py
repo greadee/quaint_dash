@@ -544,6 +544,42 @@ class DashboardManager:
             )
         )
 
+    def schedule_due_fundamental_backfills(
+        self,
+        max_assets: int = 25,
+    ) -> int:
+        """
+        Schedule historical financial-statement backfills for subscribed assets.
+        """
+        from dashboard.ingestion.corporate_calendar.service import (
+            CorporateCalendarIngestionService,
+        )
+
+        service = CorporateCalendarIngestionService(self.conn)
+        return len(
+            service.schedule_due_fundamental_subscription_backfills(
+                max_assets=max_assets,
+            )
+        )
+
+    def schedule_due_fundamental_refreshes(
+        self,
+        max_assets: int = 25,
+    ) -> int:
+        """
+        Schedule recurring financial-statement refreshes for subscribed assets.
+        """
+        from dashboard.ingestion.corporate_calendar.service import (
+            CorporateCalendarIngestionService,
+        )
+
+        service = CorporateCalendarIngestionService(self.conn)
+        return len(
+            service.schedule_due_fundamental_subscription_refreshes(
+                max_assets=max_assets,
+            )
+        )
+
     def run_corporate_ingestion_jobs(self, max_jobs: int = 1) -> int:
         """
         Process queued corporate ingestion jobs.

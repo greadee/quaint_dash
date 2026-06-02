@@ -113,3 +113,40 @@ def test_init_db_keeps_fundamental_sync_state_asset_id_as_text(tmp_path: Path):
     columns = table_columns(db.conn, "fundamental_sync_state")
 
     assert columns["asset_id"].upper() == "VARCHAR"
+
+
+def test_init_db_adds_backfill_columns_to_existing_fundamental_subscription(tmp_path: Path):
+    db_path = tmp_path / "legacy_fundamental_subscription.db"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE asset (
+            asset_id TEXT PRIMARY KEY,
+            ccy TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE fundamental_subscription (
+            asset_id TEXT PRIMARY KEY,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            refresh_interval_days INTEGER NOT NULL DEFAULT 7,
+            next_refresh_at TIMESTAMP,
+            last_refresh_attempted_at TIMESTAMP,
+            last_refresh_succeeded_at TIMESTAMP,
+            subscription_source TEXT NOT NULL DEFAULT 'manual',
+            created_at TIMESTAMP NOT NULL DEFAULT now(),
+            updated_at TIMESTAMP NOT NULL DEFAULT now()
+        )
+        """
+    )
+    conn.close()
+
+    db = DB(str(db_path))
+    init_db(db)
+
+    columns = table_columns(db.conn, "fundamental_subscription")
+
+    assert "last_backfill_requested_at" in columns
+    assert "last_backfill_succeeded_at" in columns

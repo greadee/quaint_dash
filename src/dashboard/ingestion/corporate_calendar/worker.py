@@ -8,6 +8,8 @@ from dashboard.ingestion.corporate_calendar.constants import (
     DATASET_EARNINGS_ACTUALS,
     DATASET_EARNINGS_CALENDAR,
     DATASET_FINANCIAL_STATEMENTS,
+    JOB_TYPE_BACKFILL,
+    JOB_TYPE_REFRESH,
 )
 from dashboard.ingestion.corporate_calendar.db.ingestion_repo import (
     CorporateCalendarIngestionRepository,
@@ -69,6 +71,12 @@ class CorporateCalendarWorker:
                 end_date=job.requested_end_date,
                 last_successful_date=last_date,
             )
+
+            if job.dataset == DATASET_FINANCIAL_STATEMENTS:
+                if job.job_type == JOB_TYPE_REFRESH:
+                    self.repo.mark_fundamental_subscription_refresh_succeeded(job.asset_id)
+                elif job.job_type == JOB_TYPE_BACKFILL:
+                    self.repo.mark_fundamental_subscription_backfill_succeeded(job.asset_id)
 
             return True
 

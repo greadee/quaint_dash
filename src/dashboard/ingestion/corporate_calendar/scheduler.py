@@ -11,9 +11,11 @@ from dashboard.ingestion.corporate_calendar.constants import (
     DATASET_EARNINGS_CALENDAR,
     DATASET_FINANCIAL_STATEMENTS,
     DOMAIN_CORPORATE,
+    JOB_TYPE_BACKFILL,
     JOB_TYPE_CALENDAR_REFRESH,
     JOB_TYPE_EARNINGS_UPDATE,
     JOB_TYPE_REFRESH,
+    PRIORITY_CORPORATE_BACKFILL,
     PRIORITY_EARNINGS_UPDATE,
 )
 from dashboard.ingestion.corporate_calendar.db.ingestion_repo import (
@@ -22,6 +24,7 @@ from dashboard.ingestion.corporate_calendar.db.ingestion_repo import (
 from dashboard.ingestion.corporate_calendar.jobs import (
     enqueue_calendar_refresh_jobs,
 )
+from dashboard.ingestion.fundamentals.schema import ensure_fundamental_phase1_schema
 from dashboard.ingestion.ticker_universe import TickerUniverseRepository
 
 DEFAULT_FUNDAMENTAL_REFRESH_INTERVAL_DAYS = 7
@@ -161,6 +164,8 @@ class CorporateCalendarScheduler:
         The existing CorporateCalendarWorker will process those jobs using the
         existing financial statement ingestion path.
         """
+        ensure_fundamental_phase1_schema(self.conn)
+
         now = datetime.now()
         today = date.today()
 
@@ -217,6 +222,64 @@ class CorporateCalendarScheduler:
                 asset_id=asset_id,
                 refresh_interval_days=refresh_interval_days,
             )
+
+        return job_ids
+
+    def schedule_due_fundamental_subscription_backfills(
+        self,
+        max_assets: int = 25,
+    ) -> list[int]:
+        """
+        Enqueue one historical financial-statement backfill for subscribed assets.
+
+        Backfill is distinct from recurring refresh:
+        - backfill fills the historical quarterly statement store once
+        - refresh keeps already-subscribed assets current over time
+        """
+        ensure_fundamental_phase1_schema(self.conn)
+
+        asset_ids = self.ticker_universe.ingestible_asset_ids(
+            include_watchlist=True,
+            asset_types=("stock", "adr"),
+        )
+        if not asset_ids:
+            return []
+
+        placeholders = ", ".join("?" for _ in asset_ids)
+        rows = self.conn.execute(
+            f"""
+            SELECT asset_id
+            FROM fundamental_subscription
+            WHERE asset_id IN ({placeholders})
+              AND is_active = TRUE
+              AND last_backfill_succeeded_at IS NULL
+            ORDER BY COALESCE(last_backfill_requested_at, TIMESTAMP '1970-01-01') ASC,
+                     asset_id ASC
+            LIMIT ?
+            """,
+            [*asset_ids, max_assets],
+        ).fetchall()
+
+        job_ids: list[int] = []
+
+        for (asset_id,) in rows:
+            if self._has_open_job(
+                asset_id=asset_id,
+                dataset=DATASET_FINANCIAL_STATEMENTS,
+                job_type=JOB_TYPE_BACKFILL,
+            ):
+                continue
+
+            job_id = self.repo.create_job(
+                asset_id=asset_id,
+                job_type=JOB_TYPE_BACKFILL,
+                dataset=DATASET_FINANCIAL_STATEMENTS,
+                priority=PRIORITY_CORPORATE_BACKFILL,
+                start_date=None,
+                end_date=None,
+            )
+            job_ids.append(job_id)
+            self.repo.mark_fundamental_subscription_backfill_requested(asset_id)
 
         return job_ids
 
@@ -308,6 +371,27 @@ class CorporateCalendarScheduler:
               )
             """,
             [asset_id, DOMAIN_CORPORATE, dataset, job_type, today],
+        ).fetchone()
+
+        return int(row[0]) > 0
+
+    def _has_open_job(
+        self,
+        asset_id: str,
+        dataset: str,
+        job_type: str,
+    ) -> bool:
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM ingestion_job
+            WHERE asset_id = ?
+              AND domain = ?
+              AND dataset = ?
+              AND job_type = ?
+              AND status IN ('pending', 'running')
+            """,
+            [asset_id, DOMAIN_CORPORATE, dataset, job_type],
         ).fetchone()
 
         return int(row[0]) > 0

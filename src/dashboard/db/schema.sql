@@ -422,6 +422,8 @@ CREATE TABLE IF NOT EXISTS fundamental_subscription (
 
     last_refresh_attempted_at TIMESTAMP,
     last_refresh_succeeded_at TIMESTAMP,
+    last_backfill_requested_at TIMESTAMP,
+    last_backfill_succeeded_at TIMESTAMP,
 
     subscription_source TEXT NOT NULL DEFAULT 'manual',
 
@@ -430,6 +432,12 @@ CREATE TABLE IF NOT EXISTS fundamental_subscription (
 
     FOREIGN KEY(asset_id) REFERENCES asset(asset_id)
 );
+
+ALTER TABLE fundamental_subscription
+ADD COLUMN IF NOT EXISTS last_backfill_requested_at TIMESTAMP;
+
+ALTER TABLE fundamental_subscription
+ADD COLUMN IF NOT EXISTS last_backfill_succeeded_at TIMESTAMP;
 
 CREATE TABLE IF NOT EXISTS fundamental_sync_state (
     asset_id TEXT NOT NULL,

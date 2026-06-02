@@ -193,6 +193,51 @@ class CorporateCalendarIngestionRepository:
                 ],
             )
 
+    def mark_fundamental_subscription_refresh_succeeded(self, asset_id: str) -> None:
+        if not self._table_exists("fundamental_subscription"):
+            return
+
+        self.conn.execute(
+            """
+            UPDATE fundamental_subscription
+            SET
+                last_refresh_succeeded_at = now(),
+                updated_at = now()
+            WHERE asset_id = ?
+            """,
+            [asset_id],
+        )
+
+    def mark_fundamental_subscription_backfill_requested(self, asset_id: str) -> None:
+        if not self._table_exists("fundamental_subscription"):
+            return
+
+        self.conn.execute(
+            """
+            UPDATE fundamental_subscription
+            SET
+                last_backfill_requested_at = now(),
+                updated_at = now()
+            WHERE asset_id = ?
+            """,
+            [asset_id],
+        )
+
+    def mark_fundamental_subscription_backfill_succeeded(self, asset_id: str) -> None:
+        if not self._table_exists("fundamental_subscription"):
+            return
+
+        self.conn.execute(
+            """
+            UPDATE fundamental_subscription
+            SET
+                last_backfill_succeeded_at = now(),
+                updated_at = now()
+            WHERE asset_id = ?
+            """,
+            [asset_id],
+        )
+
     def select_due_earnings_update_asset_ids(
         self,
         today: date,
@@ -232,3 +277,14 @@ class CorporateCalendarIngestionRepository:
             )
         )
         return [r[0] for r in rows if r[0] in eligible]
+
+    def _table_exists(self, table_name: str) -> bool:
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM information_schema.tables
+            WHERE table_name = ?
+            """,
+            [table_name],
+        ).fetchone()
+        return bool(row and row[0])
