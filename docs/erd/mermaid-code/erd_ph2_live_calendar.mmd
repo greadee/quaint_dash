@@ -1,0 +1,95 @@
+erDiagram
+  ASSET ||--o{ CURRENT_ASSET_PRICE : latest_price
+  ASSET ||--o{ LIVE_PRICE_TICK : tick_history
+  ASSET ||--o{ LIVE_PRICE_SUBSCRIPTION_SNAPSHOT : subscribed
+  LIVE_PRICE_STREAM_CONFIG ||--o{ LIVE_PRICE_SUBSCRIPTION_SNAPSHOT : config_drives
+  LIVE_PRICE_PROVIDER_HEALTH ||--o{ LIVE_PRICE_TICK : reports
+  TRADING_CALENDAR_SYNC_STATE ||--o{ TRADING_CALENDAR : syncs
+
+  ASSET {
+    TEXT asset_id PK
+    TEXT symbol
+    TEXT exchange_code
+  }
+
+  LIVE_PRICE_STREAM_CONFIG {
+    TEXT config_key PK
+    TEXT config_value
+    TIMESTAMP updated_at
+  }
+
+  LIVE_PRICE_SUBSCRIPTION_SNAPSHOT {
+    UUID snapshot_id PK
+    TEXT asset_id FK
+    TEXT symbol
+    TEXT exchange_code
+    TEXT source_scope
+    TIMESTAMP subscribed_at
+  }
+
+  LIVE_PRICE_TICK {
+    UUID tick_id PK
+    TEXT asset_id FK
+    TEXT symbol
+    TEXT provider
+    TEXT market_session
+    DOUBLE price
+    DOUBLE volume
+    DOUBLE bid
+    DOUBLE ask
+    TIMESTAMP trade_ts_utc
+    TIMESTAMP received_at
+    JSON raw_json
+  }
+
+  CURRENT_ASSET_PRICE {
+    TEXT asset_id PK, FK
+    TEXT symbol
+    DOUBLE price
+    DOUBLE volume
+    DOUBLE bid
+    DOUBLE ask
+    TEXT provider
+    TEXT market_session
+    TIMESTAMP trade_ts_utc
+    TIMESTAMP updated_at
+    JSON raw_json
+  }
+
+  LIVE_PRICE_PROVIDER_HEALTH {
+    TEXT provider PK
+    TEXT status
+    TIMESTAMP last_success_at
+    TIMESTAMP last_error_at
+    TEXT last_error_message
+    TIMESTAMP updated_at
+  }
+
+  TRADING_CALENDAR {
+    TEXT market_code PK
+    TEXT exchange_code
+    DATE session_date PK
+    BOOLEAN is_open
+    BOOLEAN is_half_day
+    TIMESTAMP open_time_utc
+    TIMESTAMP close_time_utc
+    TEXT open_time_local
+    TEXT close_time_local
+    TEXT timezone
+    TEXT holiday_name
+    TEXT source
+    TEXT source_version
+  }
+
+  TRADING_CALENDAR_SYNC_STATE {
+    TEXT market_code PK
+    TEXT exchange_code
+    TEXT source
+    DATE last_start_date
+    DATE last_end_date
+    TIMESTAMP last_attempted_at
+    TIMESTAMP last_succeeded_at
+    TEXT sync_status
+    BIGINT attempt_count
+    TEXT last_error
+  }

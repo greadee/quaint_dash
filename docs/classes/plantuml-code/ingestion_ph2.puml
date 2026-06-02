@@ -1,0 +1,228 @@
+@startuml
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+
+package "Shared Ingestion Infrastructure" {
+  class TickerUniverseRepository {
+    - conn
+    + portfolio_asset_ids() : list[str]
+    + watchlist_asset_ids() : list[str]
+    + active_asset_ids(include_watchlist: bool) : list[str]
+    + live_subscriptions(include_watchlist: bool) : list[TickerSubscription]
+    + sync_portfolio_tickers_from_positions() : int
+  }
+
+  class RateLimitPolicy {
+    + provider : str
+    + calls : int
+    + period_seconds : float
+    + min_interval_seconds : float
+    + max_calls_per_run : int | None
+  }
+
+  class InMemoryRateLimiter {
+    + acquire(policy: RateLimitPolicy) : None
+  }
+
+  class RateLimitExceeded
+}
+
+package "Price History" {
+  class PriceHistoryIngestionService {
+    - repo : PriceHistoryIngestionRepository
+    - provider : YahooPriceProvider
+    + schedule_backfill_jobs()
+    + process_jobs(max_jobs:int) : int
+  }
+
+  class PriceHistoryBackfillWorker {
+    - repo : PriceHistoryIngestionRepository
+    - provider : YahooPriceProvider
+    + run_once() : bool
+  }
+
+  class PriceHistoryIngestionRepository {
+    - conn
+    + enqueue_job()
+    + claim_next_pending_job()
+    + mark_job_done()
+    + mark_job_failed()
+    + upsert_price_daily_rows()
+    + upsert_dividend_rows()
+    + upsert_split_rows()
+  }
+
+  class YahooPriceProvider {
+    - rate_limiter : InMemoryRateLimiter
+    - rate_limit_policy : RateLimitPolicy
+    + fetch_price_daily()
+    + fetch_dividends()
+    + fetch_splits()
+  }
+}
+
+package "Corporate Calendar and Fundamentals" {
+  class CorporateCalendarIngestionService {
+    - provider : FmpCorporateCalendarProvider
+    + schedule_refresh_jobs()
+    + schedule_fundamental_updates_after_events()
+    + schedule_due_fundamental_subscription_refreshes()
+    + schedule_due_fundamental_subscription_backfills()
+    + process_jobs(max_jobs:int) : int
+  }
+
+  class CorporateCalendarScheduler {
+    - repo : CorporateCalendarIngestionRepository
+    - ticker_universe : TickerUniverseRepository
+    + schedule_calendar_refresh()
+    + schedule_fundamental_updates_after_events()
+    + schedule_due_fundamental_subscription_refreshes()
+    + schedule_due_fundamental_subscription_backfills()
+  }
+
+  class CorporateCalendarWorker {
+    - repo : CorporateCalendarIngestionRepository
+    - provider : FmpCorporateCalendarProvider
+    + run_once() : bool
+  }
+
+  class CorporateCalendarIngestionRepository {
+    - conn
+    + enqueue_job()
+    + claim_next_pending_job()
+    + upsert_earnings_calendar_rows()
+    + upsert_financial_statement_rows()
+    + mark_fundamental_subscription_refresh_succeeded()
+    + mark_fundamental_subscription_backfill_requested()
+    + mark_fundamental_subscription_backfill_succeeded()
+  }
+
+  class FmpCorporateCalendarProvider {
+    - rate_limiter : InMemoryRateLimiter
+    - rate_limit_policy : RateLimitPolicy
+    + fetch_earnings_calendar()
+    + fetch_earnings_for_symbol()
+    + fetch_quarterly_statements()
+  }
+
+  class FundamentalSubscriptionService {
+    - conn
+    + subscribe(asset_id)
+    + unsubscribe(asset_id)
+    + list_subscriptions()
+  }
+}
+
+package "Live Price Streaming" {
+  class LivePriceWorker {
+    - resolver : LivePriceSubscriptionResolver
+    - repo : LivePriceRepository
+    - classifier : MarketSessionClassifier
+    + run_once(include_watchlist, enable_extended_hours)
+  }
+
+  class LivePriceSubscriptionResolver {
+    - ticker_universe : TickerUniverseRepository
+    + resolve(include_watchlist: bool) : list[TickerSubscription]
+  }
+
+  class MarketSessionClassifier {
+    - conn
+    + classify(now_utc) : str
+  }
+
+  class FinnhubWebSocketClient {
+    - max_symbols : int
+    + stream(symbols, on_tick)
+  }
+
+  class FmpExtendedHoursClient {
+    - rate_limiter : InMemoryRateLimiter
+    - rate_limit_policy : RateLimitPolicy
+    - max_symbols_per_request : int
+    + fetch_batch_aftermarket_quotes(symbols, market_session)
+  }
+
+  class LivePriceRepository {
+    - conn
+    + save_tick()
+    + mark_provider_healthy()
+    + mark_provider_error()
+  }
+}
+
+package "Benchmark Indices" {
+  interface IndexProvider {
+    + get_daily_prices()
+    + get_intraday_prices()
+    + get_constituents()
+  }
+
+  class BenchmarkIndexIngestionService {
+    - provider_registry : dict[str, IndexProvider]
+    + seed_all_universes()
+    + refresh_daily_prices()
+    + refresh_intraday_prices()
+    + refresh_composition()
+    + compute_daily_metrics()
+  }
+
+  class BenchmarkIndexScheduler {
+    - service : BenchmarkIndexIngestionService
+    + run_core_daily_refresh()
+    + run_non_core_daily_refresh()
+    + run_non_core_composition_refresh()
+  }
+
+  class FMPIndexProvider {
+    - rate_limiter : InMemoryRateLimiter
+    - rate_limit_policy : RateLimitPolicy
+    + get_daily_prices()
+    + get_intraday_prices()
+    + get_constituents()
+  }
+
+  class YFinanceIndexProvider {
+    - rate_limiter : InMemoryRateLimiter
+    - rate_limit_policy : RateLimitPolicy
+    + get_daily_prices()
+    + get_intraday_prices()
+  }
+}
+
+TickerUniverseRepository ..> PriceHistoryIngestionService
+TickerUniverseRepository --> CorporateCalendarScheduler
+TickerUniverseRepository --> LivePriceSubscriptionResolver
+
+PriceHistoryIngestionService --> PriceHistoryIngestionRepository
+PriceHistoryIngestionService --> PriceHistoryBackfillWorker
+PriceHistoryBackfillWorker --> YahooPriceProvider
+PriceHistoryBackfillWorker --> PriceHistoryIngestionRepository
+
+CorporateCalendarIngestionService --> CorporateCalendarScheduler
+CorporateCalendarIngestionService --> CorporateCalendarWorker
+CorporateCalendarWorker --> FmpCorporateCalendarProvider
+CorporateCalendarWorker --> CorporateCalendarIngestionRepository
+CorporateCalendarScheduler --> CorporateCalendarIngestionRepository
+FundamentalSubscriptionService ..> CorporateCalendarScheduler
+
+LivePriceWorker --> LivePriceSubscriptionResolver
+LivePriceWorker --> MarketSessionClassifier
+LivePriceWorker --> FinnhubWebSocketClient
+LivePriceWorker --> FmpExtendedHoursClient
+LivePriceWorker --> LivePriceRepository
+
+IndexProvider <|.. FMPIndexProvider
+IndexProvider <|.. YFinanceIndexProvider
+BenchmarkIndexScheduler --> BenchmarkIndexIngestionService
+BenchmarkIndexIngestionService --> IndexProvider
+
+YahooPriceProvider --> InMemoryRateLimiter
+FmpCorporateCalendarProvider --> InMemoryRateLimiter
+FmpExtendedHoursClient --> InMemoryRateLimiter
+FMPIndexProvider --> InMemoryRateLimiter
+YFinanceIndexProvider --> InMemoryRateLimiter
+InMemoryRateLimiter ..> RateLimitPolicy
+InMemoryRateLimiter ..> RateLimitExceeded
+
+@enduml

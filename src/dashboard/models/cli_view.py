@@ -11,7 +11,8 @@ from dataclasses import dataclass, field
 import argparse
 import shlex
 from dashboard.models.storage import DashboardManager, PortfolioManager
-from dashboard.services.importer import TxnImporterManual, TxnImporterCSV, tTestTxn
+from dashboard.services.txn_importer import TxnImporterManual, TxnImporterCSV, tTestTxn
+
 
 class _NoExitParser(argparse.ArgumentParser):
     """
@@ -118,7 +119,13 @@ class DashboardView(View):
                 list <item-type> [item-filter] [n], 
                 create <portfolio-name>, 
                 open <portfolio-name>, 
-                import <csv-path>, 
+                import <csv-path>,
+
+                job list [--status pending|running|done|failed] [--domain market|corporate],
+                job schedule [pipeline] [--target asset-id|all] [--max-assets N],
+                job run [all|market|corporate] [--max-jobs N],
+                live-price-stream [--include-watchlist] [--no-extended-hours],
+
                 help [command-name], 
                 quit/exit
               """)
@@ -195,7 +202,6 @@ class DashboardView(View):
                     self.access.list_positions_by_subtype(ns.asset_subtype, ns.n)
                 else:
                     self.access.list_positions(ns.n)
-            
             return self
             
         if cmd == "create":
@@ -224,6 +230,69 @@ class DashboardView(View):
             importer.run()
             return self
 
+        if cmd == "job":
+            if ns.job_command == "list":
+                rows = self.access.list_ingestion_jobs(
+                    statuses=None if ns.all else (ns.status or ["pending", "running"]),
+                    domain=ns.domain,
+                    limit=ns.n,
+                )
+                self._print_ingestion_jobs(rows)
+                return self
+
+            if ns.job_command == "schedule":
+                asset_id = None if ns.target is None else ns.target
+                try:
+                    n_jobs = self.access.schedule_ingestion_jobs(
+                        pipeline=ns.pipeline,
+                        asset_id=asset_id,
+                        max_assets=ns.max_assets,
+                        years=ns.years,
+                        prices_only=ns.prices_only,
+                        calendar_year=ns.year,
+                    )
+                except ValueError as exc:
+                    print(exc)
+                    return self
+
+                print(f"Scheduled/refreshed {n_jobs} ingestion item(s).")
+                return self
+
+            if ns.job_command == "run":
+                try:
+                    n_done = self.access.run_ingestion_jobs(
+                        domain=ns.domain,
+                        max_jobs=ns.max_jobs,
+                    )
+                except ValueError as exc:
+                    print(exc)
+                    return self
+
+                print(f"Processed {n_done} ingestion job(s).")
+                return self
+        
+        if cmd == "live-price-stream":
+            print("Starting live price stream.")
+            print("Streaming portfolio tickers by default.")
+            if ns.include_watchlist:
+                print("Watchlist streaming enabled.")
+            if ns.no_extended_hours:
+                print("Extended-hours streaming disabled.")
+            else:
+                print("Extended-hours streaming enabled.")
+
+            print("Press Ctrl+C to stop streaming.")
+
+            try:
+                self.access.run_live_price_stream(
+                    include_watchlist=ns.include_watchlist,
+                    enable_extended_hours=not ns.no_extended_hours,
+                )
+            except KeyboardInterrupt:
+                print("\nStopped live price stream.")
+
+            return self
+
         return self # fallback
 
     def _handle_help(self, args: list[str]):
@@ -243,6 +312,36 @@ class DashboardView(View):
             print("help [command]: show general help or command help")
         else:
             print(f"No such command: {cmd}")
+
+    @staticmethod
+    def _print_ingestion_jobs(rows) -> None:
+        if not rows:
+            print("No ingestion jobs found.")
+            return
+
+        print(
+            "| job_id | asset_id | domain | job_type | dataset | status | attempts | updated_at |"
+        )
+        for row in rows:
+            (
+                job_id,
+                asset_id,
+                domain,
+                job_type,
+                dataset,
+                status,
+                _priority,
+                _start_date,
+                _end_date,
+                attempt_count,
+                _error_message,
+                _created_at,
+                updated_at,
+            ) = row
+            print(
+                f"| {job_id} | {asset_id} | {domain} | {job_type} | "
+                f"{dataset} | {status} | {attempt_count} | {updated_at} |"
+            )
 
     @staticmethod
     def build_dash_parsers():
@@ -285,7 +384,6 @@ class DashboardView(View):
         pos_arg_group.add_argument("-asset-id", "--asset-id", dest="asset_id", help="Filter by asset id.")
         pos_arg_group.add_argument("-asset-type", "--asset-type", dest="asset_type", help="Filter by asset type.")
         pos_arg_group.add_argument("-asset-subtype", "--asset-subtype", dest="asset_subtype", help="Filter by asset subtype.")
-
         parsers["list"] = p
 
         # create cmd parser
@@ -303,6 +401,50 @@ class DashboardView(View):
         p = _NoExitParser(prog="import", add_help=True, description="Import a CSV transaction batch")
         p.add_argument("csv_path", help="Path to CSV file")
         parsers["import"] = p
+
+        p = _NoExitParser(prog="job", add_help=True, description="Inspect, schedule, and run ingestion jobs.")
+        job_subp = p.add_subparsers(dest="job_command", required=True)
+
+        p_list = job_subp.add_parser("list", add_help=True, description="List ingestion jobs.")
+        p_list.add_argument("--status", dest="status", action="append", default=None)
+        p_list.add_argument("--domain", dest="domain", choices=["market", "corporate"], default=None)
+        p_list.add_argument("--all", dest="all", action="store_true")
+        p_list.add_argument("-n", "--n", dest="n", type=int, default=None)
+
+        p_schedule = job_subp.add_parser("schedule", add_help=True, description="Schedule ingestion work.")
+        p_schedule.add_argument(
+            "pipeline",
+            nargs="?",
+            default="all",
+            choices=[
+                "all",
+                "price-backfill",
+                "due-price-backfill",
+                "price-refresh",
+                "corporate-calendar",
+                "earnings-updates",
+                "fundamentals-backfill",
+                "fundamentals-refresh",
+                "metadata",
+                "trading-calendar",
+            ],
+        )
+        p_schedule.add_argument("--target", dest="target", default=None)
+        p_schedule.add_argument("--max-assets", dest="max_assets", type=int, default=25)
+        p_schedule.add_argument("--years", dest="years", type=int, default=10)
+        p_schedule.add_argument("--prices-only", dest="prices_only", action="store_true")
+        p_schedule.add_argument("--year", dest="year", type=int, default=None)
+
+        p_run = job_subp.add_parser("run", add_help=True, description="Process pending ingestion jobs.")
+        p_run.add_argument("domain", nargs="?", choices=["all", "market", "corporate"], default="all")
+        p_run.add_argument("--max-jobs", dest="max_jobs", type=int, default=1)
+
+        parsers["job"] = p
+
+        p = _NoExitParser(prog="live-price-stream", add_help=True, description="Start the live price streaming worker for portfolio assets.",)
+        p.add_argument("--include-watchlist", dest="include_watchlist", action="store_true", help="Also stream active watchlist assets. Default: portfolio assets only.",)
+        p.add_argument("--no-extended-hours", dest="no_extended_hours", action="store_true", help="Disable pre-market and after-hours streaming.",)
+        parsers["live-price-stream"] = p
 
         return parsers
 

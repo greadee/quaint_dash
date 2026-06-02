@@ -53,17 +53,35 @@ class Txn:
 @dataclass(frozen=True)
 class Asset:
     """
-    Metadata for the assets involved in transactions, and on watchlists.
+    Metadata for the assets involved in transactions.
 
-    param - asset_id: asset ticker symbol, all uppercase, non-NYSE listings are suffixed with the exchange symbol (BN.TO, PNG.V).
-          - asset_type: 'stock', 'etf', ...
-          - asset_subtype: stocks: sector/geo, etf: size/geo, ...
-          - ccy: currency that the asset is domiciled in.
+    param - asset_id: asset ticker symbol
+          - asset_type: etf, stock, fund, adr, commodity
+          - ccy: trading currency
+          - name: display/company name
+          - sector: sector classification
+          - industry: industry classification
+          - size: large, mid, small
+          - country: country classification
+          - region: region classification
+          - description: business/fund description
+          - market_beta: market beta from metadata provider
+          - mkt_cap: market capitalization
+          - shares_outstanding: nullable, may be unavailable from profile endpoint
     """
     asset_id: str
-    asset_type: str 
-    asset_subtype: str
+    asset_type: str
     ccy: str
+    name: str | None
+    sector: str | None
+    industry: str | None
+    size: str | None
+    country: str | None
+    region: str | None
+    description: str | None
+    market_beta: float | None
+    mkt_cap: float | None
+    shares_outstanding: int | None
 
 @dataclass
 class Portfolio:
@@ -93,11 +111,12 @@ class Position:
           - book_cost: sum total of the quantity times price attribtue of each transaction involved.
           - last_updated: time of last transaction inside of portfolio on a specific asset.    
     """
-    portfolio_id: int 
+    portfolio_id: int
     asset_id: str
-    qty: float 
-    book_cost: float 
-    last_updated: datetime
+    qty: float
+    book_cost: float
+    created_at: datetime
+    updated_at: datetime
 
 
 @dataclass(frozen=True)

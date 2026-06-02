@@ -1,0 +1,288 @@
+from __future__ import annotations
+
+import duckdb
+
+from dashboard.ingestion.ticker_universe import TickerUniverseRepository
+
+
+def make_new_universe_conn():
+    conn = duckdb.connect(":memory:")
+    conn.execute(
+        """
+        CREATE TABLE asset (
+            asset_id TEXT PRIMARY KEY,
+            symbol TEXT,
+            exchange_code TEXT,
+            asset_type TEXT,
+            track BOOLEAN DEFAULT TRUE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE position (
+            portfolio_id BIGINT,
+            asset_id TEXT,
+            qty DOUBLE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE portfolio_ticker (
+            portfolio_id BIGINT,
+            asset_id TEXT,
+            is_active BOOLEAN,
+            source TEXT,
+            created_at TIMESTAMP DEFAULT now(),
+            updated_at TIMESTAMP DEFAULT now(),
+            PRIMARY KEY(portfolio_id, asset_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE watchlist_ticker (
+            asset_id TEXT PRIMARY KEY,
+            is_active BOOLEAN,
+            source TEXT,
+            created_at TIMESTAMP DEFAULT now(),
+            updated_at TIMESTAMP DEFAULT now()
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, exchange_code, asset_type, track)
+        VALUES
+            ('AAPL', 'AAPL', 'XNAS', 'stock', TRUE),
+            ('MSFT', NULL, 'XNAS', 'stock', TRUE),
+            ('SPY', 'SPY', 'ARCX', 'etf', TRUE),
+            ('CASH', 'CASH', NULL, 'cash', TRUE),
+            ('OLD', 'OLD', 'XNYS', 'stock', TRUE)
+        """
+    )
+    return conn
+
+
+def test_portfolio_and_watchlist_tables_are_source_of_truth_when_present():
+    conn = make_new_universe_conn()
+    conn.execute(
+        """
+        INSERT INTO position(portfolio_id, asset_id, qty)
+        VALUES (1, 'OLD', 10)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES
+            (1, 'AAPL', TRUE, 'position'),
+            (1, 'OLD', FALSE, 'position')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO watchlist_ticker(asset_id, is_active, source)
+        VALUES
+            ('MSFT', TRUE, 'manual'),
+            ('SPY', FALSE, 'manual')
+        """
+    )
+
+    repo = TickerUniverseRepository(conn)
+
+    assert repo.portfolio_asset_ids() == ["AAPL"]
+    assert repo.watchlist_asset_ids() == ["MSFT"]
+    assert repo.ingestible_asset_ids() == ["AAPL", "MSFT"]
+
+
+def test_ingestible_asset_ids_filters_asset_types_after_deduping_sources():
+    conn = make_new_universe_conn()
+    conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES
+            (1, 'AAPL', TRUE, 'position'),
+            (1, 'SPY', TRUE, 'position')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO watchlist_ticker(asset_id, is_active, source)
+        VALUES ('MSFT', TRUE, 'manual')
+        """
+    )
+
+    repo = TickerUniverseRepository(conn)
+
+    assert repo.ingestible_asset_ids(asset_types=("stock",)) == ["AAPL", "MSFT"]
+    assert repo.ingestible_asset_ids(include_watchlist=False) == ["AAPL", "SPY"]
+
+
+def test_stream_subscriptions_dedupe_by_symbol_and_portfolio_wins_over_watchlist():
+    conn = make_new_universe_conn()
+    conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'AAPL', TRUE, 'position')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO watchlist_ticker(asset_id, is_active, source)
+        VALUES
+            ('AAPL', TRUE, 'manual'),
+            ('MSFT', TRUE, 'manual')
+        """
+    )
+
+    subscriptions = TickerUniverseRepository(conn).stream_subscriptions(
+        include_watchlist=True
+    )
+
+    assert [(item.symbol, item.source_scope) for item in subscriptions] == [
+        ("AAPL", "portfolio"),
+        ("MSFT", "watchlist"),
+    ]
+    assert subscriptions[1].asset_id == "MSFT"
+    assert subscriptions[1].exchange_code == "XNAS"
+
+
+def test_stream_subscriptions_fallback_to_asset_id_when_symbol_is_null():
+    conn = make_new_universe_conn()
+    conn.execute(
+        """
+        INSERT INTO watchlist_ticker(asset_id, is_active, source)
+        VALUES ('MSFT', TRUE, 'manual')
+        """
+    )
+
+    subscriptions = TickerUniverseRepository(conn).stream_subscriptions(
+        include_portfolios=False,
+        include_watchlist=True,
+    )
+
+    assert subscriptions[0].symbol == "MSFT"
+
+
+def test_sync_portfolio_tickers_from_positions_handles_qty_and_ignores_zero_positions():
+    conn = make_new_universe_conn()
+    conn.execute(
+        """
+        INSERT INTO position(portfolio_id, asset_id, qty)
+        VALUES
+            (1, 'AAPL', 10),
+            (1, 'MSFT', 0),
+            (2, 'SPY', -4)
+        """
+    )
+
+    count = TickerUniverseRepository(conn).sync_portfolio_tickers_from_positions()
+
+    rows = conn.execute(
+        """
+        SELECT portfolio_id, asset_id, is_active, source
+        FROM portfolio_ticker
+        ORDER BY portfolio_id, asset_id
+        """
+    ).fetchall()
+
+    assert count == 2
+    assert rows == [
+        (1, "AAPL", True, "position"),
+        (2, "SPY", True, "position"),
+    ]
+
+
+def test_legacy_position_and_watchlist_asset_fallbacks_still_work_without_new_tables():
+    conn = duckdb.connect(":memory:")
+    conn.execute(
+        """
+        CREATE TABLE asset (
+            asset_id TEXT PRIMARY KEY,
+            symbol TEXT,
+            exchange_code TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE position (
+            position_id TEXT PRIMARY KEY,
+            portfolio_id TEXT,
+            asset_id TEXT,
+            quantity DOUBLE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE watchlist_asset (
+            watchlist_asset_id TEXT PRIMARY KEY,
+            asset_id TEXT,
+            is_active BOOLEAN
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, exchange_code)
+        VALUES
+            ('AAPL', 'AAPL', 'XNAS'),
+            ('NVDA', 'NVDA', 'XNAS'),
+            ('CASH', 'CASH', NULL)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO position(position_id, portfolio_id, asset_id, quantity)
+        VALUES
+            ('p-aapl', 'p1', 'AAPL', 1),
+            ('p-cash', 'p1', 'CASH', 0)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO watchlist_asset(watchlist_asset_id, asset_id, is_active)
+        VALUES
+            ('w-nvda', 'NVDA', TRUE),
+            ('w-aapl', 'AAPL', TRUE)
+        """
+    )
+
+    repo = TickerUniverseRepository(conn)
+
+    assert repo.portfolio_asset_ids() == ["AAPL"]
+    assert repo.watchlist_asset_ids() == ["AAPL", "NVDA"]
+    assert [item.symbol for item in repo.stream_subscriptions(include_watchlist=True)] == [
+        "AAPL",
+        "NVDA",
+    ]
+
+
+def test_tracked_asset_fallback_only_applies_when_no_explicit_lists_have_assets():
+    conn = duckdb.connect(":memory:")
+    conn.execute(
+        """
+        CREATE TABLE asset (
+            asset_id TEXT PRIMARY KEY,
+            asset_type TEXT,
+            track BOOLEAN
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO asset(asset_id, asset_type, track)
+        VALUES
+            ('AAPL', 'stock', TRUE),
+            ('SPY', 'etf', TRUE),
+            ('OLD', 'stock', FALSE)
+        """
+    )
+
+    repo = TickerUniverseRepository(conn)
+
+    assert repo.ingestible_asset_ids() == ["AAPL", "SPY"]
+    assert repo.ingestible_asset_ids(asset_types=("stock",)) == ["AAPL"]

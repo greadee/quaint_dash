@@ -9,23 +9,26 @@ Design Decisions: [ADR's](../adr/adr_ph2.md)
     - Websocket data is not a concern.
     - Need to figure out whether or not historical data ingestion should be automatic if we can expect that watchlist items are frequently added and removed.
    - WatchlistView and WatchlistManager
-### Tasks: 
-- Database schema and diagram
-    - Add a schema diagram for phase 0+1 for sake of documentation
-- Ingest metadata sync upon watchlist, portfolio add (FMP)
+
+### Completed:
+- Ingest metadata sync upon portfolio add (FMP)
+    - CLI test cmd
     - Scheduler
-- Ingest biweekly earnings calendar update (FMP)
+- Ingest historical price history backfill (yfinance)
+    - CLI test cmd
     - Scheduler
-- Ingest core index composition 3x intraday (FMP)
-    - Scheduler
+- Trading day calendar ingestion
+- Corporate calendar ingestion
+- Core index ingestion
+    - non-core index ingestion
 - Ingest ticker earnings data sync on calendar event finished (FMP)
-    - Scheduler
-- Ingest ticker historical backfill up to 10 years (Finnhub)
     - Scheduler
 - Stream ticker data (price, vol, mkt cap) for positions (Finnhub)
     - Open stream on dash open and is market day
+- Ingestion of forward looking fundamentals
+
+
+### Tasks: 
+- Historical backfill for fundamentals
 - Rate limiter and failsafes
-- Replace Mon-Fri market calendar to handle holidays and half-days
-- TBD: non-core index ingestion
-- TBD: items in watchlist ingestion
 

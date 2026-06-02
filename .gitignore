@@ -3,6 +3,7 @@ tmp/
 data/test
 *.db
 venv/
+.env
 .venv/
 $null
 

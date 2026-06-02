@@ -15,7 +15,13 @@ authors = [
 ]
 
 dependencies = [
-  "duckdb>=1.0.0"
+  "duckdb>=1.0.0",
+  "python-dotenv",
+  "yfinance",  
+  "requests>=2.32.0",
+  "pandas>=2.0.0",
+  "pandas-market-calendars>=4.4.0",
+  "websocket-client>=1.8.0",
 ]
 
 [project.optional-dependencies]

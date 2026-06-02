@@ -1,0 +1,164 @@
+erDiagram
+  ASSET ||--o{ ASSET_QUOTE_DAILY : daily_prices
+  ASSET ||--o{ ASSET_QUOTE_INTRADAY : intraday_prices
+  ASSET ||--o{ DIVIDEND_EVENT : dividends
+  ASSET ||--o{ SPLIT_EVENT : splits
+  ASSET ||--o{ EARNINGS_CALENDAR_EVENT : earnings_calendar
+  ASSET ||--o{ CORPORATE_EVENT : corporate_events
+  ASSET ||--o{ FINANCIAL_STATEMENT : statements
+  ASSET ||--o{ INGESTION_JOB : jobs
+  ASSET ||--o{ ASSET_SYNC_STATE : sync_state
+  ASSET ||--o{ FUNDAMENTAL_SUBSCRIPTION : subscribed
+  ASSET ||--o{ FUNDAMENTAL_SYNC_STATE : fundamental_sync
+
+  ASSET {
+    TEXT asset_id PK
+    TEXT symbol
+    TEXT exchange_code
+    TEXT ccy
+  }
+
+  ASSET_QUOTE_DAILY {
+    TEXT asset_id PK, FK
+    DATE date PK
+    DOUBLE open
+    DOUBLE high
+    DOUBLE low
+    DOUBLE close
+    DOUBLE adj_close
+    BIGINT volume
+    TEXT ing_source
+    TIMESTAMP ing_at
+  }
+
+  ASSET_QUOTE_INTRADAY {
+    TEXT asset_id PK, FK
+    TIMESTAMP time_stamp PK
+    DOUBLE price
+    BIGINT volume
+    TEXT ing_source
+    TIMESTAMP ing_at
+  }
+
+  DIVIDEND_EVENT {
+    TEXT asset_id PK, FK
+    DATE ex_date PK
+    DATE payment_date
+    DATE record_date
+    DATE declaration_date
+    DOUBLE dividend_per_share
+    TEXT currency
+    TEXT source
+    TIMESTAMP as_of_ts
+  }
+
+  SPLIT_EVENT {
+    TEXT asset_id PK, FK
+    DATE ex_date PK
+    BIGINT split_from
+    BIGINT split_to
+    TEXT source
+    TIMESTAMP as_of_ts
+  }
+
+  EARNINGS_CALENDAR_EVENT {
+    TEXT asset_id PK, FK
+    DATE earnings_date PK
+    INTEGER fiscal_year
+    INTEGER fiscal_quarter
+    TEXT time
+    DOUBLE eps_estimated
+    DOUBLE eps_actual
+    DOUBLE revenue_estimated
+    DOUBLE revenue_actual
+    TEXT source
+    TIMESTAMP as_of_ts
+  }
+
+  CORPORATE_EVENT {
+    TEXT asset_id PK, FK
+    TEXT event_type PK
+    TIMESTAMP event_time_utc PK
+    TIMESTAMP event_time_local
+    TEXT exchange_tz
+    INTEGER year
+    INTEGER quarter
+    BOOLEAN confirmed
+    TEXT description
+    TEXT source
+  }
+
+  FINANCIAL_STATEMENT {
+    TEXT asset_id PK, FK
+    TEXT statement_type PK
+    INTEGER year PK
+    INTEGER quarter PK
+    DATE period_end_date
+    DATE report_date
+    JSON data_json
+    TEXT source
+    TIMESTAMP ingested_at_utc
+  }
+
+  INGESTION_JOB {
+    BIGINT job_id PK
+    TEXT asset_id FK
+    TEXT domain
+    TEXT job_type
+    TEXT dataset
+    TEXT status
+    INTEGER priority
+    DATE requested_start_date
+    DATE requested_end_date
+    INTEGER attempt_count
+    TEXT error_message
+    TIMESTAMP created_at
+    TIMESTAMP updated_at
+  }
+
+  ASSET_SYNC_STATE {
+    TEXT asset_id PK, FK
+    TEXT domain PK
+    TEXT dataset PK
+    TEXT backfill_status
+    DATE backfill_start_date
+    DATE backfill_end_date
+    DATE last_successful_date
+    TIMESTAMP last_attempted_at
+    TIMESTAMP last_successful_at
+    TEXT last_error
+    BOOLEAN needs_repair
+  }
+
+  FUNDAMENTAL_SUBSCRIPTION {
+    TEXT asset_id PK, FK
+    BOOLEAN is_active
+    INTEGER refresh_interval_days
+    TIMESTAMP next_refresh_at
+    TIMESTAMP last_refresh_attempted_at
+    TIMESTAMP last_refresh_succeeded_at
+    TIMESTAMP last_backfill_requested_at
+    TIMESTAMP last_backfill_succeeded_at
+    TEXT subscription_source
+  }
+
+  FUNDAMENTAL_SYNC_STATE {
+    TEXT asset_id PK, FK
+    VARCHAR dataset PK
+    VARCHAR sync_mode PK
+    VARCHAR status
+    TIMESTAMP last_attempted_at
+    TIMESTAMP last_succeeded_at
+    VARCHAR error_message
+    VARCHAR source
+  }
+
+  INGESTION_RUN {
+    BIGINT run_id PK
+    TEXT job_name
+    TIMESTAMP started_at
+    TIMESTAMP ended_at
+    TEXT status
+    BIGINT rows_written
+    TEXT source
+  }

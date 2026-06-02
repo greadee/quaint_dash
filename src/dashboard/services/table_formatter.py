@@ -127,20 +127,19 @@ class PositionTableFormatter:
     @abstractmethod
     def header(cls):
         """
-        Print formatted row header for Positions.
+        Print formatted row header for Position objects.
         """
-        print(f'\n| {"PORTFOLIO ID":>12} | {"ASSET ID":<8} | {"QUANTITY":>8} | {"BOOK COST":>9} | {"LAST UPDATED":20} |')
+        print(f'\n| {"PORTFOLIO ID":>12} | {"ASSET ID":<8} | {"QUANTITY":>8} | {"BOOK COST":>9} | {"CREATED AT":20} | {"UPDATED AT":20} |')
 
     @abstractmethod 
     def entry(self):
         """
-        Print a normalized, padded string representing the Position object as one row in a list table.
+        Print a padded string representing the Position object as one row in a list table.
         """
         qty = f"{self.position.qty:.4f}" 
         book_cost = f"{self.position.book_cost:.2f}"
 
-        print(f"| {self.position.portfolio_id:>12} | {self.position.asset_id:<8} | {qty:>8} | {book_cost:>9} | {self.position.last_updated.strftime('%m/%d/%Y, %H:%M:%S'):20} |")
-
+        print(f"| {self.position.portfolio_id:>12} | {self.position.asset_id:<8} | {qty:>8} | {book_cost:>9} | {self.position.created_at.strftime('%m/%d/%Y, %H:%M:%S'):20} | {self.position.updated_at.strftime('%m/%d/%Y, %H:%M:%S'):20} |")
 
 @dataclass 
 class PortfolioImportDataTableFormatter:

@@ -81,9 +81,13 @@ class TxnImporter(ABC):
         self._stage_import()
         self._normalize_txn_stage()
         self._validate_txn_stage()
-        return self._handle_import()
-    
+        self._initialize_imported_assets()
+        import_data = self._handle_import()
+        self.manager.update_positions()
+        self._ingest_imported_asset_metadata()
 
+        return import_data
+    
     def _normalize_txn_stage(self):
         """
         Normalizes transaction field types
@@ -105,6 +109,32 @@ class TxnImporter(ABC):
             # ideally, each query in the validation suite should yield a count of 0
             if result:
                 self._handle_validation_fail(q)
+
+    def _initialize_imported_assets(self):
+        """
+        Initializes any distinct staged asset ids into the asset table
+        and creates metadata sync rows for the scheduler before
+        transaction rows are inserted.
+        """
+        conn = self.manager.conn
+        conn.execute(qry.INITIALIZE_IMPORTED_ASSETS)
+        conn.execute(qry.INITIALIZE_IMPORTED_ASSET_METADATA_SYNC)
+
+    def _ingest_imported_asset_metadata(self):
+        """
+        Trigger metadata ingestion for staged asset ids.
+
+        Non-fatal: failures should not block txn import.
+        """
+        try:
+            from dashboard.services.asset_importer import AssetImporter
+
+            asset_importer = AssetImporter(self.manager)
+            asset_importer.import_stage_assets()
+
+        except Exception:
+            # intentionally swallow — ingestion is best-effort
+            pass
             
     def _handle_validation_fail(self, query_failure):
         """

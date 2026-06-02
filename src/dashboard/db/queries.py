@@ -68,21 +68,22 @@ WHERE portfolio_name = ?
 ##########
 
 UPDATE_POSITIONS = """
-INSERT INTO position (portfolio_id, asset_id, qty, book_cost, last_updated)
+INSERT INTO position (portfolio_id, asset_id, qty, book_cost, created_at, updated_at)
 SELECT
-  t.portfolio_id, 
-  t.asset_id, 
-  SUM(t.qty) AS qty, 
-  SUM(t.price * t.qty) AS book_cost, 
-  now() AS last_updated
+  t.portfolio_id,
+  t.asset_id,
+  SUM(t.qty) AS qty,
+  SUM(t.price * t.qty) AS book_cost,
+  now() AS created_at,
+  now() AS updated_at
 FROM txn t
 WHERE t.txn_type = 'buy' OR t.txn_type = 'sell'
 GROUP BY portfolio_id, asset_id
 ON CONFLICT (portfolio_id, asset_id)
 DO UPDATE SET
-  qty = excluded.qty, 
-  book_cost = excluded.book_cost, 
-  last_updated = excluded.last_updated;
+  qty = excluded.qty,
+  book_cost = excluded.book_cost,
+  updated_at = excluded.updated_at;
 """
 
 ##
@@ -90,27 +91,25 @@ DO UPDATE SET
 ##
 
 LIST_POSITIONS = """
-SELECT portfolio_id, asset_id, qty, book_cost, last_updated
+SELECT portfolio_id, asset_id, qty, book_cost, created_at, updated_at
 FROM position"""
 
 LIST_POSITIONS_BY_ASSET_ID = """
-SELECT portfolio_id, asset_id, qty, book_cost, last_updated
+SELECT portfolio_id, asset_id, qty, book_cost, created_at, updated_at
 FROM position
 WHERE asset_id = ?"""
 
 LIST_POSITIONS_BY_ASSET_TYPE = """
-SELECT p.portfolio_id, p.asset_id, p.qty, p.book_cost, p.last_updated
+SELECT p.portfolio_id, p.asset_id, p.qty, p.book_cost, p.created_at, p.updated_at
 FROM position p
-JOIN asset a ON 
-  p.asset_id = a.asset_id
+JOIN asset a ON p.asset_id = a.asset_id
 WHERE a.asset_type = ?"""
 
-LIST_POSITIONS_BY_ASSET_SUBTYPE = """
-SELECT p.portfolio_id, asset_id, p.qty, p.book_cost, p.last_updated
+LIST_POSITIONS_BY_ASSET_SIZE = """
+SELECT p.portfolio_id, p.asset_id, p.qty, p.book_cost, p.created_at, p.updated_at
 FROM position p
-JOIN asset a ON 
-  p.asset_id = a.asset_id
-WHERE a.asset_subtype = ?"""
+JOIN asset a ON p.asset_id = a.asset_id
+WHERE a.size = ?"""
 
 
 ##########
@@ -118,17 +117,91 @@ WHERE a.asset_subtype = ?"""
 ##########
 
 UPSERT_ASSET = """
-INSERT INTO asset (asset_id, asset_type, asset_subtype, ccy)
-VALUES ( ?, ?, ?, ?)
+INSERT INTO asset (asset_id, symbol, asset_type, asset_subtype, ccy)
+VALUES (?, ?, ?, ?, ?)
 ON CONFLICT(asset_id) DO UPDATE SET
-  asset_type = asset_type,
-  ccy = ccy;
+  symbol = excluded.symbol,
+  asset_type = excluded.asset_type,
+  asset_subtype = excluded.asset_subtype,
+  ccy = excluded.ccy,
+  updated_at = now();
 """
 
 GET_ASSET = """
 SELECT asset_id, asset_type, ccy
 FROM asset
 WHERE asset_id = ?;
+"""
+
+INITIALIZE_IMPORTED_ASSETS = """
+INSERT INTO asset (
+  asset_id,
+  symbol,
+  asset_type,
+  ccy,
+  track,
+  created_at,
+  updated_at
+)
+SELECT DISTINCT
+  n.asset_id,
+  n.asset_id AS symbol,
+  'stock' AS asset_type,
+  COALESCE(NULLIF(n.ccy, ''), 'CAD') AS ccy,
+  TRUE AS track,
+  now() AS created_at,
+  now() AS updated_at
+FROM norm_stg_txn n
+WHERE n.asset_id IS NOT NULL
+ON CONFLICT (asset_id) DO UPDATE SET
+  symbol = COALESCE(asset.symbol, excluded.symbol),
+  updated_at = now();
+"""
+
+SYNC_PORTFOLIO_TICKERS_FROM_POSITIONS = """
+INSERT INTO portfolio_ticker (
+  portfolio_id,
+  asset_id,
+  is_active,
+  source,
+  created_at,
+  updated_at
+)
+SELECT DISTINCT
+  portfolio_id,
+  asset_id,
+  TRUE,
+  'position',
+  now(),
+  now()
+FROM position
+WHERE asset_id IS NOT NULL
+  AND COALESCE(qty, 0) <> 0
+ON CONFLICT (portfolio_id, asset_id)
+DO UPDATE SET
+  is_active = TRUE,
+  updated_at = now();
+"""
+
+INITIALIZE_IMPORTED_ASSET_METADATA_SYNC = """
+INSERT INTO asset_metadata_sync (
+  asset_id,
+  source,
+  sync_status,
+  next_retry_at,
+  created_at,
+  updated_at
+)
+SELECT DISTINCT
+  n.asset_id,
+  'fmp' AS source,
+  'pending' AS sync_status,
+  now() AS next_retry_at,
+  now() AS created_at,
+  now() AS updated_at
+FROM norm_stg_txn n
+WHERE n.asset_id IS NOT NULL
+ON CONFLICT (asset_id) DO NOTHING;
 """
 
 ##########
@@ -402,3 +475,191 @@ VALIDATE_TXN_SUITE = [
     VALIDATE_STAGED_CCY,
     VALIDATE_STAGED_CASH,
     VALIDATE_STAGED_FEE]
+
+
+## 
+#     asset metadata ingestion
+##
+
+LIST_IMPORTED_STAGE_ASSET_IDS = """
+SELECT DISTINCT asset_id
+FROM norm_stg_txn
+WHERE asset_id IS NOT NULL
+ORDER BY asset_id;
+"""
+
+UPSERT_ASSET_METADATA = """
+UPDATE asset
+SET
+  asset_type = COALESCE(?, asset_type),
+  ccy = COALESCE(?, ccy),
+  name = COALESCE(?, name),
+  sector = COALESCE(?, sector),
+  industry = COALESCE(?, industry),
+  size = COALESCE(?, size),
+  country = COALESCE(?, country),
+  region = COALESCE(?, region),
+  description = COALESCE(?, description),
+  market_beta = COALESCE(?, market_beta),
+  mkt_cap = COALESCE(?, mkt_cap),
+  shares_outstanding = COALESCE(?, shares_outstanding),
+  updated_at = now()
+WHERE asset_id = ?;
+"""
+
+MARK_ASSET_METADATA_SYNC_RUNNING = """
+UPDATE asset_metadata_sync
+SET
+  sync_status = 'running',
+  last_attempted_at = now(),
+  attempt_count = attempt_count + 1,
+  updated_at = now()
+WHERE asset_id = ?;
+"""
+
+MARK_ASSET_METADATA_SYNC_SUCCESS = """
+UPDATE asset_metadata_sync
+SET
+  sync_status = 'synced',
+  last_succeeded_at = now(),
+  last_error = NULL,
+  updated_at = now()
+WHERE asset_id = ?;
+"""
+
+MARK_ASSET_METADATA_SYNC_FAILED = """
+UPDATE asset_metadata_sync
+SET
+  sync_status = 'failed',
+  last_error = ?,
+  updated_at = now()
+WHERE asset_id = ?;
+"""
+
+GET_ASSET_METADATA_SYNC = """
+SELECT
+  asset_id,
+  source,
+  sync_status,
+  last_attempted_at,
+  last_succeeded_at,
+  next_retry_at,
+  attempt_count,
+  last_error,
+  created_at,
+  updated_at
+FROM asset_metadata_sync
+WHERE asset_id = ?;
+"""
+
+###############################################
+##    trading day calendar queries
+###############################################
+
+UPSERT_TRADING_CALENDAR_DAY = """
+INSERT INTO trading_calendar (
+  market_code,
+  exchange_code,
+  session_date,
+  is_open,
+  is_half_day,
+  open_time_utc,
+  close_time_utc,
+  open_time_local,
+  close_time_local,
+  timezone,
+  holiday_name,
+  source,
+  source_version,
+  created_at,
+  updated_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), now())
+ON CONFLICT (market_code, session_date) DO UPDATE SET
+  exchange_code = excluded.exchange_code,
+  is_open = excluded.is_open,
+  is_half_day = excluded.is_half_day,
+  open_time_utc = excluded.open_time_utc,
+  close_time_utc = excluded.close_time_utc,
+  open_time_local = excluded.open_time_local,
+  close_time_local = excluded.close_time_local,
+  timezone = excluded.timezone,
+  holiday_name = excluded.holiday_name,
+  source = excluded.source,
+  source_version = excluded.source_version,
+  updated_at = now();
+"""
+
+MARK_TRADING_CALENDAR_SYNC_RUNNING = """
+INSERT INTO trading_calendar_sync_state (
+  market_code,
+  exchange_code,
+  source,
+  sync_status,
+  last_attempted_at,
+  attempt_count,
+  created_at,
+  updated_at
+)
+VALUES (?, ?, ?, 'running', now(), 1, now(), now())
+ON CONFLICT (market_code) DO UPDATE SET
+  exchange_code = excluded.exchange_code,
+  source = excluded.source,
+  sync_status = 'running',
+  last_attempted_at = now(),
+  attempt_count = trading_calendar_sync_state.attempt_count + 1,
+  updated_at = now();
+"""
+
+MARK_TRADING_CALENDAR_SYNC_SUCCESS = """
+UPDATE trading_calendar_sync_state
+SET
+  sync_status = 'synced',
+  last_start_date = ?,
+  last_end_date = ?,
+  last_succeeded_at = now(),
+  last_error = NULL,
+  updated_at = now()
+WHERE market_code = ?;
+"""
+
+MARK_TRADING_CALENDAR_SYNC_FAILED = """
+UPDATE trading_calendar_sync_state
+SET
+  sync_status = 'failed',
+  last_error = ?,
+  updated_at = now()
+WHERE market_code = ?;
+"""
+
+GET_TRADING_CALENDAR_DAY = """
+SELECT
+  market_code,
+  exchange_code,
+  session_date,
+  is_open,
+  is_half_day,
+  open_time_utc,
+  close_time_utc,
+  timezone,
+  holiday_name
+FROM trading_calendar
+WHERE market_code = ?
+  AND session_date = ?;
+"""
+
+IS_MARKET_OPEN_DAY = """
+SELECT COALESCE(is_open, FALSE)
+FROM trading_calendar
+WHERE market_code = ?
+  AND session_date = ?;
+"""
+
+LIST_DUE_TRADING_CALENDARS = """
+SELECT market_code
+FROM trading_calendar_sync_state
+WHERE sync_status IN ('pending', 'failed', 'stale')
+   OR last_succeeded_at IS NULL
+   OR last_end_date < ?
+ORDER BY last_attempted_at NULLS FIRST;
+"""

@@ -1,0 +1,231 @@
+erDiagram
+  PORTFOLIO ||--o{ POSITION : holds
+  PORTFOLIO ||--o{ TXN : owns
+  PORTFOLIO ||--o{ PORTFOLIO_TICKER : tracks
+  IMPORT_BATCH ||--o{ TXN : imports
+  ASSET ||--o{ POSITION : held_by
+  ASSET ||--o{ TXN : referenced_by
+  ASSET ||--o{ PORTFOLIO_TICKER : portfolio_scope
+  ASSET ||--o{ WATCHLIST_TICKER : watchlist_scope
+  ASSET ||--o{ ASSET_METADATA_SYNC : metadata_sync
+
+  ASSET ||--o{ ASSET_QUOTE_DAILY : daily_prices
+  ASSET ||--o{ ASSET_QUOTE_INTRADAY : intraday_prices
+  ASSET ||--o{ DIVIDEND_EVENT : dividends
+  ASSET ||--o{ SPLIT_EVENT : splits
+  ASSET ||--o{ EARNINGS_CALENDAR_EVENT : earnings_calendar
+  ASSET ||--o{ FINANCIAL_STATEMENT : statements
+  ASSET ||--o{ INGESTION_JOB : queued_work
+  ASSET ||--o{ ASSET_SYNC_STATE : ingestion_state
+  ASSET ||--o{ FUNDAMENTAL_SUBSCRIPTION : subscribed_fundamentals
+  ASSET ||--o{ FUNDAMENTAL_SYNC_STATE : fundamental_state
+
+  ASSET ||--o{ CURRENT_ASSET_PRICE : latest_live_price
+  ASSET ||--o{ LIVE_PRICE_TICK : live_ticks
+  ASSET ||--o{ LIVE_PRICE_SUBSCRIPTION_SNAPSHOT : stream_snapshot
+  LIVE_PRICE_PROVIDER_HEALTH ||--o{ LIVE_PRICE_TICK : provider_status
+  TRADING_CALENDAR_SYNC_STATE ||--o{ TRADING_CALENDAR : maintains
+
+  BENCHMARK_INDEX ||--o{ BENCHMARK_INDEX_SYMBOL : provider_symbols
+  BENCHMARK_INDEX ||--o{ BENCHMARK_INDEX_DAILY_PRICE : daily_prices
+  BENCHMARK_INDEX ||--o{ BENCHMARK_INDEX_INTRADAY_PRICE : intraday_prices
+  BENCHMARK_INDEX ||--o{ BENCHMARK_INDEX_COMPOSITION_SNAPSHOT : compositions
+  BENCHMARK_INDEX_COMPOSITION_SNAPSHOT ||--o{ BENCHMARK_INDEX_CONSTITUENT : constituents
+  BENCHMARK_INDEX ||--o{ BENCHMARK_INDEX_EXPOSURE_SNAPSHOT : exposures
+  BENCHMARK_INDEX ||--o{ BENCHMARK_INDEX_DAILY_METRIC : metrics
+  BENCHMARK_INDEX ||--o{ BENCHMARK_INDEX_RELATIVE_METRIC : relative_metrics
+  BENCHMARK_INDEX ||--o{ BENCHMARK_INDEX_SYNC_STATE : sync_state
+
+  PORTFOLIO {
+    BIGINT portfolio_id PK
+    TEXT portfolio_name
+  }
+
+  ASSET {
+    TEXT asset_id PK
+    TEXT symbol
+    TEXT exchange_code
+    TEXT asset_type
+  }
+
+  TXN {
+    BIGINT txn_id PK
+    BIGINT portfolio_id FK
+    TEXT asset_id FK
+    BIGINT batch_id FK
+  }
+
+  POSITION {
+    BIGINT portfolio_id PK, FK
+    TEXT asset_id PK, FK
+  }
+
+  IMPORT_BATCH {
+    BIGINT batch_id PK
+    TEXT batch_type
+  }
+
+  PORTFOLIO_TICKER {
+    BIGINT portfolio_id PK, FK
+    TEXT asset_id PK, FK
+    BOOLEAN is_active
+  }
+
+  WATCHLIST_TICKER {
+    TEXT asset_id PK, FK
+    BOOLEAN is_active
+  }
+
+  ASSET_METADATA_SYNC {
+    TEXT asset_id PK, FK
+    TEXT sync_status
+  }
+
+  ASSET_QUOTE_DAILY {
+    TEXT asset_id PK, FK
+    DATE date PK
+  }
+
+  ASSET_QUOTE_INTRADAY {
+    TEXT asset_id PK, FK
+    TIMESTAMP time_stamp PK
+  }
+
+  DIVIDEND_EVENT {
+    TEXT asset_id PK, FK
+    DATE ex_date PK
+  }
+
+  SPLIT_EVENT {
+    TEXT asset_id PK, FK
+    DATE ex_date PK
+  }
+
+  EARNINGS_CALENDAR_EVENT {
+    TEXT asset_id PK, FK
+    DATE earnings_date PK
+  }
+
+  FINANCIAL_STATEMENT {
+    TEXT asset_id PK, FK
+    TEXT statement_type PK
+    INTEGER year PK
+    INTEGER quarter PK
+  }
+
+  INGESTION_JOB {
+    BIGINT job_id PK
+    TEXT asset_id FK
+    TEXT domain
+    TEXT dataset
+    TEXT status
+  }
+
+  ASSET_SYNC_STATE {
+    TEXT asset_id PK, FK
+    TEXT domain PK
+    TEXT dataset PK
+  }
+
+  FUNDAMENTAL_SUBSCRIPTION {
+    TEXT asset_id PK, FK
+    BOOLEAN is_active
+  }
+
+  FUNDAMENTAL_SYNC_STATE {
+    TEXT asset_id PK, FK
+    VARCHAR dataset PK
+    VARCHAR sync_mode PK
+  }
+
+  CURRENT_ASSET_PRICE {
+    TEXT asset_id PK, FK
+    TEXT provider
+  }
+
+  LIVE_PRICE_TICK {
+    UUID tick_id PK
+    TEXT asset_id FK
+    TEXT provider
+  }
+
+  LIVE_PRICE_SUBSCRIPTION_SNAPSHOT {
+    UUID snapshot_id PK
+    TEXT asset_id FK
+    TEXT source_scope
+  }
+
+  LIVE_PRICE_PROVIDER_HEALTH {
+    TEXT provider PK
+    TEXT status
+  }
+
+  TRADING_CALENDAR {
+    TEXT market_code PK
+    DATE session_date PK
+  }
+
+  TRADING_CALENDAR_SYNC_STATE {
+    TEXT market_code PK
+    TEXT sync_status
+  }
+
+  BENCHMARK_INDEX {
+    TEXT index_id PK
+    TEXT index_category
+  }
+
+  BENCHMARK_INDEX_SYMBOL {
+    TEXT index_id PK, FK
+    TEXT provider PK
+    TEXT provider_symbol PK
+    TEXT symbol_purpose PK
+  }
+
+  BENCHMARK_INDEX_DAILY_PRICE {
+    TEXT index_id PK, FK
+    DATE price_date PK
+  }
+
+  BENCHMARK_INDEX_INTRADAY_PRICE {
+    TEXT index_id PK, FK
+    TEXT interval PK
+    TIMESTAMP bar_start_utc PK
+  }
+
+  BENCHMARK_INDEX_COMPOSITION_SNAPSHOT {
+    TEXT index_id PK, FK
+    DATE snapshot_date PK
+    TEXT source PK
+  }
+
+  BENCHMARK_INDEX_CONSTITUENT {
+    TEXT index_id PK, FK
+    DATE snapshot_date PK
+    TEXT source PK
+    TEXT constituent_symbol PK
+  }
+
+  BENCHMARK_INDEX_EXPOSURE_SNAPSHOT {
+    TEXT index_id PK, FK
+    DATE snapshot_date PK
+    TEXT dimension_type PK
+    TEXT dimension_value PK
+    TEXT source PK
+  }
+
+  BENCHMARK_INDEX_DAILY_METRIC {
+    TEXT index_id PK, FK
+    DATE metric_date PK
+  }
+
+  BENCHMARK_INDEX_RELATIVE_METRIC {
+    TEXT index_id PK, FK
+    TEXT comparison_index_id PK, FK
+    DATE metric_date PK
+  }
+
+  BENCHMARK_INDEX_SYNC_STATE {
+    TEXT index_id PK, FK
+    TEXT job_type PK
+  }
