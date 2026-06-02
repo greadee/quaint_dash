@@ -347,3 +347,119 @@ SET status = ?,
     updated_at = now()
 WHERE job_id = ?
 """
+
+SELECT_PRICE_HISTORY_FOR_FACTOR = """
+SELECT date, close, adj_close
+FROM asset_quote_daily
+WHERE asset_id = ?
+  AND date <= ?
+  AND date >= ? - INTERVAL 400 DAY
+ORDER BY date
+"""
+
+SELECT_ASSET_FACTOR_METADATA = """
+SELECT market_beta, sector, industry
+FROM asset
+WHERE asset_id = ?
+"""
+
+SELECT_DIVIDENDS_FOR_FACTOR = """
+SELECT ex_date, dividend_per_share
+FROM dividend_event
+WHERE asset_id = ?
+  AND ex_date <= ?
+  AND ex_date >= ? - INTERVAL 400 DAY
+ORDER BY ex_date
+"""
+
+UPSERT_FACTOR_SNAPSHOT = """
+INSERT INTO ticker_factor_snapshot (
+    asset_id,
+    ticker,
+    snapshot_date,
+    growth_score,
+    value_score,
+    quality_score,
+    momentum_score,
+    defensive_score,
+    dividend_score,
+    volatility_score,
+    revision_score,
+    overall_factor_score,
+    factor_labels_json,
+    explanation,
+    updated_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
+ON CONFLICT(asset_id, snapshot_date)
+DO UPDATE SET
+    ticker = excluded.ticker,
+    growth_score = excluded.growth_score,
+    value_score = excluded.value_score,
+    quality_score = excluded.quality_score,
+    momentum_score = excluded.momentum_score,
+    defensive_score = excluded.defensive_score,
+    dividend_score = excluded.dividend_score,
+    volatility_score = excluded.volatility_score,
+    revision_score = excluded.revision_score,
+    overall_factor_score = excluded.overall_factor_score,
+    factor_labels_json = excluded.factor_labels_json,
+    explanation = excluded.explanation,
+    updated_at = now()
+"""
+
+SELECT_FACTOR_SNAPSHOT = """
+SELECT
+    asset_id,
+    ticker,
+    snapshot_date,
+    growth_score,
+    value_score,
+    quality_score,
+    momentum_score,
+    defensive_score,
+    dividend_score,
+    volatility_score,
+    revision_score,
+    overall_factor_score,
+    factor_labels_json,
+    explanation
+FROM ticker_factor_snapshot
+WHERE asset_id = ? AND snapshot_date = ?
+"""
+
+UPSERT_QUANT_RATING_SNAPSHOT = """
+INSERT INTO ticker_quant_rating_snapshot (
+    asset_id,
+    ticker,
+    snapshot_date,
+    overall_quant_score,
+    overall_quant_rating,
+    growth_rating,
+    value_rating,
+    quality_rating,
+    momentum_rating,
+    defensive_rating,
+    dividend_rating,
+    volatility_rating,
+    factor_profile,
+    explanation,
+    updated_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
+ON CONFLICT(asset_id, snapshot_date)
+DO UPDATE SET
+    ticker = excluded.ticker,
+    overall_quant_score = excluded.overall_quant_score,
+    overall_quant_rating = excluded.overall_quant_rating,
+    growth_rating = excluded.growth_rating,
+    value_rating = excluded.value_rating,
+    quality_rating = excluded.quality_rating,
+    momentum_rating = excluded.momentum_rating,
+    defensive_rating = excluded.defensive_rating,
+    dividend_rating = excluded.dividend_rating,
+    volatility_rating = excluded.volatility_rating,
+    factor_profile = excluded.factor_profile,
+    explanation = excluded.explanation,
+    updated_at = now()
+"""

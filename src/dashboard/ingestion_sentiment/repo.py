@@ -9,7 +9,9 @@ from typing import Any
 
 from dashboard.ingestion_sentiment.models import (
     AssetRef,
+    FactorSnapshotInput,
     NewsArticleInput,
+    QuantRatingSnapshotInput,
     SentimentDailySnapshot,
     SentimentIngestionJob,
     SentimentObservationInput,
@@ -247,6 +249,85 @@ class SentimentIngestionRepository:
 
     def mark_job_failed(self, job_id: int, error: str) -> None:
         self.conn.execute(qry.MARK_JOB_FAILED, [STATUS_FAILED, error, job_id])
+
+    def price_history_for_factor(self, asset_id: str, snapshot_date) -> list[tuple[Any, ...]]:
+        return self.conn.execute(
+            qry.SELECT_PRICE_HISTORY_FOR_FACTOR,
+            [asset_id, snapshot_date, snapshot_date],
+        ).fetchall()
+
+    def asset_factor_metadata(self, asset_id: str) -> tuple[Any, ...] | None:
+        return self.conn.execute(qry.SELECT_ASSET_FACTOR_METADATA, [asset_id]).fetchone()
+
+    def dividends_for_factor(self, asset_id: str, snapshot_date) -> list[tuple[Any, ...]]:
+        return self.conn.execute(
+            qry.SELECT_DIVIDENDS_FOR_FACTOR,
+            [asset_id, snapshot_date, snapshot_date],
+        ).fetchall()
+
+    def upsert_factor_snapshot(self, snapshot: FactorSnapshotInput) -> None:
+        self.conn.execute(
+            qry.UPSERT_FACTOR_SNAPSHOT,
+            [
+                snapshot.asset_id,
+                snapshot.ticker,
+                snapshot.snapshot_date,
+                snapshot.growth_score,
+                snapshot.value_score,
+                snapshot.quality_score,
+                snapshot.momentum_score,
+                snapshot.defensive_score,
+                snapshot.dividend_score,
+                snapshot.volatility_score,
+                snapshot.revision_score,
+                snapshot.overall_factor_score,
+                json.dumps(snapshot.factor_labels),
+                snapshot.explanation,
+            ],
+        )
+
+    def factor_snapshot(self, asset_id: str, snapshot_date) -> FactorSnapshotInput | None:
+        row = self.conn.execute(qry.SELECT_FACTOR_SNAPSHOT, [asset_id, snapshot_date]).fetchone()
+        if row is None:
+            return None
+
+        return FactorSnapshotInput(
+            asset_id=row[0],
+            ticker=row[1],
+            snapshot_date=row[2],
+            growth_score=row[3],
+            value_score=row[4],
+            quality_score=row[5],
+            momentum_score=row[6],
+            defensive_score=row[7],
+            dividend_score=row[8],
+            volatility_score=row[9],
+            revision_score=row[10],
+            overall_factor_score=row[11],
+            factor_labels=json.loads(row[12] or "[]"),
+            explanation=row[13],
+        )
+
+    def upsert_quant_rating_snapshot(self, snapshot: QuantRatingSnapshotInput) -> None:
+        self.conn.execute(
+            qry.UPSERT_QUANT_RATING_SNAPSHOT,
+            [
+                snapshot.asset_id,
+                snapshot.ticker,
+                snapshot.snapshot_date,
+                snapshot.overall_quant_score,
+                snapshot.overall_quant_rating,
+                snapshot.growth_rating,
+                snapshot.value_rating,
+                snapshot.quality_rating,
+                snapshot.momentum_rating,
+                snapshot.defensive_rating,
+                snapshot.dividend_rating,
+                snapshot.volatility_rating,
+                snapshot.factor_profile,
+                snapshot.explanation,
+            ],
+        )
 
     def _next_article_id(self) -> int:
         return int(self.conn.execute(qry.NEXT_NEWS_ARTICLE_ID).fetchone()[0])

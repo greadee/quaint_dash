@@ -134,6 +134,34 @@ class SentimentIngestionService:
         )
         return 1
 
+    def refresh_factor_snapshot(self, ticker: str, snapshot_date) -> int:
+        from dashboard.ingestion_sentiment.scoring import FactorScorer
+
+        asset = self._asset_ref_for_ticker(ticker)
+        if asset is None:
+            raise ValueError(f"Unknown sentiment ticker: {ticker}")
+
+        FactorScorer(self.repo).refresh_factor_snapshot(
+            asset_id=asset.asset_id,
+            ticker=asset.ticker,
+            snapshot_date=snapshot_date,
+        )
+        return 1
+
+    def refresh_quant_rating(self, ticker: str, snapshot_date) -> int:
+        from dashboard.ingestion_sentiment.scoring import QuantRatingScorer
+
+        asset = self._asset_ref_for_ticker(ticker)
+        if asset is None:
+            raise ValueError(f"Unknown sentiment ticker: {ticker}")
+
+        QuantRatingScorer(self.repo).refresh_quant_rating(
+            asset_id=asset.asset_id,
+            ticker=asset.ticker,
+            snapshot_date=snapshot_date,
+        )
+        return 1
+
     def _asset_ref_for_ticker(self, ticker: str) -> AssetRef | None:
         normalized = ticker.upper().strip()
         for asset in self.repo.asset_refs():

@@ -5,9 +5,12 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import date, datetime, timedelta
 from math import log1p
+from statistics import mean, pstdev
 
 from dashboard.ingestion_sentiment.models import (
+    FactorSnapshotInput,
     NewsArticleInput,
+    QuantRatingSnapshotInput,
     SentimentDailySnapshot,
     SentimentObservationInput,
     SocialPostInput,
@@ -299,3 +302,300 @@ def blended_bucket_score(
         for bucket, score in available.items()
     )
 
+
+class FactorScorer:
+    def __init__(self, repo: SentimentIngestionRepository) -> None:
+        self.repo = repo
+
+    def refresh_factor_snapshot(
+        self,
+        asset_id: str,
+        ticker: str,
+        snapshot_date: date,
+    ) -> FactorSnapshotInput:
+        prices = self.repo.price_history_for_factor(asset_id, snapshot_date)
+        metadata = self.repo.asset_factor_metadata(asset_id)
+        dividends = self.repo.dividends_for_factor(asset_id, snapshot_date)
+
+        close_rows = [(row[0], row[2] if row[2] is not None else row[1]) for row in prices]
+        close_rows = [(d, c) for d, c in close_rows if c is not None and c > 0]
+        closes = [row[1] for row in close_rows]
+        explanations: list[str] = []
+
+        momentum_score = momentum_factor_score(close_rows)
+        if momentum_score is None:
+            explanations.append("momentum missing: fewer than 63 trading days of prices")
+
+        realized_vol = realized_volatility(closes)
+        volatility_score = volatility_factor_score(realized_vol)
+        if volatility_score is None:
+            explanations.append("volatility missing: fewer than 2 daily closes")
+
+        beta = metadata[0] if metadata else None
+        defensive_score = defensive_factor_score(beta, volatility_score)
+        if defensive_score is None:
+            explanations.append("defensive missing: beta and volatility unavailable")
+
+        dividend_score = dividend_factor_score(dividends, closes[-1] if closes else None)
+        if dividend_score is None:
+            explanations.append("dividend missing: no dividend yield data")
+
+        explanations.extend(
+            [
+                "growth missing: financial statement growth inputs unavailable",
+                "value missing: valuation inputs unavailable",
+                "quality missing: profitability inputs unavailable",
+                "revision missing: analyst estimate inputs unavailable",
+            ]
+        )
+
+        overall = average_available(
+            [
+                momentum_score,
+                defensive_score,
+                dividend_score,
+                volatility_score,
+            ]
+        )
+        labels = factor_labels(
+            growth_score=None,
+            value_score=None,
+            quality_score=None,
+            momentum_score=momentum_score,
+            defensive_score=defensive_score,
+            dividend_score=dividend_score,
+            volatility_score=volatility_score,
+        )
+
+        snapshot = FactorSnapshotInput(
+            asset_id=asset_id,
+            ticker=ticker.upper(),
+            snapshot_date=snapshot_date,
+            momentum_score=momentum_score,
+            defensive_score=defensive_score,
+            dividend_score=dividend_score,
+            volatility_score=volatility_score,
+            overall_factor_score=overall,
+            factor_labels=labels,
+            explanation="; ".join(explanations),
+        )
+        self.repo.upsert_factor_snapshot(snapshot)
+        return snapshot
+
+
+class QuantRatingScorer:
+    def __init__(self, repo: SentimentIngestionRepository) -> None:
+        self.repo = repo
+
+    def refresh_quant_rating(
+        self,
+        asset_id: str,
+        ticker: str,
+        snapshot_date: date,
+    ) -> QuantRatingSnapshotInput:
+        factor = self.repo.factor_snapshot(asset_id, snapshot_date)
+        if factor is None:
+            factor = FactorScorer(self.repo).refresh_factor_snapshot(
+                asset_id=asset_id,
+                ticker=ticker,
+                snapshot_date=snapshot_date,
+            )
+
+        profile = factor_profile(factor)
+        snapshot = QuantRatingSnapshotInput(
+            asset_id=asset_id,
+            ticker=ticker.upper(),
+            snapshot_date=snapshot_date,
+            overall_quant_score=factor.overall_factor_score,
+            overall_quant_rating=quant_rating(factor.overall_factor_score),
+            growth_rating=component_rating(factor.growth_score),
+            value_rating=component_rating(factor.value_score),
+            quality_rating=component_rating(factor.quality_score),
+            momentum_rating=component_rating(factor.momentum_score),
+            defensive_rating=component_rating(factor.defensive_score),
+            dividend_rating=component_rating(factor.dividend_score),
+            volatility_rating=component_rating(factor.volatility_score),
+            factor_profile=profile,
+            explanation=f"Internal quant rating from factor snapshot: {profile}",
+        )
+        self.repo.upsert_quant_rating_snapshot(snapshot)
+        return snapshot
+
+
+def momentum_factor_score(close_rows: list[tuple[date, float]]) -> float | None:
+    if len(close_rows) < 63:
+        return None
+
+    latest = close_rows[-1][1]
+    components: list[float] = []
+    for lookback in [63, 126, 252]:
+        if len(close_rows) > lookback and close_rows[-lookback - 1][1] > 0:
+            ret = latest / close_rows[-lookback - 1][1] - 1.0
+            components.append(score_return(ret))
+
+    if len(close_rows) >= 200:
+        ma200 = mean([row[1] for row in close_rows[-200:]])
+        components.append(80.0 if latest >= ma200 else 35.0)
+
+    return average_available(components)
+
+
+def score_return(value: float) -> float:
+    if value >= 0.30:
+        return 95.0
+    if value >= 0.15:
+        return 80.0
+    if value >= 0.05:
+        return 65.0
+    if value >= -0.05:
+        return 50.0
+    if value >= -0.15:
+        return 35.0
+    return 20.0
+
+
+def realized_volatility(closes: list[float]) -> float | None:
+    if len(closes) < 2:
+        return None
+
+    returns = [
+        closes[i] / closes[i - 1] - 1.0
+        for i in range(1, len(closes))
+        if closes[i - 1] > 0
+    ]
+    if not returns:
+        return None
+    return pstdev(returns) * (252 ** 0.5)
+
+
+def volatility_factor_score(volatility: float | None) -> float | None:
+    if volatility is None:
+        return None
+    if volatility <= 0.15:
+        return 90.0
+    if volatility <= 0.25:
+        return 75.0
+    if volatility <= 0.40:
+        return 55.0
+    if volatility <= 0.60:
+        return 35.0
+    return 20.0
+
+
+def defensive_factor_score(beta: float | None, volatility_score: float | None) -> float | None:
+    components: list[float] = []
+    if beta is not None:
+        if beta <= 0.75:
+            components.append(90.0)
+        elif beta <= 1.0:
+            components.append(70.0)
+        elif beta <= 1.3:
+            components.append(45.0)
+        else:
+            components.append(25.0)
+    if volatility_score is not None:
+        components.append(volatility_score)
+    return average_available(components)
+
+
+def dividend_factor_score(dividends: list[tuple[date, float | None]], latest_close: float | None) -> float | None:
+    if latest_close is None or latest_close <= 0:
+        return None
+
+    annual_dividend = sum(row[1] or 0.0 for row in dividends)
+    if annual_dividend <= 0:
+        return None
+
+    dividend_yield = annual_dividend / latest_close
+    if dividend_yield >= 0.04:
+        return 90.0
+    if dividend_yield >= 0.025:
+        return 75.0
+    if dividend_yield >= 0.01:
+        return 55.0
+    return 30.0
+
+
+def factor_labels(
+    growth_score: float | None,
+    value_score: float | None,
+    quality_score: float | None,
+    momentum_score: float | None,
+    defensive_score: float | None,
+    dividend_score: float | None,
+    volatility_score: float | None,
+) -> list[str]:
+    labels: list[str] = []
+    if growth_score is not None and growth_score >= 70:
+        labels.append("Growth")
+    if value_score is not None and value_score >= 70:
+        labels.append("Value")
+    if quality_score is not None and quality_score >= 70:
+        labels.append("Quality")
+    if momentum_score is not None and momentum_score >= 70:
+        labels.append("Momentum")
+    if defensive_score is not None and defensive_score >= 70:
+        labels.append("Defensive")
+    if dividend_score is not None and dividend_score >= 70:
+        labels.append("Dividend")
+    if (
+        momentum_score is not None
+        and momentum_score >= 70
+        and quality_score is not None
+        and quality_score < 45
+    ):
+        labels.append("Low Quality Momentum")
+    if volatility_score is not None and volatility_score < 40 and defensive_score is not None and defensive_score < 45:
+        labels.append("Cyclical")
+    return labels
+
+
+def factor_profile(factor: FactorSnapshotInput) -> str | None:
+    labels = factor.factor_labels
+    if {"Growth", "Quality", "Momentum"}.issubset(labels):
+        return "Compounder"
+    if "Growth" in labels and "Momentum" in labels and "Quality" not in labels:
+        return "Speculative Growth"
+    if "Low Quality Momentum" in labels:
+        return "Low Quality Momentum"
+    if "Cyclical" in labels:
+        return "Cyclical"
+    for label in ["Momentum", "Quality", "Growth", "Value", "Defensive", "Dividend"]:
+        if label in labels:
+            return label
+    return None
+
+
+def quant_rating(score: float | None) -> str | None:
+    if score is None:
+        return None
+    if score >= 80:
+        return "Strong Buy"
+    if score >= 65:
+        return "Buy"
+    if score >= 45:
+        return "Hold"
+    if score >= 30:
+        return "Sell"
+    return "Strong Sell"
+
+
+def component_rating(score: float | None) -> str | None:
+    if score is None:
+        return None
+    if score >= 80:
+        return "A"
+    if score >= 65:
+        return "B"
+    if score >= 45:
+        return "C"
+    if score >= 30:
+        return "D"
+    return "F"
+
+
+def average_available(values: list[float | None]) -> float | None:
+    present = [value for value in values if value is not None]
+    if not present:
+        return None
+    return sum(present) / len(present)

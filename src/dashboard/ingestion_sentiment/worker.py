@@ -64,8 +64,12 @@ class SentimentIngestionWorker:
             self.service.aggregate_daily_sentiment(ticker, snapshot_date)
             return
 
-        if job.job_type in {JOB_TYPE_FACTOR_SNAPSHOT_REFRESH, JOB_TYPE_QUANT_RATING_REFRESH}:
+        if job.job_type == JOB_TYPE_FACTOR_SNAPSHOT_REFRESH:
+            self.service.refresh_factor_snapshot(ticker, snapshot_date)
+            return
+
+        if job.job_type == JOB_TYPE_QUANT_RATING_REFRESH:
+            self.service.refresh_quant_rating(ticker, snapshot_date)
             return
 
         raise ValueError(f"Unsupported sentiment job type: {job.job_type}")
-
