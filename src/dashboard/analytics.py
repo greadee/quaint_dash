@@ -17,6 +17,23 @@ from typing import Any
 
 
 TRADING_DAYS_PER_YEAR = 252
+REVENUE_ALIASES = ("revenue", "totalRevenue", "total_revenue")
+GROSS_PROFIT_ALIASES = ("grossProfit", "gross_profit")
+OPERATING_INCOME_ALIASES = ("operatingIncome", "operating_income")
+NET_INCOME_ALIASES = ("netIncome", "net_income")
+EPS_ALIASES = ("eps", "epsDiluted", "dilutedEPS", "dilutedEps")
+EBITDA_ALIASES = ("ebitda", "EBITDA")
+EQUITY_ALIASES = ("totalStockholdersEquity", "totalShareholderEquity", "total_equity")
+ASSETS_ALIASES = ("totalAssets", "total_assets")
+DEBT_ALIASES = ("totalDebt", "shortLongTermDebtTotal", "total_debt")
+CASH_ALIASES = ("cashAndCashEquivalents", "cashAndShortTermInvestments", "cash")
+FREE_CASH_FLOW_ALIASES = ("freeCashFlow", "free_cash_flow", "free_cashflow")
+OPERATING_CASH_FLOW_ALIASES = (
+    "operatingCashFlow",
+    "cashFlowFromOperations",
+    "netCashProvidedByOperatingActivities",
+)
+CAPEX_ALIASES = ("capitalExpenditure", "capital_expenditure", "capex")
 
 
 @dataclass(frozen=True)
@@ -107,6 +124,39 @@ class PortfolioRiskDecomposition:
 
 
 @dataclass(frozen=True)
+class DcfScenario:
+    scenario_name: str
+    growth_rate: float
+    discount_rate: float
+    terminal_growth_rate: float
+    intrinsic_value_per_share: float | None
+    margin_of_safety: float | None
+    implied_growth_rate: float | None
+
+
+@dataclass(frozen=True)
+class ValuationDepthMetrics:
+    revenue_growth_yoy: float | None
+    eps_growth_yoy: float | None
+    free_cash_flow_growth_yoy: float | None
+    gross_margin: float | None
+    operating_margin: float | None
+    net_margin: float | None
+    return_on_equity: float | None
+    return_on_assets: float | None
+    debt_to_equity: float | None
+    net_debt_to_ebitda: float | None
+    payout_ratio: float | None
+    pe_ratio: float | None
+    price_to_book: float | None
+    price_to_sales: float | None
+    price_to_free_cash_flow: float | None
+    ev_to_ebitda: float | None
+    dcf_scenarios: list[DcfScenario] = field(default_factory=list)
+    missing_inputs: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class ValuationResult:
     method: str
     intrinsic_value_per_share: float | None
@@ -127,6 +177,7 @@ class AssetAnalyticsReport:
     relative: RelativeRiskMetrics | None
     dividend_discount: ValuationResult
     discounted_cash_flow: ValuationResult
+    valuation_depth: ValuationDepthMetrics
 
 
 @dataclass(frozen=True)
@@ -307,6 +358,28 @@ class AnalyticsRepository:
                 return fcf
         return None
 
+    def financial_statement_history(self, asset_id: str, statement_type: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT year, quarter, period_end_date, report_date, data_json
+            FROM financial_statement
+            WHERE asset_id = ?
+              AND statement_type = ?
+            ORDER BY year DESC, quarter DESC
+            """,
+            [asset_id.upper().strip(), statement_type],
+        ).fetchall()
+        return [
+            {
+                "year": int(row[0]),
+                "quarter": int(row[1]),
+                "period_end_date": row[2],
+                "report_date": row[3],
+                "data": _json_object(row[4]),
+            }
+            for row in rows
+        ]
+
     def portfolio_positions(self, portfolio_id: int) -> list[tuple[int, str, float, float]]:
         rows = self.conn.execute(
             """
@@ -428,6 +501,18 @@ class AnalyticsEngine:
         fcf = self.repo.latest_free_cash_flow(asset_id)
         shares = self.repo.shares_outstanding(asset_id)
         fcf_per_share = fcf / shares if fcf is not None and shares else None
+        valuation_depth = valuation_depth_metrics(
+            income_statements=self.repo.financial_statement_history(asset_id, "income"),
+            balance_sheets=self.repo.financial_statement_history(asset_id, "balance"),
+            cashflow_statements=self.repo.financial_statement_history(asset_id, "cashflow"),
+            market_price=latest_price,
+            shares_outstanding=shares,
+            annual_dividend=dividend,
+            discount_rate=discount_rate,
+            base_growth_rate=dividend_growth_rate,
+            terminal_growth_rate=terminal_growth_rate,
+            forecast_years=forecast_years,
+        )
 
         return AssetAnalyticsReport(
             asset_id=asset_id,
@@ -452,6 +537,7 @@ class AnalyticsEngine:
                 terminal_growth_rate=terminal_growth_rate,
                 forecast_years=forecast_years,
             ),
+            valuation_depth=valuation_depth,
         )
 
     def portfolio_report(
@@ -939,8 +1025,9 @@ def risk_return_metrics(
     cagr_value = cagr(clean[0].close, clean[-1].close, years) if years else None
     vol = annualized_volatility(returns)
     downside = downside_deviation(returns, risk_free_rate / TRADING_DAYS_PER_YEAR)
-    sharpe = ratio(cagr_value - risk_free_rate, vol)
-    sortino = ratio(cagr_value - risk_free_rate, downside)
+    excess_cagr = cagr_value - risk_free_rate if cagr_value is not None else None
+    sharpe = ratio(excess_cagr, vol)
+    sortino = ratio(excess_cagr, downside)
     drawdown = max_drawdown([p.close for p in clean])
 
     return RiskReturnMetrics(
@@ -1405,6 +1492,166 @@ def dimension_exposure(
     return dict(sorted(exposure.items()))
 
 
+def valuation_depth_metrics(
+    income_statements: list[dict[str, Any]],
+    balance_sheets: list[dict[str, Any]],
+    cashflow_statements: list[dict[str, Any]],
+    market_price: float | None,
+    shares_outstanding: float | None,
+    annual_dividend: float | None,
+    discount_rate: float,
+    base_growth_rate: float,
+    terminal_growth_rate: float,
+    forecast_years: int = 5,
+) -> ValuationDepthMetrics:
+    latest_income = _latest_statement_data(income_statements)
+    previous_income = _previous_statement_data(income_statements)
+    latest_balance = _latest_statement_data(balance_sheets)
+    latest_cashflow = _latest_statement_data(cashflow_statements)
+    previous_cashflow = _previous_statement_data(cashflow_statements)
+
+    revenue = _extract_number(latest_income, REVENUE_ALIASES)
+    previous_revenue = _extract_number(previous_income, REVENUE_ALIASES)
+    gross_profit = _extract_number(latest_income, GROSS_PROFIT_ALIASES)
+    operating_income = _extract_number(latest_income, OPERATING_INCOME_ALIASES)
+    net_income = _extract_number(latest_income, NET_INCOME_ALIASES)
+    eps = _extract_number(latest_income, EPS_ALIASES)
+    previous_eps = _extract_number(previous_income, EPS_ALIASES)
+    ebitda = _extract_number(latest_income, EBITDA_ALIASES)
+
+    total_equity = _extract_number(latest_balance, EQUITY_ALIASES)
+    total_assets = _extract_number(latest_balance, ASSETS_ALIASES)
+    total_debt = _extract_number(latest_balance, DEBT_ALIASES)
+    cash = _extract_number(latest_balance, CASH_ALIASES)
+
+    fcf = _free_cash_flow_from_statement(latest_cashflow)
+    previous_fcf = _free_cash_flow_from_statement(previous_cashflow)
+    fcf_per_share = fcf / shares_outstanding if fcf is not None and shares_outstanding else None
+    book_value_per_share = (
+        total_equity / shares_outstanding
+        if total_equity is not None and shares_outstanding
+        else None
+    )
+    revenue_per_share = revenue / shares_outstanding if revenue is not None and shares_outstanding else None
+    enterprise_value = None
+    if market_price is not None and shares_outstanding:
+        enterprise_value = market_price * shares_outstanding + (total_debt or 0.0) - (cash or 0.0)
+
+    missing = valuation_missing_inputs(
+        latest_income=latest_income,
+        latest_balance=latest_balance,
+        latest_cashflow=latest_cashflow,
+        shares_outstanding=shares_outstanding,
+        market_price=market_price,
+        fcf=fcf,
+    )
+
+    return ValuationDepthMetrics(
+        revenue_growth_yoy=growth_rate(revenue, previous_revenue),
+        eps_growth_yoy=growth_rate(eps, previous_eps),
+        free_cash_flow_growth_yoy=growth_rate(fcf, previous_fcf),
+        gross_margin=safe_div(gross_profit, revenue),
+        operating_margin=safe_div(operating_income, revenue),
+        net_margin=safe_div(net_income, revenue),
+        return_on_equity=safe_div(net_income, total_equity),
+        return_on_assets=safe_div(net_income, total_assets),
+        debt_to_equity=safe_div(total_debt, total_equity),
+        net_debt_to_ebitda=safe_div((total_debt or 0.0) - (cash or 0.0), ebitda)
+        if total_debt is not None or cash is not None
+        else None,
+        payout_ratio=safe_div(annual_dividend, eps),
+        pe_ratio=safe_div(market_price, eps),
+        price_to_book=safe_div(market_price, book_value_per_share),
+        price_to_sales=safe_div(market_price, revenue_per_share),
+        price_to_free_cash_flow=safe_div(market_price, fcf_per_share),
+        ev_to_ebitda=safe_div(enterprise_value, ebitda),
+        dcf_scenarios=dcf_scenarios(
+            cashflow_per_share=fcf_per_share,
+            market_price=market_price,
+            discount_rate=discount_rate,
+            base_growth_rate=base_growth_rate,
+            terminal_growth_rate=terminal_growth_rate,
+            forecast_years=forecast_years,
+        ),
+        missing_inputs=missing,
+    )
+
+
+def dcf_scenarios(
+    cashflow_per_share: float | None,
+    market_price: float | None,
+    discount_rate: float,
+    base_growth_rate: float,
+    terminal_growth_rate: float,
+    forecast_years: int = 5,
+) -> list[DcfScenario]:
+    scenario_inputs = [
+        ("bear", max(-0.20, base_growth_rate - 0.05), discount_rate + 0.02, terminal_growth_rate),
+        ("base", base_growth_rate, discount_rate, terminal_growth_rate),
+        ("bull", base_growth_rate + 0.05, max(0.001, discount_rate - 0.01), terminal_growth_rate),
+    ]
+    scenarios: list[DcfScenario] = []
+    for name, growth, scenario_discount, scenario_terminal in scenario_inputs:
+        intrinsic = None
+        margin = None
+        if (
+            cashflow_per_share is not None
+            and cashflow_per_share > 0
+            and scenario_discount > scenario_terminal
+        ):
+            intrinsic = dcf_value_per_share(
+                cashflow_per_share=cashflow_per_share,
+                discount_rate=scenario_discount,
+                growth_rate=growth,
+                terminal_growth_rate=scenario_terminal,
+                forecast_years=forecast_years,
+            )
+            if market_price is not None and market_price > 0:
+                margin = intrinsic / market_price - 1.0
+        scenarios.append(
+            DcfScenario(
+                scenario_name=name,
+                growth_rate=growth,
+                discount_rate=scenario_discount,
+                terminal_growth_rate=scenario_terminal,
+                intrinsic_value_per_share=intrinsic,
+                margin_of_safety=margin,
+                implied_growth_rate=implied_dcf_growth_rate(
+                    market_price=market_price,
+                    cashflow_per_share=cashflow_per_share,
+                    discount_rate=scenario_discount,
+                    terminal_growth_rate=scenario_terminal,
+                    forecast_years=forecast_years,
+                ),
+            )
+        )
+    return scenarios
+
+
+def valuation_missing_inputs(
+    latest_income: dict[str, Any],
+    latest_balance: dict[str, Any],
+    latest_cashflow: dict[str, Any],
+    shares_outstanding: float | None,
+    market_price: float | None,
+    fcf: float | None,
+) -> list[str]:
+    missing: list[str] = []
+    if not latest_income:
+        missing.append("income statement")
+    if not latest_balance:
+        missing.append("balance sheet")
+    if not latest_cashflow:
+        missing.append("cash flow statement")
+    if shares_outstanding is None:
+        missing.append("shares outstanding")
+    if market_price is None:
+        missing.append("market price")
+    if fcf is None:
+        missing.append("free cash flow")
+    return missing
+
+
 def dividend_discount_model(
     annual_dividend: float | None,
     market_price: float | None,
@@ -1676,6 +1923,37 @@ def _years_between(start_date: date | None, end_date: date | None) -> float | No
     if days <= 0:
         return None
     return days / 365.25
+
+
+def growth_rate(current: float | None, previous: float | None) -> float | None:
+    if current is None or previous is None or previous == 0:
+        return None
+    return current / previous - 1.0
+
+
+def safe_div(numerator: float | None, denominator: float | None) -> float | None:
+    if numerator is None or denominator is None or denominator == 0:
+        return None
+    return numerator / denominator
+
+
+def _latest_statement_data(statements: list[dict[str, Any]]) -> dict[str, Any]:
+    return statements[0]["data"] if statements else {}
+
+
+def _previous_statement_data(statements: list[dict[str, Any]]) -> dict[str, Any]:
+    return statements[1]["data"] if len(statements) > 1 else {}
+
+
+def _free_cash_flow_from_statement(data: dict[str, Any]) -> float | None:
+    fcf = _extract_number(data, FREE_CASH_FLOW_ALIASES)
+    if fcf is not None:
+        return fcf
+    operating = _extract_number(data, OPERATING_CASH_FLOW_ALIASES)
+    capex = _extract_number(data, CAPEX_ALIASES)
+    if operating is None or capex is None:
+        return None
+    return operating - abs(capex)
 
 
 def _txn_date(txn: tuple[Any, ...]) -> date:

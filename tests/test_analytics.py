@@ -13,6 +13,7 @@ from dashboard.analytics import (
     dividend_discount_model,
     implied_dcf_growth_rate,
     money_weighted_return,
+    valuation_depth_metrics,
     portfolio_risk_decomposition,
     portfolio_performance_metrics,
     relative_risk_metrics,
@@ -119,6 +120,7 @@ def test_asset_report_uses_existing_db_inputs_and_marks_missing_fundamentals(tmp
     assert "annual dividend" in report.dividend_discount.missing_inputs
     assert report.discounted_cash_flow.intrinsic_value_per_share is None
     assert "cash flow per share" in report.discounted_cash_flow.missing_inputs
+    assert "income statement" in report.valuation_depth.missing_inputs
 
 
 def test_portfolio_report_builds_weighted_return_series(tmp_path):
@@ -264,6 +266,136 @@ def test_portfolio_report_includes_ledger_performance_metrics(tmp_path):
     assert report.performance.dividend_income == pytest.approx(5.0)
     assert report.performance.realized_gain == pytest.approx(36.0)
     assert report.performance.unrealized_gain == pytest.approx((3 * 109.0) - 303.0)
+
+
+def test_valuation_depth_extracts_fundamental_ratios_and_scenarios():
+    metrics = valuation_depth_metrics(
+        income_statements=[
+            {
+                "data": {
+                    "revenue": 1200.0,
+                    "grossProfit": 720.0,
+                    "operatingIncome": 360.0,
+                    "netIncome": 240.0,
+                    "eps": 2.4,
+                    "ebitda": 420.0,
+                }
+            },
+            {
+                "data": {
+                    "revenue": 1000.0,
+                    "netIncome": 200.0,
+                    "eps": 2.0,
+                }
+            },
+        ],
+        balance_sheets=[
+            {
+                "data": {
+                    "totalStockholdersEquity": 800.0,
+                    "totalAssets": 1600.0,
+                    "totalDebt": 300.0,
+                    "cashAndCashEquivalents": 50.0,
+                }
+            }
+        ],
+        cashflow_statements=[
+            {"data": {"freeCashFlow": 180.0}},
+            {"data": {"freeCashFlow": 150.0}},
+        ],
+        market_price=36.0,
+        shares_outstanding=100.0,
+        annual_dividend=1.2,
+        discount_rate=0.10,
+        base_growth_rate=0.04,
+        terminal_growth_rate=0.03,
+        forecast_years=5,
+    )
+
+    assert metrics.revenue_growth_yoy == pytest.approx(0.20)
+    assert metrics.eps_growth_yoy == pytest.approx(0.20)
+    assert metrics.free_cash_flow_growth_yoy == pytest.approx(0.20)
+    assert metrics.gross_margin == pytest.approx(0.60)
+    assert metrics.operating_margin == pytest.approx(0.30)
+    assert metrics.net_margin == pytest.approx(0.20)
+    assert metrics.return_on_equity == pytest.approx(0.30)
+    assert metrics.return_on_assets == pytest.approx(0.15)
+    assert metrics.debt_to_equity == pytest.approx(0.375)
+    assert metrics.net_debt_to_ebitda == pytest.approx(250.0 / 420.0)
+    assert metrics.payout_ratio == pytest.approx(0.50)
+    assert metrics.pe_ratio == pytest.approx(15.0)
+    assert metrics.price_to_book == pytest.approx(4.5)
+    assert metrics.price_to_sales == pytest.approx(3.0)
+    assert metrics.price_to_free_cash_flow == pytest.approx(20.0)
+    assert metrics.ev_to_ebitda == pytest.approx(3850.0 / 420.0)
+    assert [scenario.scenario_name for scenario in metrics.dcf_scenarios] == [
+        "bear",
+        "base",
+        "bull",
+    ]
+    assert all(scenario.intrinsic_value_per_share is not None for scenario in metrics.dcf_scenarios)
+    assert metrics.missing_inputs == []
+
+
+def test_asset_report_includes_valuation_depth_from_statement_json(tmp_path):
+    db = DB(str(tmp_path / "valuation_depth.db"))
+    init_db(db)
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, shares_outstanding)
+        VALUES ('AAPL', 'AAPL', 'stock', 'USD', 100)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+        VALUES ('AAPL', DATE '2026-01-05', 36, 36, 'test')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO dividend_event(asset_id, ex_date, dividend_per_share, source)
+        VALUES
+            ('AAPL', DATE '2025-12-01', 0.30, 'test'),
+            ('AAPL', DATE '2025-09-01', 0.30, 'test'),
+            ('AAPL', DATE '2025-06-01', 0.30, 'test'),
+            ('AAPL', DATE '2025-03-01', 0.30, 'test')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO financial_statement(
+            asset_id,
+            statement_type,
+            year,
+            quarter,
+            data_json,
+            source
+        )
+        VALUES
+            ('AAPL', 'income', 2025, 4, ?, 'test'),
+            ('AAPL', 'income', 2024, 4, ?, 'test'),
+            ('AAPL', 'balance', 2025, 4, ?, 'test'),
+            ('AAPL', 'cashflow', 2025, 4, ?, 'test'),
+            ('AAPL', 'cashflow', 2024, 4, ?, 'test')
+        """
+        ,
+        [
+            '{"revenue":1200,"grossProfit":720,"operatingIncome":360,"netIncome":240,"eps":2.4,"ebitda":420}',
+            '{"revenue":1000,"netIncome":200,"eps":2.0}',
+            '{"totalStockholdersEquity":800,"totalAssets":1600,"totalDebt":300,"cashAndCashEquivalents":50}',
+            '{"freeCashFlow":180}',
+            '{"freeCashFlow":150}',
+        ],
+    )
+
+    report = AnalyticsEngine(AnalyticsRepository(db.conn)).asset_report("AAPL")
+
+    assert report.valuation_depth.revenue_growth_yoy == pytest.approx(0.20)
+    assert report.valuation_depth.pe_ratio == pytest.approx(15.0)
+    assert report.valuation_depth.price_to_free_cash_flow == pytest.approx(20.0)
+    assert report.valuation_depth.dcf_scenarios[1].scenario_name == "base"
+    assert report.valuation_depth.missing_inputs == []
 
 
 def test_portfolio_risk_decomposition_calculates_concentration_and_exposures():
