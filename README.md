@@ -84,6 +84,22 @@ dashboard           # or python -m dashboard
 ---
 <br>
 
+### Phase 3: Analytics
+
+```
+- Calculation-first analytics over existing portfolio, price, dividend, benchmark, and financial statement data
+- Risk and return metrics including CAGR, volatility, Sharpe, Sortino, max drawdown, alpha, beta, correlation, and excess CAGR
+- Intrinsic value models including dividend discount, discounted cash flow, margin of safety, expected CAGR, and implied priced-in growth
+- Portfolio analytics with weighted synthetic return series from current positions
+- Explicit missing-input reporting when dividends, fundamentals, benchmarks, or positions are unavailable
+- Optional analytics snapshot storage for future AI-layer context, disabled by default
+- Daily snapshot refresh behavior with same-day portfolio-change refreshes when storage is enabled
+```
+
+#### Architectural Decision Records: [Main Decisions](docs/adr/adr_ph3.md)
+---
+<br>
+
 ## Diagrams
 
 
