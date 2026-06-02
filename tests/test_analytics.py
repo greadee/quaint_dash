@@ -13,6 +13,8 @@ from dashboard.analytics import (
     dividend_discount_model,
     implied_dcf_growth_rate,
     money_weighted_return,
+    projected_dividend_growth,
+    simulated_forecast_band,
     valuation_depth_metrics,
     portfolio_risk_decomposition,
     portfolio_performance_metrics,
@@ -122,6 +124,7 @@ def test_asset_report_uses_existing_db_inputs_and_marks_missing_fundamentals(tmp
     assert "cash flow per share" in report.discounted_cash_flow.missing_inputs
     assert "income statement" in report.valuation_depth.missing_inputs
     assert report.etf is None
+    assert "fundamental growth history" in report.forecast.missing_inputs
 
 
 def test_portfolio_report_builds_weighted_return_series(tmp_path):
@@ -172,6 +175,7 @@ def test_portfolio_report_builds_weighted_return_series(tmp_path):
     assert report.performance.ending_market_value == pytest.approx(report.market_value)
     assert report.risk_decomposition.asset_count == 2
     assert report.risk_decomposition.diversification_score == pytest.approx(64.0)
+    assert report.forecast.simulation is not None
     assert report.missing_inputs == []
 
 
@@ -397,6 +401,38 @@ def test_asset_report_includes_valuation_depth_from_statement_json(tmp_path):
     assert report.valuation_depth.price_to_free_cash_flow == pytest.approx(20.0)
     assert report.valuation_depth.dcf_scenarios[1].scenario_name == "base"
     assert report.valuation_depth.missing_inputs == []
+    assert report.forecast.expected_cagr_from_valuation is not None
+    assert report.forecast.fundamental_growth_assumption == pytest.approx(0.20)
+    assert report.forecast.blended_expected_cagr is not None
+
+
+def test_forecasting_projects_dividend_growth_and_simulation_bands():
+    dividends = [
+        (date(2025, 12, 1), 0.30),
+        (date(2025, 9, 1), 0.30),
+        (date(2025, 6, 1), 0.30),
+        (date(2025, 3, 1), 0.30),
+        (date(2024, 12, 1), 0.25),
+        (date(2024, 9, 1), 0.25),
+        (date(2024, 6, 1), 0.25),
+        (date(2024, 3, 1), 0.25),
+    ]
+
+    assert projected_dividend_growth(dividends) == pytest.approx(0.20)
+
+    band = simulated_forecast_band(
+        start_value=100.0,
+        expected_cagr=0.08,
+        annualized_volatility=0.20,
+        horizon_years=5,
+        simulations=200,
+        seed=42,
+    )
+
+    assert band is not None
+    assert band.horizon_years == 5
+    assert band.p10_value < band.p50_value < band.p90_value
+    assert band.p10_cagr < band.p50_cagr < band.p90_cagr
 
 
 def test_asset_report_includes_etf_profile_holdings_and_overlap(tmp_path):

@@ -12,6 +12,7 @@ from datetime import date, datetime
 import hashlib
 import json
 import math
+import random
 import statistics
 from typing import Any
 
@@ -192,6 +193,30 @@ class ETFAnalytics:
 
 
 @dataclass(frozen=True)
+class ForecastBand:
+    horizon_years: int
+    expected_value: float | None
+    p10_value: float | None
+    p50_value: float | None
+    p90_value: float | None
+    expected_cagr: float | None
+    p10_cagr: float | None
+    p50_cagr: float | None
+    p90_cagr: float | None
+
+
+@dataclass(frozen=True)
+class ForecastMetrics:
+    horizon_years: int
+    expected_cagr_from_valuation: float | None
+    dividend_growth_projection: float | None
+    fundamental_growth_assumption: float | None
+    blended_expected_cagr: float | None
+    simulation: ForecastBand | None
+    missing_inputs: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class ValuationResult:
     method: str
     intrinsic_value_per_share: float | None
@@ -214,6 +239,7 @@ class AssetAnalyticsReport:
     discounted_cash_flow: ValuationResult
     valuation_depth: ValuationDepthMetrics
     etf: ETFAnalytics | None
+    forecast: ForecastMetrics
 
 
 @dataclass(frozen=True)
@@ -237,6 +263,7 @@ class PortfolioAnalyticsReport:
     risk_decomposition: PortfolioRiskDecomposition
     risk: RiskReturnMetrics | None
     relative: RelativeRiskMetrics | None
+    forecast: ForecastMetrics
     missing_inputs: list[str]
 
 
@@ -355,6 +382,20 @@ class AnalyticsRepository:
         if not values:
             return None
         return sum(values[:4])
+
+    def dividend_history(self, asset_id: str, limit: int = 12) -> list[tuple[date, float]]:
+        rows = self.conn.execute(
+            """
+            SELECT ex_date, dividend_per_share
+            FROM dividend_event
+            WHERE asset_id = ?
+              AND dividend_per_share IS NOT NULL
+            ORDER BY ex_date DESC
+            LIMIT ?
+            """,
+            [asset_id.upper().strip(), limit],
+        ).fetchall()
+        return [(row[0], float(row[1])) for row in rows if row[1] is not None and row[1] > 0]
 
     def shares_outstanding(self, asset_id: str) -> float | None:
         row = self.conn.execute(
@@ -654,6 +695,14 @@ class AnalyticsEngine:
             if portfolio_id is not None
             else {},
         )
+        forecast = asset_forecast_metrics(
+            market_price=latest_price,
+            risk= risk_return_metrics(prices, risk_free_rate=risk_free_rate),
+            valuation_depth=valuation_depth,
+            dividend_history=self.repo.dividend_history(asset_id),
+            annual_dividend=dividend,
+            forecast_years=forecast_years,
+        )
 
         return AssetAnalyticsReport(
             asset_id=asset_id,
@@ -680,6 +729,7 @@ class AnalyticsEngine:
             ),
             valuation_depth=valuation_depth,
             etf=etf,
+            forecast=forecast,
         )
 
     def portfolio_report(
@@ -760,6 +810,12 @@ class AnalyticsEngine:
             if portfolio_prices and benchmark
             else None
         )
+        forecast = portfolio_forecast_metrics(
+            market_value=total_value,
+            risk=risk,
+            performance=performance,
+            forecast_years=5,
+        )
         if not weighted_positions:
             missing.append("portfolio positions")
         if not portfolio_prices:
@@ -773,6 +829,7 @@ class AnalyticsEngine:
             risk_decomposition=risk_decomposition,
             risk=risk,
             relative=relative,
+            forecast=forecast,
             missing_inputs=missing,
         )
 
@@ -1912,6 +1969,219 @@ def normalize_weight(value: Any) -> float | None:
     return weight
 
 
+def asset_forecast_metrics(
+    market_price: float | None,
+    risk: RiskReturnMetrics,
+    valuation_depth: ValuationDepthMetrics,
+    dividend_history: list[tuple[date, float]],
+    annual_dividend: float | None,
+    forecast_years: int = 5,
+) -> ForecastMetrics:
+    base_scenario = next(
+        (scenario for scenario in valuation_depth.dcf_scenarios if scenario.scenario_name == "base"),
+        None,
+    )
+    intrinsic = base_scenario.intrinsic_value_per_share if base_scenario else None
+    dividend_yield = safe_div(annual_dividend, market_price)
+    valuation_cagr = expected_cagr_from_valuation(
+        market_price=market_price,
+        intrinsic_value=intrinsic,
+        income_yield=dividend_yield,
+        horizon_years=forecast_years,
+    )
+    dividend_growth = projected_dividend_growth(dividend_history)
+    fundamental_growth = fundamental_growth_assumption(valuation_depth)
+    blended = blended_expected_cagr(
+        valuation_cagr=valuation_cagr,
+        fundamental_growth=fundamental_growth,
+        historical_cagr=risk.cagr,
+        income_yield=dividend_yield,
+    )
+    simulation = simulated_forecast_band(
+        start_value=market_price,
+        expected_cagr=blended,
+        annualized_volatility=risk.annualized_volatility,
+        horizon_years=forecast_years,
+        seed=17,
+    )
+    missing = forecast_missing_inputs(
+        valuation_cagr=valuation_cagr,
+        dividend_growth=dividend_growth,
+        fundamental_growth=fundamental_growth,
+        simulation=simulation,
+    )
+
+    return ForecastMetrics(
+        horizon_years=forecast_years,
+        expected_cagr_from_valuation=valuation_cagr,
+        dividend_growth_projection=dividend_growth,
+        fundamental_growth_assumption=fundamental_growth,
+        blended_expected_cagr=blended,
+        simulation=simulation,
+        missing_inputs=missing,
+    )
+
+
+def portfolio_forecast_metrics(
+    market_value: float,
+    risk: RiskReturnMetrics | None,
+    performance: PortfolioPerformanceMetrics,
+    forecast_years: int = 5,
+) -> ForecastMetrics:
+    expected = risk.cagr if risk and risk.cagr is not None else performance.money_weighted_return
+    simulation = simulated_forecast_band(
+        start_value=market_value if market_value > 0 else None,
+        expected_cagr=expected,
+        annualized_volatility=risk.annualized_volatility if risk else None,
+        horizon_years=forecast_years,
+        seed=23,
+    )
+    missing = []
+    if expected is None:
+        missing.append("expected return assumption")
+    if risk is None or risk.annualized_volatility is None:
+        missing.append("portfolio volatility")
+    if simulation is None:
+        missing.append("simulation inputs")
+
+    return ForecastMetrics(
+        horizon_years=forecast_years,
+        expected_cagr_from_valuation=None,
+        dividend_growth_projection=None,
+        fundamental_growth_assumption=None,
+        blended_expected_cagr=expected,
+        simulation=simulation,
+        missing_inputs=missing,
+    )
+
+
+def expected_cagr_from_valuation(
+    market_price: float | None,
+    intrinsic_value: float | None,
+    income_yield: float | None,
+    horizon_years: int,
+) -> float | None:
+    value_cagr = cagr(market_price, intrinsic_value, horizon_years)
+    if value_cagr is None:
+        return income_yield
+    return value_cagr + (income_yield or 0.0)
+
+
+def projected_dividend_growth(dividend_history: list[tuple[date, float]]) -> float | None:
+    if len(dividend_history) < 8:
+        return None
+    recent = sum(value for _date, value in dividend_history[:4])
+    previous = sum(value for _date, value in dividend_history[4:8])
+    return growth_rate(recent, previous)
+
+
+def fundamental_growth_assumption(valuation_depth: ValuationDepthMetrics) -> float | None:
+    values = [
+        valuation_depth.revenue_growth_yoy,
+        valuation_depth.eps_growth_yoy,
+        valuation_depth.free_cash_flow_growth_yoy,
+    ]
+    available = [value for value in values if value is not None]
+    if not available:
+        return None
+    return max(-0.25, min(0.35, sum(available) / len(available)))
+
+
+def blended_expected_cagr(
+    valuation_cagr: float | None,
+    fundamental_growth: float | None,
+    historical_cagr: float | None,
+    income_yield: float | None,
+) -> float | None:
+    weighted_values: list[tuple[float, float]] = []
+    if valuation_cagr is not None:
+        weighted_values.append((valuation_cagr, 0.45))
+    if fundamental_growth is not None:
+        weighted_values.append((fundamental_growth + (income_yield or 0.0), 0.35))
+    if historical_cagr is not None:
+        weighted_values.append((historical_cagr, 0.20))
+    if not weighted_values:
+        return None
+    total_weight = sum(weight for _value, weight in weighted_values)
+    blended = sum(value * weight for value, weight in weighted_values) / total_weight
+    return clamp(blended, -0.50, 0.75)
+
+
+def simulated_forecast_band(
+    start_value: float | None,
+    expected_cagr: float | None,
+    annualized_volatility: float | None,
+    horizon_years: int,
+    simulations: int = 500,
+    seed: int = 0,
+) -> ForecastBand | None:
+    if (
+        start_value is None
+        or start_value <= 0
+        or expected_cagr is None
+        or annualized_volatility is None
+        or horizon_years <= 0
+    ):
+        return None
+
+    rng = random.Random(seed)
+    terminal_values = []
+    annual_drift = expected_cagr - 0.5 * (annualized_volatility ** 2)
+    for _ in range(simulations):
+        shock = rng.gauss(0.0, 1.0)
+        terminal = start_value * math.exp(
+            annual_drift * horizon_years
+            + annualized_volatility * math.sqrt(horizon_years) * shock
+        )
+        terminal_values.append(terminal)
+
+    terminal_values.sort()
+    expected_value = sum(terminal_values) / len(terminal_values)
+    p10 = percentile(terminal_values, 0.10)
+    p50 = percentile(terminal_values, 0.50)
+    p90 = percentile(terminal_values, 0.90)
+    return ForecastBand(
+        horizon_years=horizon_years,
+        expected_value=expected_value,
+        p10_value=p10,
+        p50_value=p50,
+        p90_value=p90,
+        expected_cagr=cagr(start_value, expected_value, horizon_years),
+        p10_cagr=cagr(start_value, p10, horizon_years),
+        p50_cagr=cagr(start_value, p50, horizon_years),
+        p90_cagr=cagr(start_value, p90, horizon_years),
+    )
+
+
+def percentile(sorted_values: list[float], quantile: float) -> float | None:
+    if not sorted_values:
+        return None
+    idx = min(len(sorted_values) - 1, max(0, round((len(sorted_values) - 1) * quantile)))
+    return sorted_values[idx]
+
+
+def clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def forecast_missing_inputs(
+    valuation_cagr: float | None,
+    dividend_growth: float | None,
+    fundamental_growth: float | None,
+    simulation: ForecastBand | None,
+) -> list[str]:
+    missing: list[str] = []
+    if valuation_cagr is None:
+        missing.append("valuation CAGR")
+    if dividend_growth is None:
+        missing.append("dividend growth history")
+    if fundamental_growth is None:
+        missing.append("fundamental growth history")
+    if simulation is None:
+        missing.append("simulation inputs")
+    return missing
+
+
 def dividend_discount_model(
     annual_dividend: float | None,
     market_price: float | None,
@@ -2108,8 +2378,19 @@ def max_drawdown(closes: list[float]) -> float | None:
     return worst
 
 
-def cagr(start_value: float, end_value: float, years: float | None) -> float | None:
-    if start_value <= 0 or end_value <= 0 or years is None or years <= 0:
+def cagr(
+    start_value: float | None,
+    end_value: float | None,
+    years: float | None,
+) -> float | None:
+    if (
+        start_value is None
+        or end_value is None
+        or start_value <= 0
+        or end_value <= 0
+        or years is None
+        or years <= 0
+    ):
         return None
     return (end_value / start_value) ** (1 / years) - 1.0
 
