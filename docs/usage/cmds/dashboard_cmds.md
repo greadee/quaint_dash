@@ -29,6 +29,14 @@ import <csv-path>
 Add a batch of transactions contained within a csv file. Transactions for existing portfolios are simply appended, while transactions for non-existent portfolios will create a new portfolio by the portfolio-name specified within the CSV file. Displays a summary log of transactions appended, portfolios affected, etc.
 - argument (Required): csv-path - File path from project root (if inside project), else use absolute path
 
+## Broker Sync
+```
+broker snaptrade <command>
+```
+Register SnapTrade users, create read-only connection portal URLs, sync broker accounts, map broker accounts to portfolios, and import mapped broker transactions.
+
+Detailed broker command reference: [Broker Commands](broker_cmds.md)
+
 ## Command Help
 ```
 help [command-name]

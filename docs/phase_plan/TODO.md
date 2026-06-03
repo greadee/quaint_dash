@@ -1,5 +1,40 @@
 # Investment Dashboard To-Do List
 
+## Phase 4 - Broker Sync
+Design Decisions: [ADR's](../adr/adr_ph4.md)
+
+### Completed:
+- Read-only SnapTrade broker linking
+    - Hosted connection portal URL generation
+    - SnapTrade user registration
+    - Encrypted local storage for generated user secrets
+    - Direct signed REST client
+- Broker sync storage
+    - users
+    - connections
+    - accounts
+    - position snapshots
+    - transactions
+    - sync runs
+- Broker account operations
+    - list stored accounts
+    - map account to local portfolio
+    - sync provider account data
+- Portfolio integration
+    - import only mapped broker accounts
+    - idempotent broker transaction projection
+    - preserve provider-to-local transaction provenance
+    - refresh local positions after import
+- Dashboard CLI broker commands
+
+### Tasks:
+- Add daily broker sync scheduler
+- Add connection disabled/reconnect workflow
+- Add SnapTrade user-secret rotation command
+- Add paginated activity sync for very large accounts
+- Add optional broker payload storage toggle
+- Add web portal launcher once the app has a browser-facing layer
+
 ## Phase 3 - Analytics
 Design Decisions: [ADR's](../adr/adr_ph3.md)
 

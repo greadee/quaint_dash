@@ -1,0 +1,89 @@
+# Broker Commands
+
+Broker commands are available from the dashboard view. Phase 4 broker sync is read-only and currently uses SnapTrade.
+
+## Environment
+
+Broker linking requires SnapTrade credentials and a local encryption key:
+
+```
+SNAPTRADE_CLIENT_ID=<client id>
+SNAPTRADE_CONSUMER_KEY=<consumer key>
+QUAINT_BROKER_SECRET_KEY=<local encryption key>
+```
+
+Optional:
+
+```
+SNAPTRADE_BASE_URL=https://api.snaptrade.com/api/v1
+SNAPTRADE_TIMEOUT_SECONDS=20
+```
+
+## Register User
+
+```
+broker snaptrade register-user <user-key> [--provider-user-id id]
+```
+
+Registers a SnapTrade user and stores the generated user secret locally in encrypted form.
+
+- `user-key` should be stable and immutable.
+- `--provider-user-id` can override the SnapTrade `userId`; when omitted, `user-key` is used.
+
+## Create Read-Only Portal URL
+
+```
+broker snaptrade portal <user-key> [--broker slug] [--custom-redirect url] [--immediate-redirect] [--register-if-missing]
+```
+
+Creates a SnapTrade hosted connection portal URL with read-only permissions.
+
+- `--broker` optionally directs the portal to a specific broker slug.
+- `--register-if-missing` registers the SnapTrade user before creating the portal if no stored user exists.
+- The application does not collect broker credentials.
+- The application does not request trading permissions.
+
+## Sync Broker Data
+
+```
+broker snaptrade sync <user-key> [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD]
+```
+
+Fetches and stores read-only broker data:
+
+- connections
+- accounts
+- position snapshots
+- account activities/transactions
+- sync run status
+
+This does not import anything into local portfolios.
+
+## List Broker Accounts
+
+```
+broker snaptrade accounts
+```
+
+Lists locally stored broker accounts and their current portfolio mapping.
+
+## Map Account To Portfolio
+
+```
+broker snaptrade map-account <account-id> <portfolio-id>
+```
+
+Maps a synced broker account to an existing local portfolio.
+
+## Import Mapped Transactions
+
+```
+broker snaptrade import-transactions [--portfolio-id id]
+```
+
+Imports transactions from mapped broker accounts into local portfolios.
+
+- Unmapped accounts are ignored.
+- Re-running the command is idempotent.
+- Imported rows are linked through `broker_portfolio_txn_map`.
+- Imported broker batches use `broker-sync` as their batch type.

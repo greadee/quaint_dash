@@ -42,6 +42,7 @@ dashboard           # or python -m dashboard
 ```
 #### Dashboard Commands: [Dashboard Commands](docs/usage/cmds/dashboard_cmds.md)
 #### Portfolio Commands: [Portfolio Commands](docs/usage/cmds/portfolio_cmds.md)
+#### Broker Commands: [Broker Commands](docs/usage/cmds/broker_cmds.md)
 <br>
 
 ## Records 
@@ -105,6 +106,25 @@ dashboard           # or python -m dashboard
 ```
 
 #### Architectural Decision Records: [Main Decisions](docs/adr/adr_ph3.md)
+---
+<br>
+
+### Phase 4: Broker Sync
+
+```
+- Read-only broker account linking through SnapTrade
+- Hosted connection portal URLs; broker credentials are never collected by this app
+- SnapTrade user registration with encrypted local user-secret storage
+- Signed direct SnapTrade REST client for register, portal, connections, accounts, positions, and activities
+- Provider-neutral broker sync domain models and repository tables
+- Broker sync run tracking for account, position, and transaction refreshes
+- Manual broker-account-to-portfolio mapping
+- Idempotent import of mapped broker transactions into the local transaction ledger
+- Broker-to-ledger provenance through broker_portfolio_txn_map
+- Dashboard CLI commands for broker registration, portal creation, sync, account listing, mapping, and import
+```
+
+#### Architectural Decision Records: [Main Decisions](docs/adr/adr_ph4.md)
 ---
 <br>
 
