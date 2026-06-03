@@ -12,7 +12,10 @@ from dashboard.brokers.models import (
 )
 from dashboard.brokers.repository import BrokerSyncRepository
 from dashboard.brokers.secrets import LocalSecretCipher
+from dashboard.brokers.snaptrade import SnapTradeConfig, SnapTradeProvider, compute_snaptrade_signature
 from dashboard.db.db_conn import DB, init_db
+from dashboard.models.cli_view import DashboardView
+from dashboard.models.storage import DashboardManager
 
 
 def table_columns(conn, table_name: str) -> set[str]:
@@ -149,6 +152,85 @@ def test_fake_broker_provider_outputs_can_be_persisted(tmp_path):
     assert db.conn.execute("SELECT COUNT(*) FROM broker_transaction").fetchone()[0] == 1
 
 
+def test_snaptrade_signature_uses_canonical_payload_shape():
+    signature = compute_snaptrade_signature(
+        "/snapTrade/registerUser?clientId=PASSIVTEST&timestamp=1635790389",
+        "consumer-secret",
+        {"userId": "new_user_123"},
+    )
+
+    assert signature == "wUENeeVmQN4WyUeaYZ+3Hxt/mOmsegJ8mJGUPxcieFA="
+
+
+def test_snaptrade_provider_registers_user_and_creates_read_only_portal():
+    session = FakeSnapTradeSession(
+        [
+            {"userId": "local-user", "userSecret": "generated-secret"},
+            {"redirectURI": "https://app.snaptrade.com/portal", "sessionId": "session-1"},
+        ]
+    )
+    provider = SnapTradeProvider(
+        SnapTradeConfig(
+            client_id="client-id",
+            consumer_key="consumer-key",
+            base_url="https://api.test/api/v1",
+        ),
+        session=session,
+        clock=lambda: 1_635_790_389,
+    )
+
+    user = provider.register_user("local-user")
+    portal = provider.create_connection_portal(user, broker="WEALTHSIMPLE")
+
+    assert user.provider_user_id == "local-user"
+    assert user.user_secret == "generated-secret"
+    assert portal.redirect_uri == "https://app.snaptrade.com/portal"
+    assert len(session.calls) == 2
+    register_call, portal_call = session.calls
+    assert register_call["url"] == "https://api.test/api/v1/snapTrade/registerUser"
+    assert register_call["json"] == {"userId": "local-user"}
+    assert register_call["headers"]["Signature"]
+    assert portal_call["url"] == "https://api.test/api/v1/snapTrade/login"
+    assert portal_call["json"]["connectionType"] == "read"
+    assert portal_call["json"]["broker"] == "WEALTHSIMPLE"
+    assert ("userSecret", "generated-secret") in portal_call["params"]
+
+
+def test_broker_cli_prints_snaptrade_read_only_portal(tmp_path, capsys):
+    db = DB(str(tmp_path / "broker_cli.db"))
+    init_db(db)
+    manager = DashboardManager(db)
+    view = DashboardView(manager)
+
+    def fake_portal(
+        user_key,
+        broker=None,
+        custom_redirect=None,
+        immediate_redirect=False,
+        register_if_missing=False,
+    ):
+        assert user_key == "default"
+        assert broker == "WEALTHSIMPLE"
+        assert register_if_missing is True
+        return type(
+            "Portal",
+            (),
+            {
+                "redirect_uri": "https://app.snaptrade.com/portal",
+                "session_id": "session-1",
+            },
+        )()
+
+    manager.broker_snaptrade_portal = fake_portal
+
+    view.handle_input("broker snaptrade portal default --broker WEALTHSIMPLE --register-if-missing")
+    out = capsys.readouterr().out
+
+    assert "read-only connection portal URL" in out
+    assert "https://app.snaptrade.com/portal" in out
+    assert "session-1" in out
+
+
 class FakeBrokerProvider:
     provider_name = "snaptrade"
 
@@ -219,3 +301,31 @@ class FakeBrokerProvider:
     def disconnect(self, user: BrokerUser, connection: BrokerConnection) -> None:
         return None
 
+
+class FakeSnapTradeResponse:
+    def __init__(self, payload: dict, status_code: int = 200) -> None:
+        self.payload = payload
+        self.status_code = status_code
+        self.text = str(payload)
+
+    def json(self) -> dict:
+        return self.payload
+
+
+class FakeSnapTradeSession:
+    def __init__(self, responses: list[dict]) -> None:
+        self.responses = responses
+        self.calls: list[dict] = []
+
+    def request(self, method, url, params=None, json=None, headers=None, timeout=None):
+        self.calls.append(
+            {
+                "method": method,
+                "url": url,
+                "params": params,
+                "json": json,
+                "headers": headers,
+                "timeout": timeout,
+            }
+        )
+        return FakeSnapTradeResponse(self.responses.pop(0))

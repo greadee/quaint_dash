@@ -82,6 +82,14 @@ class BrokerSyncResult:
     error_message: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class BrokerConnectionPortal:
+    provider: str
+    provider_user_id: str
+    redirect_uri: str
+    session_id: str | None = None
+
+
 class SecretCipher(Protocol):
     name: str
 

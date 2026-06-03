@@ -330,6 +330,95 @@ class DashboardManager:
             portfolio_ids=portfolio_ids,
         )
 
+    #######################################################################
+    ##              read-only broker account linking
+    #######################################################################
+
+    def broker_register_snaptrade_user(
+        self,
+        user_key: str,
+        provider_user_id: str | None = None,
+    ):
+        """
+        Register and store a SnapTrade user for read-only broker linking.
+        """
+        from dashboard.brokers.repository import BrokerSyncRepository
+        from dashboard.brokers.snaptrade import SnapTradeProvider
+
+        user_key = user_key.strip()
+        provider_user_id = provider_user_id.strip() if provider_user_id else user_key
+        if not user_key:
+            raise ValueError("Broker user key is required.")
+
+        provider = SnapTradeProvider(self._snaptrade_config())
+        user = provider.register_user(provider_user_id)
+        user = type(user)(
+            provider=user.provider,
+            user_key=user_key,
+            provider_user_id=user.provider_user_id,
+            user_secret=user.user_secret,
+            status=user.status,
+        )
+        BrokerSyncRepository(self.conn).upsert_broker_user(user, self._broker_secret_cipher())
+        return user
+
+    def broker_snaptrade_portal(
+        self,
+        user_key: str,
+        broker: str | None = None,
+        custom_redirect: str | None = None,
+        immediate_redirect: bool = False,
+        register_if_missing: bool = False,
+    ):
+        """
+        Create a SnapTrade hosted portal URL with read-only account permissions.
+        """
+        from dashboard.brokers.repository import BrokerSyncRepository
+        from dashboard.brokers.snaptrade import SNAPTRADE_PROVIDER, SnapTradeProvider
+
+        user_key = user_key.strip()
+        if not user_key:
+            raise ValueError("Broker user key is required.")
+
+        repo = BrokerSyncRepository(self.conn)
+        cipher = self._broker_secret_cipher()
+        user = repo.get_broker_user(SNAPTRADE_PROVIDER, user_key, cipher)
+        if user is None:
+            if not register_if_missing:
+                raise ValueError(
+                    "No SnapTrade user found. Run broker snaptrade register-user first, "
+                    "or pass --register-if-missing."
+                )
+            user = self.broker_register_snaptrade_user(user_key)
+
+        provider = SnapTradeProvider(self._snaptrade_config())
+        return provider.create_connection_portal(
+            user,
+            broker=broker,
+            custom_redirect=custom_redirect,
+            immediate_redirect=immediate_redirect,
+        )
+
+    @staticmethod
+    def _snaptrade_config():
+        from dashboard.brokers.snaptrade import SnapTradeConfig
+
+        return SnapTradeConfig.from_env()
+
+    @staticmethod
+    def _broker_secret_cipher():
+        import os
+
+        from dotenv import load_dotenv
+
+        from dashboard.brokers.secrets import LocalSecretCipher
+
+        load_dotenv()
+        key = os.getenv("QUAINT_BROKER_SECRET_KEY")
+        if not key:
+            raise ValueError("QUAINT_BROKER_SECRET_KEY is required for broker secret storage.")
+        return LocalSecretCipher(key)
+
 
     #######################################################################
     ##              daily ingestion and historical backfill

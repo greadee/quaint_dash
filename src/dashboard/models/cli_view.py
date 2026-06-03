@@ -137,6 +137,8 @@ class DashboardView(View):
                 analytics asset <asset-id> [--benchmark index-id],
                 analytics portfolio <portfolio-id> [--benchmark index-id],
                 analytics storage [status|enable|disable|refresh],
+                broker snaptrade register-user <user-key>,
+                broker snaptrade portal <user-key> [--broker slug],
 
                 help [command-name], 
                 quit/exit
@@ -409,6 +411,33 @@ class DashboardView(View):
                         )
                     return self
 
+        if cmd == "broker":
+            if ns.broker_provider == "snaptrade":
+                if ns.broker_command == "register-user":
+                    user = self.access.broker_register_snaptrade_user(
+                        ns.user_key,
+                        provider_user_id=ns.provider_user_id,
+                    )
+                    print(
+                        "Registered SnapTrade user "
+                        f"{user.provider_user_id} for local broker user {user.user_key}."
+                    )
+                    return self
+
+                if ns.broker_command == "portal":
+                    portal = self.access.broker_snaptrade_portal(
+                        ns.user_key,
+                        broker=ns.broker,
+                        custom_redirect=ns.custom_redirect,
+                        immediate_redirect=ns.immediate_redirect,
+                        register_if_missing=ns.register_if_missing,
+                    )
+                    print("Open this SnapTrade read-only connection portal URL:")
+                    print(portal.redirect_uri)
+                    if portal.session_id:
+                        print(f"Session: {portal.session_id}")
+                    return self
+
         return self # fallback
 
     def _handle_help(self, args: list[str]):
@@ -658,6 +687,64 @@ class DashboardView(View):
         p_refresh.add_argument("--benchmark", dest="benchmark", default=None)
 
         parsers["analytics"] = p
+
+        p = _NoExitParser(
+            prog="broker",
+            add_help=True,
+            description="Manage read-only broker account links.",
+        )
+        broker_subp = p.add_subparsers(dest="broker_provider", required=True)
+        p_snaptrade = broker_subp.add_parser(
+            "snaptrade",
+            add_help=True,
+            description="Manage SnapTrade read-only account linking.",
+        )
+        snaptrade_subp = p_snaptrade.add_subparsers(dest="broker_command", required=True)
+
+        p_register = snaptrade_subp.add_parser(
+            "register-user",
+            add_help=True,
+            description="Register a SnapTrade user and store the generated user secret.",
+        )
+        p_register.add_argument("user_key", help="Local immutable user key.")
+        p_register.add_argument(
+            "--provider-user-id",
+            dest="provider_user_id",
+            default=None,
+            help="Optional SnapTrade userId. Defaults to user_key.",
+        )
+
+        p_portal = snaptrade_subp.add_parser(
+            "portal",
+            add_help=True,
+            description="Create a hosted SnapTrade portal URL with read-only permissions.",
+        )
+        p_portal.add_argument("user_key", help="Local immutable user key.")
+        p_portal.add_argument(
+            "--broker",
+            dest="broker",
+            default=None,
+            help="Optional SnapTrade broker slug, such as WEALTHSIMPLE or TD.",
+        )
+        p_portal.add_argument(
+            "--custom-redirect",
+            dest="custom_redirect",
+            default=None,
+            help="Optional URL SnapTrade should redirect to after linking.",
+        )
+        p_portal.add_argument(
+            "--immediate-redirect",
+            dest="immediate_redirect",
+            action="store_true",
+            help="Redirect immediately after the portal flow completes.",
+        )
+        p_portal.add_argument(
+            "--register-if-missing",
+            dest="register_if_missing",
+            action="store_true",
+            help="Register the SnapTrade user before creating the portal if needed.",
+        )
+        parsers["broker"] = p
 
         return parsers
 
