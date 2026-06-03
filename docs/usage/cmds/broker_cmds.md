@@ -17,7 +17,13 @@ Optional:
 ```
 SNAPTRADE_BASE_URL=https://api.snaptrade.com/api/v1
 SNAPTRADE_TIMEOUT_SECONDS=20
+SNAPTRADE_ACTIVITY_PAGE_LIMIT=1000
+BROKER_SYNC_ON_STARTUP=false
+BROKER_SYNC_MAX_USERS=
+BROKER_SYNC_MIN_AGE_HOURS=24
 ```
+
+When `BROKER_SYNC_ON_STARTUP=true`, dashboard startup runs `broker snaptrade sync-due` behavior automatically. This refreshes provider-side broker data only; it does not import transactions into portfolios.
 
 ## Register User
 

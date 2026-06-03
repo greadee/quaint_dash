@@ -3,9 +3,38 @@ program entry point
 - dispatches commands to DashboardView -> DashboardManager
 - handles ValueErrors raised by DashboardView and or DashboardManager
 """
+import os
+
+from dotenv import load_dotenv
+
 from dashboard.db.db_conn import DB, init_db
 from dashboard.models.storage import DashboardManager
 from dashboard.models.cli_view import View, DashboardView
+
+
+def run_startup_broker_sync(manager: DashboardManager) -> None:
+    load_dotenv()
+    if os.getenv("BROKER_SYNC_ON_STARTUP", "").lower() not in {"1", "true", "yes", "on"}:
+        return
+    max_users = _int_env("BROKER_SYNC_MAX_USERS")
+    min_age_hours = _int_env("BROKER_SYNC_MIN_AGE_HOURS", 24) or 24
+    result = manager.broker_snaptrade_sync_due(
+        max_users=max_users,
+        min_age_hours=min_age_hours,
+    )
+    if result.users_synced:
+        print(
+            f"Broker sync scheduler: synced {result.users_synced} user(s), "
+            f"saw {result.accounts_seen} account(s), {result.positions_seen} position(s), "
+            f"and {result.transactions_seen} transaction(s)."
+        )
+
+
+def _int_env(name: str, default: int | None = None) -> int | None:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    return int(value)
 
 def cli_loop():
     """
@@ -55,6 +84,11 @@ def cli_loop():
             print(f"Trading calendar scheduler: refreshed {n} day(s).")
     except Exception as e:
         print(f"Trading calendar scheduler skipped: {e}")    
+
+    try:
+        run_startup_broker_sync(manager)
+    except Exception as e:
+        print(f"Broker sync scheduler skipped: {e}")
 
     view: View = DashboardView(manager)
 

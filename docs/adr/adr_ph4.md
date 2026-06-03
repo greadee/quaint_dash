@@ -188,7 +188,7 @@ The same endpoint documents common activity types such as `BUY`, `SELL`, `DIVIDE
 
 ## ADR-073: Daily Due Sync Scheduler
 
-**Decision:** Broker sync can be run through a due-user scheduler that refreshes active users whose latest successful sync is older than the configured freshness window.
+**Decision:** Broker sync can be run through a due-user scheduler that refreshes active users whose latest successful sync is older than the configured freshness window. The dashboard can also run that due sync automatically on startup when explicitly enabled by environment configuration.
 
 **Context:**
 SnapTrade documents that account activity data is daily cached and refreshed once per day, with exact timing varying by brokerage: https://docs.snaptrade.com/reference/Account%20Information/AccountInformation_getAccountActivities
@@ -208,11 +208,15 @@ The application already records broker sync runs. A daily scheduler can use thos
 - `BrokerSyncScheduler.sync_due_users()` runs the existing read-only sync service for due users.
 - CLI command:
   - `broker snaptrade sync-due [--max-users n] [--min-age-hours hours] [--force]`
+- Startup automation:
+  - `BROKER_SYNC_ON_STARTUP=true`
+  - `BROKER_SYNC_MAX_USERS=<optional cap>`
+  - `BROKER_SYNC_MIN_AGE_HOURS=24`
 - Due sync stores provider-side data only. Users must still run `broker snaptrade import-transactions` to write mapped transactions into local portfolios.
 
 ## ADR-074: Current Limits and Next Phase Hooks
 
-**Decision:** Phase 4 stops at read-only sync, account mapping, portfolio import, and CLI-triggered due sync. It does not implement background broker scheduling, webhooks, disconnect/rotate-secret UX, or a graphical account-linking portal.
+**Decision:** Phase 4 stops at read-only sync, account mapping, portfolio import, CLI-triggered due sync, and opt-in dashboard-startup due sync. It does not implement a long-running scheduler process, webhooks, or a graphical account-linking portal.
 
 **Context:**
 SnapTrade documents account data freshness and notes that account activity data is cached and refreshed daily: https://docs.snaptrade.com/reference/Account%20Information/AccountInformation_getAccountActivities
@@ -227,7 +231,7 @@ SnapTrade also exposes connection refresh, disabled connection repair, secret ro
 
 **Implementation Notes:**
 - Future work should add:
-  - background broker sync scheduler
+  - long-running broker sync scheduler process
   - connection disabled/reconnect handling
   - secret rotation workflow
   - paginated account activity retrieval
