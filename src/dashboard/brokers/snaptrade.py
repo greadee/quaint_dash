@@ -182,6 +182,12 @@ class SnapTradeProvider:
             raise SnapTradeError("SnapTrade delete user response was not an object.")
         return data
 
+    def api_status(self) -> dict[str, Any]:
+        data = self._request("GET", "/")
+        if not isinstance(data, dict):
+            raise SnapTradeError("SnapTrade API status response was not an object.")
+        return data
+
     def list_connections(self, user: BrokerUser) -> list[BrokerConnection]:
         data = self._request("GET", "/authorizations", user=user)
         rows = _require_list(data, "connections")

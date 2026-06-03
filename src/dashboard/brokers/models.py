@@ -83,6 +83,15 @@ class BrokerSyncResult:
 
 
 @dataclass(frozen=True, slots=True)
+class BrokerSmokeTestResult:
+    provider: str
+    api_online: bool
+    configured: bool
+    user_found: bool
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
 class BrokerConnectionPortal:
     provider: str
     provider_user_id: str

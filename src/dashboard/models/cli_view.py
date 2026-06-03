@@ -480,6 +480,15 @@ class DashboardView(View):
                     print(f"Disabled SnapTrade connection {ns.provider_connection_id}.")
                     return self
 
+                if ns.broker_command == "smoke-test":
+                    result = self.access.broker_snaptrade_smoke_test(ns.user_key)
+                    print(
+                        f"SnapTrade smoke test: configured={result.configured}, "
+                        f"api_online={result.api_online}, user_found={result.user_found}."
+                    )
+                    print(result.message)
+                    return self
+
                 if ns.broker_command == "sync":
                     result = self.access.broker_snaptrade_sync(
                         ns.user_key,
@@ -904,6 +913,14 @@ class DashboardView(View):
         )
         p_disable.add_argument("user_key")
         p_disable.add_argument("provider_connection_id")
+
+        p_smoke = snaptrade_subp.add_parser(
+            "smoke-test",
+            add_help=True,
+            description="Verify SnapTrade credentials and optional stored user without syncing data.",
+        )
+        p_smoke.add_argument("user_key", nargs="?", default=None)
+
         p_sync = snaptrade_subp.add_parser(
             "sync",
             add_help=True,

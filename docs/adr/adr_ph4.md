@@ -105,6 +105,27 @@ SnapTrade documents direct API request signing with `clientId`, Unix `timestamp`
 - Tests verify the canonical payload signature and the read-only portal request body.
 - The direct client only exposes read/account-data behavior.
 
+## ADR-070A: Real Credential Smoke Test
+
+**Decision:** Phase 4 includes a safe SnapTrade smoke-test command that validates provider configuration and API reachability without linking accounts or syncing portfolio data.
+
+**Context:**
+SnapTrade documents an API status endpoint for checking whether the API is operational: https://docs.snaptrade.com/reference
+
+Manual end-to-end broker testing still requires real SnapTrade credentials and a user-controlled connection portal flow. A smoke test should therefore prove credentials and local user setup before any account-linking flow is attempted.
+
+**Rationale:**
+- Confirms environment variables and provider reachability.
+- Avoids accidental account sync or transaction import during diagnostics.
+- Gives a clean first troubleshooting step for real credential setup.
+- Allows optional validation that a local broker user has been registered and stored.
+
+**Implementation Notes:**
+- CLI command:
+  - `broker snaptrade smoke-test [user-key]`
+- The command calls SnapTrade API status and optionally checks for the stored local broker user.
+- It does not create a portal URL, sync broker data, map accounts, or import transactions.
+
 ## ADR-071: Broker Sync Storage Before Portfolio Import
 
 **Decision:** Broker data is first persisted in broker-specific tables, then optionally imported into local portfolios.

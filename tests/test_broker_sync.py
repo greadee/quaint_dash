@@ -6,6 +6,7 @@ from dashboard.brokers.models import (
     BrokerAccount,
     BrokerConnection,
     BrokerPosition,
+    BrokerSmokeTestResult,
     BrokerSyncResult,
     BrokerTransaction,
     BrokerUser,
@@ -249,6 +250,20 @@ def test_snaptrade_provider_rotates_secret_deletes_user_and_disables_connection(
     assert session.calls[0]["url"] == "https://api.test/api/v1/snapTrade/resetUserSecret"
     assert session.calls[1]["url"] == "https://api.test/api/v1/snapTrade/deleteUser"
     assert session.calls[2]["url"] == "https://api.test/api/v1/authorizations/auth-1/disable"
+
+
+def test_snaptrade_provider_api_status():
+    session = FakeSnapTradeSession([{"online": True, "version": 1}])
+    provider = SnapTradeProvider(
+        SnapTradeConfig("client-id", "consumer-key", base_url="https://api.test/api/v1"),
+        session=session,
+        clock=lambda: 1_635_790_389,
+    )
+
+    status = provider.api_status()
+
+    assert status["online"] is True
+    assert session.calls[0]["url"] == "https://api.test/api/v1/"
 
 
 def test_snaptrade_provider_maps_connections_accounts_positions_and_transactions():
@@ -518,6 +533,31 @@ def test_broker_manager_rotates_and_unlinks_snaptrade_user(tmp_path, monkeypatch
     assert restored.user_secret == "new-secret"
 
 
+def test_broker_manager_smoke_test_checks_api_and_stored_user(tmp_path, monkeypatch):
+    db = DB(str(tmp_path / "broker_smoke.db"))
+    init_db(db)
+    repo = BrokerSyncRepository(db.conn)
+    cipher = LocalSecretCipher("test-key")
+    repo.upsert_broker_user(BrokerUser("snaptrade", "default", "user-1", "secret"), cipher)
+    manager = DashboardManager(db)
+    monkeypatch.setattr(manager, "_broker_secret_cipher", lambda: cipher)
+    monkeypatch.setattr(
+        manager,
+        "_snaptrade_config",
+        lambda: SnapTradeConfig("client-id", "consumer-key", base_url="https://api.test/api/v1"),
+    )
+    monkeypatch.setattr(
+        "dashboard.brokers.snaptrade.requests.Session",
+        lambda: FakeSnapTradeSession([{"online": True, "version": 1}]),
+    )
+
+    result = manager.broker_snaptrade_smoke_test("default")
+
+    assert result.configured is True
+    assert result.api_online is True
+    assert result.user_found is True
+
+
 def test_broker_cli_lifecycle_commands(tmp_path, capsys):
     db = DB(str(tmp_path / "broker_cli_lifecycle.db"))
     init_db(db)
@@ -545,6 +585,27 @@ def test_broker_cli_lifecycle_commands(tmp_path, capsys):
     assert "Disabled SnapTrade connection auth-1." in out
     assert ("unlink", "default", True) in calls
     assert ("disable", "default", "auth-1") in calls
+
+
+def test_broker_cli_smoke_test(tmp_path, capsys):
+    db = DB(str(tmp_path / "broker_cli_smoke.db"))
+    init_db(db)
+    manager = DashboardManager(db)
+    manager.broker_snaptrade_smoke_test = lambda user_key=None: BrokerSmokeTestResult(
+        provider="snaptrade",
+        api_online=True,
+        configured=True,
+        user_found=user_key == "default",
+        message="snaptrade credentials are reachable",
+    )
+    view = DashboardView(manager)
+
+    view.handle_input("broker snaptrade smoke-test default")
+    out = capsys.readouterr().out
+
+    assert "configured=True" in out
+    assert "api_online=True" in out
+    assert "user_found=True" in out
 
 
 def test_broker_cli_lists_and_maps_accounts(tmp_path, capsys):

@@ -453,6 +453,52 @@ class DashboardManager:
             "disabled",
         )
 
+    def broker_snaptrade_smoke_test(self, user_key: str | None = None):
+        from dashboard.brokers.models import BrokerSmokeTestResult
+        from dashboard.brokers.repository import BrokerSyncRepository
+        from dashboard.brokers.snaptrade import SNAPTRADE_PROVIDER, SnapTradeError, SnapTradeProvider
+
+        try:
+            provider = SnapTradeProvider(self._snaptrade_config())
+            status = provider.api_status()
+            api_online = bool(status.get("online", True))
+        except Exception as exc:
+            return BrokerSmokeTestResult(
+                provider=SNAPTRADE_PROVIDER,
+                api_online=False,
+                configured=False,
+                user_found=False,
+                message=str(exc),
+            )
+
+        user_found = False
+        if user_key:
+            try:
+                user_found = (
+                    BrokerSyncRepository(self.conn).get_broker_user(
+                        SNAPTRADE_PROVIDER,
+                        user_key.strip(),
+                        self._broker_secret_cipher(),
+                    )
+                    is not None
+                )
+            except (SnapTradeError, ValueError) as exc:
+                return BrokerSmokeTestResult(
+                    provider=SNAPTRADE_PROVIDER,
+                    api_online=api_online,
+                    configured=True,
+                    user_found=False,
+                    message=str(exc),
+                )
+
+        return BrokerSmokeTestResult(
+            provider=SNAPTRADE_PROVIDER,
+            api_online=api_online,
+            configured=True,
+            user_found=user_found,
+            message="snaptrade credentials are reachable",
+        )
+
     def broker_snaptrade_sync(
         self,
         user_key: str,

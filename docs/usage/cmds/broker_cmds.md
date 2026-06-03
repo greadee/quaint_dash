@@ -50,6 +50,16 @@ Registers a SnapTrade user and stores the generated user secret locally in encry
 - `user-key` should be stable and immutable.
 - `--provider-user-id` can override the SnapTrade `userId`; when omitted, `user-key` is used.
 
+## Smoke Test Credentials
+
+```
+broker snaptrade smoke-test [user-key]
+```
+
+Checks whether SnapTrade credentials can reach the API status endpoint. When `user-key` is provided, also checks whether that local broker user exists.
+
+This command does not open a portal, sync data, map accounts, or import transactions.
+
 ## Create Read-Only Portal URL
 
 ```
