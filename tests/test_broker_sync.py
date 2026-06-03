@@ -13,6 +13,7 @@ from dashboard.brokers.models import (
 from dashboard.brokers.repository import BrokerSyncRepository
 from dashboard.brokers.secrets import LocalSecretCipher
 from dashboard.brokers.snaptrade import SnapTradeConfig, SnapTradeProvider, compute_snaptrade_signature
+from dashboard.brokers.sync import BrokerSyncService
 from dashboard.db.db_conn import DB, init_db
 from dashboard.models.cli_view import DashboardView
 from dashboard.models.storage import DashboardManager
@@ -196,6 +197,99 @@ def test_snaptrade_provider_registers_user_and_creates_read_only_portal():
     assert ("userSecret", "generated-secret") in portal_call["params"]
 
 
+def test_snaptrade_provider_maps_connections_accounts_positions_and_transactions():
+    session = FakeSnapTradeSession(
+        [
+            [
+                {
+                    "id": "auth-1",
+                    "name": "Connection-1",
+                    "type": "read",
+                    "disabled": False,
+                    "brokerage": {"display_name": "Wealthsimple"},
+                }
+            ],
+            [
+                {
+                    "id": "acct-1",
+                    "name": "TFSA",
+                    "type": "registered",
+                    "balance": {"total": 1234.5, "currency": "CAD"},
+                }
+            ],
+            [
+                {
+                    "symbol": {"symbol": "AAPL", "description": "Apple Inc."},
+                    "units": 2,
+                    "price": 400,
+                    "currency": "USD",
+                    "last_updated": "2026-01-05T12:00:00Z",
+                }
+            ],
+            [
+                {
+                    "id": "act-1",
+                    "type": "BUY",
+                    "trade_date": "2026-01-04",
+                    "symbol": {"symbol": "AAPL"},
+                    "units": 2,
+                    "price": 200,
+                    "amount": -400,
+                    "currency": "USD",
+                }
+            ],
+        ]
+    )
+    provider = SnapTradeProvider(
+        SnapTradeConfig("client-id", "consumer-key", base_url="https://api.test/api/v1"),
+        session=session,
+        clock=lambda: 1_635_790_389,
+    )
+    user = BrokerUser("snaptrade", "default", "user-1", "secret")
+
+    connection = provider.list_connections(user)[0]
+    account = provider.list_accounts(user, connection)[0]
+    position = provider.list_positions(user, account)[0]
+    transaction = provider.list_transactions(user, account, date(2026, 1, 1), date(2026, 1, 5))[0]
+
+    assert connection.provider_connection_id == "auth-1"
+    assert connection.institution_name == "Wealthsimple"
+    assert account.provider_account_id == "acct-1"
+    assert account.balance == 1234.5
+    assert position.symbol == "AAPL"
+    assert position.as_of_date == date(2026, 1, 5)
+    assert transaction.provider_transaction_id == "act-1"
+    assert transaction.trade_date == date(2026, 1, 4)
+    activities_call = session.calls[-1]
+    assert ("startDate", "2026-01-01") in activities_call["params"]
+    assert ("endDate", "2026-01-05") in activities_call["params"]
+
+
+def test_broker_sync_service_persists_provider_data_and_sync_run(tmp_path):
+    db = DB(str(tmp_path / "broker_sync_service.db"))
+    init_db(db)
+    repo = BrokerSyncRepository(db.conn)
+    cipher = LocalSecretCipher("test-key")
+    repo.upsert_broker_user(
+        BrokerUser("snaptrade", "default", "user-1", "secret"),
+        cipher,
+    )
+    service = BrokerSyncService(repo, FakeBrokerProvider(), cipher)
+
+    result = service.sync_user("default", start_date=date(2026, 1, 1), end_date=date(2026, 1, 5))
+
+    assert result.connections_seen == 1
+    assert result.accounts_seen == 1
+    assert result.positions_seen == 1
+    assert result.transactions_seen == 1
+    assert result.failed_connections == 0
+    assert db.conn.execute("SELECT COUNT(*) FROM broker_connection").fetchone()[0] == 1
+    assert db.conn.execute("SELECT COUNT(*) FROM broker_account").fetchone()[0] == 1
+    assert db.conn.execute("SELECT COUNT(*) FROM broker_position_snapshot").fetchone()[0] == 1
+    assert db.conn.execute("SELECT COUNT(*) FROM broker_transaction").fetchone()[0] == 1
+    assert db.conn.execute("SELECT status FROM broker_sync_run").fetchone()[0] == "done"
+
+
 def test_broker_cli_prints_snaptrade_read_only_portal(tmp_path, capsys):
     db = DB(str(tmp_path / "broker_cli.db"))
     init_db(db)
@@ -231,6 +325,36 @@ def test_broker_cli_prints_snaptrade_read_only_portal(tmp_path, capsys):
     assert "session-1" in out
 
 
+def test_broker_cli_lists_and_maps_accounts(tmp_path, capsys):
+    db = DB(str(tmp_path / "broker_cli_accounts.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Broker')")
+    repo = BrokerSyncRepository(db.conn)
+    repo.upsert_account(
+        BrokerAccount(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_connection_id="conn-1",
+            account_name="TFSA",
+            account_type="registered",
+            currency="CAD",
+            balance=1000.0,
+        )
+    )
+    manager = DashboardManager(db)
+    view = DashboardView(manager)
+
+    view.handle_input("broker snaptrade accounts")
+    out = capsys.readouterr().out
+    assert "acct-1" in out
+    assert "TFSA" in out
+
+    view.handle_input("broker snaptrade map-account acct-1 1")
+    out = capsys.readouterr().out
+    assert "Mapped SnapTrade account acct-1 to portfolio 1." in out
+    assert repo.list_accounts("snaptrade")[0].portfolio_id == 1
+
+
 class FakeBrokerProvider:
     provider_name = "snaptrade"
 
@@ -248,7 +372,11 @@ class FakeBrokerProvider:
             )
         ]
 
-    def list_accounts(self, user: BrokerUser) -> list[BrokerAccount]:
+    def list_accounts(
+        self,
+        user: BrokerUser,
+        connection: BrokerConnection | None = None,
+    ) -> list[BrokerAccount]:
         return [
             BrokerAccount(
                 provider=self.provider_name,
@@ -303,17 +431,17 @@ class FakeBrokerProvider:
 
 
 class FakeSnapTradeResponse:
-    def __init__(self, payload: dict, status_code: int = 200) -> None:
+    def __init__(self, payload, status_code: int = 200) -> None:
         self.payload = payload
         self.status_code = status_code
         self.text = str(payload)
 
-    def json(self) -> dict:
+    def json(self):
         return self.payload
 
 
 class FakeSnapTradeSession:
-    def __init__(self, responses: list[dict]) -> None:
+    def __init__(self, responses: list) -> None:
         self.responses = responses
         self.calls: list[dict] = []
 

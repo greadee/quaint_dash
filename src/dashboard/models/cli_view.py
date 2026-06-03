@@ -139,6 +139,9 @@ class DashboardView(View):
                 analytics storage [status|enable|disable|refresh],
                 broker snaptrade register-user <user-key>,
                 broker snaptrade portal <user-key> [--broker slug],
+                broker snaptrade sync <user-key>,
+                broker snaptrade accounts,
+                broker snaptrade map-account <account-id> <portfolio-id>,
 
                 help [command-name], 
                 quit/exit
@@ -438,6 +441,37 @@ class DashboardView(View):
                         print(f"Session: {portal.session_id}")
                     return self
 
+                if ns.broker_command == "sync":
+                    result = self.access.broker_snaptrade_sync(
+                        ns.user_key,
+                        start_date=ns.start_date,
+                        end_date=ns.end_date,
+                    )
+                    print(
+                        f"Broker sync saw {result.connections_seen} connection(s), "
+                        f"{result.accounts_seen} account(s), {result.positions_seen} position(s), "
+                        f"and {result.transactions_seen} transaction(s)."
+                    )
+                    if result.failed_connections:
+                        print(f"Failed connections: {result.failed_connections}.")
+                    return self
+
+                if ns.broker_command == "accounts":
+                    self._print_broker_accounts(self.access.broker_accounts("snaptrade"))
+                    return self
+
+                if ns.broker_command == "map-account":
+                    self.access.broker_map_account(
+                        ns.provider_account_id,
+                        ns.portfolio_id,
+                        provider="snaptrade",
+                    )
+                    print(
+                        f"Mapped SnapTrade account {ns.provider_account_id} "
+                        f"to portfolio {ns.portfolio_id}."
+                    )
+                    return self
+
         return self # fallback
 
     def _handle_help(self, args: list[str]):
@@ -522,6 +556,20 @@ class DashboardView(View):
             print("Missing inputs:")
             for item in context.missing_inputs:
                 print(f"- {item}")
+
+    @staticmethod
+    def _print_broker_accounts(accounts) -> None:
+        if not accounts:
+            print("No broker accounts found.")
+            return
+        print("| provider | account_id | name | type | currency | balance | portfolio_id |")
+        for account in accounts:
+            print(
+                f"| {account.provider} | {account.provider_account_id} | "
+                f"{account.account_name or ''} | {account.account_type or ''} | "
+                f"{account.currency or ''} | {account.balance if account.balance is not None else ''} | "
+                f"{account.portfolio_id if account.portfolio_id is not None else ''} |"
+            )
 
     @staticmethod
     def build_dash_parsers():
@@ -744,6 +792,28 @@ class DashboardView(View):
             action="store_true",
             help="Register the SnapTrade user before creating the portal if needed.",
         )
+        p_sync = snaptrade_subp.add_parser(
+            "sync",
+            add_help=True,
+            description="Sync linked SnapTrade connections, accounts, positions, and transactions.",
+        )
+        p_sync.add_argument("user_key", help="Local immutable user key.")
+        p_sync.add_argument("--start-date", dest="start_date", default=None)
+        p_sync.add_argument("--end-date", dest="end_date", default=None)
+
+        snaptrade_subp.add_parser(
+            "accounts",
+            add_help=True,
+            description="List locally stored SnapTrade broker accounts.",
+        )
+
+        p_map = snaptrade_subp.add_parser(
+            "map-account",
+            add_help=True,
+            description="Map a stored SnapTrade account to a local portfolio.",
+        )
+        p_map.add_argument("provider_account_id")
+        p_map.add_argument("portfolio_id", type=int)
         parsers["broker"] = p
 
         return parsers

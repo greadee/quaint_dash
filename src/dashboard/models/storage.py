@@ -399,6 +399,51 @@ class DashboardManager:
             immediate_redirect=immediate_redirect,
         )
 
+    def broker_snaptrade_sync(
+        self,
+        user_key: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ):
+        from dashboard.brokers.repository import BrokerSyncRepository
+        from dashboard.brokers.snaptrade import SnapTradeProvider
+        from dashboard.brokers.sync import BrokerSyncService
+
+        service = BrokerSyncService(
+            BrokerSyncRepository(self.conn),
+            SnapTradeProvider(self._snaptrade_config()),
+            self._broker_secret_cipher(),
+        )
+        return service.sync_user(
+            user_key.strip(),
+            start_date=self._broker_parse_date(start_date),
+            end_date=self._broker_parse_date(end_date),
+        )
+
+    def broker_accounts(self, provider: str = "snaptrade"):
+        from dashboard.brokers.repository import BrokerSyncRepository
+
+        return BrokerSyncRepository(self.conn).list_accounts(provider)
+
+    def broker_map_account(
+        self,
+        provider_account_id: str,
+        portfolio_id: int,
+        provider: str = "snaptrade",
+    ) -> None:
+        if not self.conn.execute(
+            "SELECT 1 FROM portfolio WHERE portfolio_id = ?",
+            [portfolio_id],
+        ).fetchone():
+            raise ValueError(f"Portfolio not found: {portfolio_id}")
+        from dashboard.brokers.repository import BrokerSyncRepository
+
+        BrokerSyncRepository(self.conn).map_account_to_portfolio(
+            provider,
+            provider_account_id.strip(),
+            portfolio_id,
+        )
+
     @staticmethod
     def _snaptrade_config():
         from dashboard.brokers.snaptrade import SnapTradeConfig
@@ -418,6 +463,17 @@ class DashboardManager:
         if not key:
             raise ValueError("QUAINT_BROKER_SECRET_KEY is required for broker secret storage.")
         return LocalSecretCipher(key)
+
+    @staticmethod
+    def _broker_parse_date(value: str | None):
+        if value is None:
+            return None
+        for fmt in ("%Y-%m-%d", "%m-%d-%Y", "%m/%d/%Y"):
+            try:
+                return datetime.strptime(value, fmt).date()
+            except ValueError:
+                continue
+        raise ValueError(f"Date {value} invalid. Use YYYY-MM-DD, MM-DD-YYYY, or MM/DD/YYYY.")
 
 
     #######################################################################

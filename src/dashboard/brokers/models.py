@@ -109,7 +109,11 @@ class BrokerProvider(Protocol):
     def list_connections(self, user: BrokerUser) -> list[BrokerConnection]:
         """List provider connections for a linked user."""
 
-    def list_accounts(self, user: BrokerUser) -> list[BrokerAccount]:
+    def list_accounts(
+        self,
+        user: BrokerUser,
+        connection: BrokerConnection | None = None,
+    ) -> list[BrokerAccount]:
         """List provider accounts for a linked user."""
 
     def list_positions(self, user: BrokerUser, account: BrokerAccount) -> list[BrokerPosition]:

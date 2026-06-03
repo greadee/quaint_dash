@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from base64 import b64encode
 from dataclasses import dataclass
+from datetime import date, datetime
 import hashlib
 import hmac
 import json
@@ -15,7 +16,14 @@ from urllib.parse import urlencode
 from dotenv import load_dotenv
 import requests
 
-from dashboard.brokers.models import BrokerConnectionPortal, BrokerUser
+from dashboard.brokers.models import (
+    BrokerAccount,
+    BrokerConnection,
+    BrokerConnectionPortal,
+    BrokerPosition,
+    BrokerTransaction,
+    BrokerUser,
+)
 
 
 SNAPTRADE_PROVIDER = "snaptrade"
@@ -139,18 +147,76 @@ class SnapTradeProvider:
     def create_connection_portal_url(self, user: BrokerUser) -> str:
         return self.create_connection_portal(user).redirect_uri
 
+    def list_connections(self, user: BrokerUser) -> list[BrokerConnection]:
+        data = self._request("GET", "/authorizations", user=user)
+        rows = _require_list(data, "connections")
+        return [_connection_from_snaptrade(row, user.provider_user_id) for row in rows]
+
+    def list_accounts(
+        self,
+        user: BrokerUser,
+        connection: BrokerConnection | None = None,
+    ) -> list[BrokerAccount]:
+        connections = [connection] if connection is not None else self.list_connections(user)
+        accounts: list[BrokerAccount] = []
+        for conn in connections:
+            data = self._request(
+                "GET",
+                f"/authorizations/{conn.provider_connection_id}/accounts",
+                user=user,
+            )
+            rows = _require_list(data, "accounts")
+            accounts.extend(_account_from_snaptrade(row, conn.provider_connection_id) for row in rows)
+        return accounts
+
+    def list_positions(self, user: BrokerUser, account: BrokerAccount) -> list[BrokerPosition]:
+        data = self._request(
+            "GET",
+            f"/accounts/{account.provider_account_id}/positions",
+            user=user,
+        )
+        rows = _require_list(data, "positions")
+        return [_position_from_snaptrade(row, account.provider_account_id) for row in rows]
+
+    def list_transactions(
+        self,
+        user: BrokerUser,
+        account: BrokerAccount,
+        start_date=None,
+        end_date=None,
+    ) -> list[BrokerTransaction]:
+        query_params: list[tuple[str, str]] = []
+        if start_date is not None:
+            query_params.append(("startDate", start_date.isoformat()))
+        if end_date is not None:
+            query_params.append(("endDate", end_date.isoformat()))
+        data = self._request(
+            "GET",
+            f"/accounts/{account.provider_account_id}/activities",
+            query_params=query_params,
+            user=user,
+        )
+        rows = _require_list(data, "activities")
+        return [_transaction_from_snaptrade(row, account.provider_account_id) for row in rows]
+
+    def disconnect(self, user: BrokerUser, connection: BrokerConnection) -> None:
+        raise SnapTradeError("Disconnect support is intentionally not implemented yet.")
+
     def _request(
         self,
         method: str,
         path: str,
         body: dict[str, Any] | None = None,
+        query_params: list[tuple[str, str]] | None = None,
         user: BrokerUser | None = None,
-    ) -> dict[str, Any]:
+    ) -> Any:
         timestamp = str(int(self.clock()))
         query_items = [
             ("clientId", self.config.client_id),
             ("timestamp", timestamp),
         ]
+        if query_params:
+            query_items.extend(query_params)
         if user is not None:
             query_items.extend(
                 [
@@ -182,6 +248,155 @@ class SnapTradeProvider:
             data = response.json()
         except ValueError as exc:
             raise SnapTradeError("SnapTrade API response was not valid JSON.") from exc
-        if not isinstance(data, dict):
-            raise SnapTradeError("SnapTrade API response was not an object.")
         return data
+
+
+def _require_list(data: Any, label: str) -> list[dict[str, Any]]:
+    if not isinstance(data, list):
+        raise SnapTradeError(f"SnapTrade {label} response was not a list.")
+    return [row for row in data if isinstance(row, dict)]
+
+
+def _connection_from_snaptrade(row: dict[str, Any], provider_user_id: str) -> BrokerConnection:
+    brokerage = _dict_value(row, "brokerage")
+    institution = (
+        _str_value(brokerage, "display_name")
+        or _str_value(brokerage, "name")
+        or _str_value(row, "name")
+        or "Unknown brokerage"
+    )
+    disabled = bool(row.get("disabled"))
+    connection_type = _str_value(row, "type")
+    status = "disabled" if disabled else "connected"
+    if connection_type and connection_type != "read":
+        status = f"{status}:{connection_type}"
+    return BrokerConnection(
+        provider=SNAPTRADE_PROVIDER,
+        provider_connection_id=str(row.get("id")),
+        provider_user_id=provider_user_id,
+        institution_name=institution,
+        status=status,
+        raw_payload=row,
+    )
+
+
+def _account_from_snaptrade(row: dict[str, Any], provider_connection_id: str) -> BrokerAccount:
+    balance = _first_number(
+        _number_value(row, "balance"),
+        _nested_number(row, "balance", "total"),
+        _nested_number(row, "total_value", "value"),
+    )
+    currency = (
+        _str_value(row, "currency")
+        or _nested_str(row, "balance", "currency")
+        or _nested_str(row, "total_value", "currency")
+    )
+    return BrokerAccount(
+        provider=SNAPTRADE_PROVIDER,
+        provider_account_id=str(row.get("id")),
+        provider_connection_id=provider_connection_id,
+        account_name=_str_value(row, "name") or _str_value(row, "number"),
+        account_type=_str_value(row, "type") or _nested_str(row, "meta", "type"),
+        currency=currency,
+        balance=balance,
+        raw_payload=row,
+    )
+
+
+def _position_from_snaptrade(row: dict[str, Any], provider_account_id: str) -> BrokerPosition:
+    symbol = _symbol_from_row(row)
+    position_id = _str_value(row, "id") or f"{provider_account_id}:{symbol or 'unknown'}"
+    quantity = _first_number(_number_value(row, "units"), _number_value(row, "quantity"))
+    market_value = _first_number(
+        _number_value(row, "market_value"),
+        _number_value(row, "marketValue"),
+        _number_value(row, "value"),
+    )
+    if market_value is None and quantity is not None:
+        price = _number_value(row, "price")
+        market_value = None if price is None else quantity * price
+    return BrokerPosition(
+        provider=SNAPTRADE_PROVIDER,
+        provider_account_id=provider_account_id,
+        provider_position_id=position_id,
+        symbol=symbol,
+        description=_str_value(row, "description") or _nested_str(row, "symbol", "description"),
+        quantity=quantity,
+        market_value=market_value,
+        currency=_str_value(row, "currency") or _nested_str(row, "symbol", "currency"),
+        as_of_date=_date_value(row.get("as_of_date") or row.get("last_updated")),
+        raw_payload=row,
+    )
+
+
+def _transaction_from_snaptrade(row: dict[str, Any], provider_account_id: str) -> BrokerTransaction:
+    transaction_id = _str_value(row, "id") or _str_value(row, "trade_id")
+    if not transaction_id:
+        transaction_id = f"{provider_account_id}:{row.get('trade_date') or row.get('date')}:{row.get('type')}"
+    return BrokerTransaction(
+        provider=SNAPTRADE_PROVIDER,
+        provider_transaction_id=transaction_id,
+        provider_account_id=provider_account_id,
+        txn_type=_str_value(row, "type") or _str_value(row, "action") or "unknown",
+        trade_date=_date_value(row.get("trade_date") or row.get("date")),
+        symbol=_symbol_from_row(row),
+        quantity=_number_value(row, "units") or _number_value(row, "quantity"),
+        price=_number_value(row, "price"),
+        amount=_number_value(row, "amount"),
+        currency=_str_value(row, "currency"),
+        raw_payload=row,
+    )
+
+
+def _symbol_from_row(row: dict[str, Any]) -> str | None:
+    symbol = row.get("symbol")
+    if isinstance(symbol, dict):
+        return _str_value(symbol, "symbol") or _str_value(symbol, "ticker") or _str_value(symbol, "raw_symbol")
+    return _str_value(row, "symbol") or _str_value(row, "ticker")
+
+
+def _dict_value(row: dict[str, Any], key: str) -> dict[str, Any]:
+    value = row.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def _str_value(row: dict[str, Any], key: str) -> str | None:
+    value = row.get(key)
+    if value is None:
+        return None
+    return str(value)
+
+
+def _nested_str(row: dict[str, Any], parent: str, child: str) -> str | None:
+    return _str_value(_dict_value(row, parent), child)
+
+
+def _number_value(row: dict[str, Any], key: str) -> float | None:
+    value = row.get(key)
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        value = value.get("value")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _nested_number(row: dict[str, Any], parent: str, child: str) -> float | None:
+    return _number_value(_dict_value(row, parent), child)
+
+
+def _first_number(*values: float | None) -> float | None:
+    return next((value for value in values if value is not None), None)
+
+
+def _date_value(value) -> date:
+    if value is None:
+        return date.today()
+    if isinstance(value, date):
+        return value
+    text = str(value)
+    if "T" in text:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    return date.fromisoformat(text[:10])
