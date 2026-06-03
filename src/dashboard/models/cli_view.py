@@ -436,11 +436,33 @@ class DashboardView(View):
                         custom_redirect=ns.custom_redirect,
                         immediate_redirect=ns.immediate_redirect,
                         register_if_missing=ns.register_if_missing,
+                        reconnect=ns.reconnect,
                     )
                     print("Open this SnapTrade read-only connection portal URL:")
                     print(portal.redirect_uri)
                     if portal.session_id:
                         print(f"Session: {portal.session_id}")
+                    return self
+
+                if ns.broker_command == "rotate-secret":
+                    user = self.access.broker_snaptrade_rotate_secret(ns.user_key)
+                    print(f"Rotated SnapTrade user secret for {user.user_key}.")
+                    return self
+
+                if ns.broker_command == "unlink-user":
+                    self.access.broker_snaptrade_unlink_user(
+                        ns.user_key,
+                        delete_provider_user=ns.delete_provider_user,
+                    )
+                    print(f"Unlinked SnapTrade user {ns.user_key}.")
+                    return self
+
+                if ns.broker_command == "disable-connection":
+                    self.access.broker_snaptrade_disable_connection(
+                        ns.user_key,
+                        ns.provider_connection_id,
+                    )
+                    print(f"Disabled SnapTrade connection {ns.provider_connection_id}.")
                     return self
 
                 if ns.broker_command == "sync":
@@ -828,6 +850,35 @@ class DashboardView(View):
             action="store_true",
             help="Register the SnapTrade user before creating the portal if needed.",
         )
+        p_portal.add_argument(
+            "--reconnect",
+            dest="reconnect",
+            default=None,
+            help="Disabled SnapTrade connection id to repair through the portal.",
+        )
+
+        p_rotate = snaptrade_subp.add_parser(
+            "rotate-secret",
+            add_help=True,
+            description="Rotate and store a SnapTrade user secret.",
+        )
+        p_rotate.add_argument("user_key")
+
+        p_unlink = snaptrade_subp.add_parser(
+            "unlink-user",
+            add_help=True,
+            description="Mark a SnapTrade user unlinked locally, optionally deleting provider data.",
+        )
+        p_unlink.add_argument("user_key")
+        p_unlink.add_argument("--delete-provider-user", dest="delete_provider_user", action="store_true")
+
+        p_disable = snaptrade_subp.add_parser(
+            "disable-connection",
+            add_help=True,
+            description="Force-disable a SnapTrade connection for reconnect testing.",
+        )
+        p_disable.add_argument("user_key")
+        p_disable.add_argument("provider_connection_id")
         p_sync = snaptrade_subp.add_parser(
             "sync",
             add_help=True,

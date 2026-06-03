@@ -107,6 +107,35 @@ class BrokerSyncRepository:
             for row in rows
         ]
 
+    def update_broker_user_status(self, provider: str, user_key: str, status: str) -> None:
+        self.conn.execute(
+            """
+            UPDATE broker_user
+            SET status = ?,
+                updated_at = now()
+            WHERE provider = ?
+              AND user_key = ?
+            """,
+            [status, provider, user_key],
+        )
+
+    def update_connection_status(
+        self,
+        provider: str,
+        provider_connection_id: str,
+        status: str,
+    ) -> None:
+        self.conn.execute(
+            """
+            UPDATE broker_connection
+            SET status = ?,
+                updated_at = now()
+            WHERE provider = ?
+              AND provider_connection_id = ?
+            """,
+            [status, provider, provider_connection_id],
+        )
+
     def due_broker_users(
         self,
         provider: str,

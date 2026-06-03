@@ -51,6 +51,33 @@ Most SnapTrade user-level account operations require both `userId` and `userSecr
   - optional `SNAPTRADE_TIMEOUT_SECONDS`
 - The local cipher is intentionally scoped behind `SecretCipher` so it can be replaced later.
 
+## ADR-069A: Broker Lifecycle Commands
+
+**Decision:** Phase 4 supports lifecycle management for reconnecting disabled connections, rotating SnapTrade user secrets, locally unlinking broker users, optionally deleting provider users, and force-disabling test connections.
+
+**Context:**
+SnapTrade's connection portal accepts a `reconnect` parameter for repairing disabled connections: https://docs.snaptrade.com/reference/Authentication/Authentication_loginSnapTradeUser
+
+SnapTrade documents user-secret rotation and warns that a newly returned secret must be saved because the old one will stop working: https://docs.snaptrade.com/reference/Authentication/Authentication_resetSnapTradeUserSecret
+
+SnapTrade also documents provider-side user deletion as an irreversible asynchronous operation that deletes the registered user and associated data: https://docs.snaptrade.com/reference/Authentication/Authentication_deleteSnapTradeUser
+
+SnapTrade's force-disable connection endpoint is documented for reconnect-flow testing and is not intended for normal production use: https://docs.snaptrade.com/reference/Connections/Connections_disableBrokerageAuthorization
+
+**Rationale:**
+- Users need a repair path when a broker authorization becomes disabled.
+- Secret rotation is necessary if a generated SnapTrade user secret is compromised.
+- Local unlinking lets the application stop using a broker user without erasing local audit history.
+- Provider deletion is explicit because it is irreversible.
+- Force-disable is exposed as an explicit command for testing reconnect behavior.
+
+**Implementation Notes:**
+- `broker snaptrade portal <user-key> --reconnect <connection-id>` opens a read-only repair portal.
+- `broker snaptrade rotate-secret <user-key>` rotates and stores the generated user secret.
+- `broker snaptrade unlink-user <user-key> [--delete-provider-user]` marks the local broker user unlinked and can request provider deletion.
+- `broker snaptrade disable-connection <user-key> <connection-id>` force-disables a connection for test/reconnect flows.
+- Local user and connection rows are status-updated rather than deleted.
+
 ## ADR-070: Direct SnapTrade REST Client With Request Signatures
 
 **Decision:** Phase 4 uses a small direct REST client instead of adding the SnapTrade SDK.

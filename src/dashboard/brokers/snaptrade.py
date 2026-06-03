@@ -116,6 +116,7 @@ class SnapTradeProvider:
         custom_redirect: str | None = None,
         immediate_redirect: bool = False,
         dark_mode: bool = False,
+        reconnect: str | None = None,
     ) -> BrokerConnectionPortal:
         body: dict[str, Any] = {
             "connectionType": "read",
@@ -127,6 +128,8 @@ class SnapTradeProvider:
             body["broker"] = broker
         if custom_redirect:
             body["customRedirect"] = custom_redirect
+        if reconnect:
+            body["reconnect"] = reconnect
 
         data = self._request(
             "POST",
@@ -146,6 +149,36 @@ class SnapTradeProvider:
 
     def create_connection_portal_url(self, user: BrokerUser) -> str:
         return self.create_connection_portal(user).redirect_uri
+
+    def rotate_user_secret(self, user: BrokerUser) -> BrokerUser:
+        data = self._request(
+            "POST",
+            "/snapTrade/resetUserSecret",
+            body={
+                "userId": user.provider_user_id,
+                "userSecret": user.user_secret,
+            },
+        )
+        user_secret = data.get("userSecret") or data.get("newUserSecret")
+        if not user_secret:
+            raise SnapTradeError("SnapTrade reset user secret response did not include a new secret.")
+        return BrokerUser(
+            provider=self.provider_name,
+            user_key=user.user_key,
+            provider_user_id=user.provider_user_id,
+            user_secret=user_secret,
+            status=user.status,
+        )
+
+    def delete_user(self, user: BrokerUser) -> dict[str, Any]:
+        data = self._request(
+            "DELETE",
+            "/snapTrade/deleteUser",
+            query_params=[("userId", user.provider_user_id)],
+        )
+        if not isinstance(data, dict):
+            raise SnapTradeError("SnapTrade delete user response was not an object.")
+        return data
 
     def list_connections(self, user: BrokerUser) -> list[BrokerConnection]:
         data = self._request("GET", "/authorizations", user=user)
@@ -200,7 +233,11 @@ class SnapTradeProvider:
         return [_transaction_from_snaptrade(row, account.provider_account_id) for row in rows]
 
     def disconnect(self, user: BrokerUser, connection: BrokerConnection) -> None:
-        raise SnapTradeError("Disconnect support is intentionally not implemented yet.")
+        self._request(
+            "POST",
+            f"/authorizations/{connection.provider_connection_id}/disable",
+            user=user,
+        )
 
     def _request(
         self,

@@ -369,6 +369,7 @@ class DashboardManager:
         custom_redirect: str | None = None,
         immediate_redirect: bool = False,
         register_if_missing: bool = False,
+        reconnect: str | None = None,
     ):
         """
         Create a SnapTrade hosted portal URL with read-only account permissions.
@@ -397,6 +398,59 @@ class DashboardManager:
             broker=broker,
             custom_redirect=custom_redirect,
             immediate_redirect=immediate_redirect,
+            reconnect=reconnect,
+        )
+
+    def broker_snaptrade_rotate_secret(self, user_key: str):
+        from dashboard.brokers.repository import BrokerSyncRepository
+        from dashboard.brokers.snaptrade import SNAPTRADE_PROVIDER, SnapTradeProvider
+
+        repo = BrokerSyncRepository(self.conn)
+        cipher = self._broker_secret_cipher()
+        user = repo.get_broker_user(SNAPTRADE_PROVIDER, user_key.strip(), cipher)
+        if user is None:
+            raise ValueError(f"No SnapTrade user found: {user_key}")
+        rotated = SnapTradeProvider(self._snaptrade_config()).rotate_user_secret(user)
+        repo.upsert_broker_user(rotated, cipher)
+        return rotated
+
+    def broker_snaptrade_unlink_user(self, user_key: str, delete_provider_user: bool = False):
+        from dashboard.brokers.repository import BrokerSyncRepository
+        from dashboard.brokers.snaptrade import SNAPTRADE_PROVIDER, SnapTradeProvider
+
+        repo = BrokerSyncRepository(self.conn)
+        cipher = self._broker_secret_cipher()
+        user = repo.get_broker_user(SNAPTRADE_PROVIDER, user_key.strip(), cipher)
+        if user is None:
+            raise ValueError(f"No SnapTrade user found: {user_key}")
+        provider_response = None
+        if delete_provider_user:
+            provider_response = SnapTradeProvider(self._snaptrade_config()).delete_user(user)
+        repo.update_broker_user_status(SNAPTRADE_PROVIDER, user.user_key, "unlinked")
+        return provider_response
+
+    def broker_snaptrade_disable_connection(self, user_key: str, provider_connection_id: str):
+        from dashboard.brokers.models import BrokerConnection
+        from dashboard.brokers.repository import BrokerSyncRepository
+        from dashboard.brokers.snaptrade import SNAPTRADE_PROVIDER, SnapTradeProvider
+
+        repo = BrokerSyncRepository(self.conn)
+        cipher = self._broker_secret_cipher()
+        user = repo.get_broker_user(SNAPTRADE_PROVIDER, user_key.strip(), cipher)
+        if user is None:
+            raise ValueError(f"No SnapTrade user found: {user_key}")
+        connection = BrokerConnection(
+            provider=SNAPTRADE_PROVIDER,
+            provider_connection_id=provider_connection_id.strip(),
+            institution_name="unknown",
+            status="unknown",
+            provider_user_id=user.provider_user_id,
+        )
+        SnapTradeProvider(self._snaptrade_config()).disconnect(user, connection)
+        repo.update_connection_status(
+            SNAPTRADE_PROVIDER,
+            provider_connection_id.strip(),
+            "disabled",
         )
 
     def broker_snaptrade_sync(

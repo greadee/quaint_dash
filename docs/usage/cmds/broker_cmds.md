@@ -33,15 +33,40 @@ Registers a SnapTrade user and stores the generated user secret locally in encry
 ## Create Read-Only Portal URL
 
 ```
-broker snaptrade portal <user-key> [--broker slug] [--custom-redirect url] [--immediate-redirect] [--register-if-missing]
+broker snaptrade portal <user-key> [--broker slug] [--custom-redirect url] [--immediate-redirect] [--register-if-missing] [--reconnect connection-id]
 ```
 
 Creates a SnapTrade hosted connection portal URL with read-only permissions.
 
 - `--broker` optionally directs the portal to a specific broker slug.
+- `--reconnect` opens the portal in repair mode for a disabled connection.
 - `--register-if-missing` registers the SnapTrade user before creating the portal if no stored user exists.
 - The application does not collect broker credentials.
 - The application does not request trading permissions.
+
+## Rotate User Secret
+
+```
+broker snaptrade rotate-secret <user-key>
+```
+
+Rotates the SnapTrade user secret and stores the replacement locally in encrypted form.
+
+## Unlink User
+
+```
+broker snaptrade unlink-user <user-key> [--delete-provider-user]
+```
+
+Marks a SnapTrade user as unlinked locally. With `--delete-provider-user`, the command also requests provider-side user deletion.
+
+## Disable Connection
+
+```
+broker snaptrade disable-connection <user-key> <connection-id>
+```
+
+Force-disables a SnapTrade connection for reconnect testing, then marks the local connection disabled.
 
 ## Sync Broker Data
 

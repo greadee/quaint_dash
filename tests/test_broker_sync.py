@@ -184,7 +184,7 @@ def test_snaptrade_provider_registers_user_and_creates_read_only_portal():
     )
 
     user = provider.register_user("local-user")
-    portal = provider.create_connection_portal(user, broker="WEALTHSIMPLE")
+    portal = provider.create_connection_portal(user, broker="WEALTHSIMPLE", reconnect="auth-1")
 
     assert user.provider_user_id == "local-user"
     assert user.user_secret == "generated-secret"
@@ -197,7 +197,35 @@ def test_snaptrade_provider_registers_user_and_creates_read_only_portal():
     assert portal_call["url"] == "https://api.test/api/v1/snapTrade/login"
     assert portal_call["json"]["connectionType"] == "read"
     assert portal_call["json"]["broker"] == "WEALTHSIMPLE"
+    assert portal_call["json"]["reconnect"] == "auth-1"
     assert ("userSecret", "generated-secret") in portal_call["params"]
+
+
+def test_snaptrade_provider_rotates_secret_deletes_user_and_disables_connection():
+    session = FakeSnapTradeSession(
+        [
+            {"userSecret": "new-secret"},
+            {"status": "deleted", "userId": "user-1"},
+            {"detail": "Connection disabled"},
+        ]
+    )
+    provider = SnapTradeProvider(
+        SnapTradeConfig("client-id", "consumer-key", base_url="https://api.test/api/v1"),
+        session=session,
+        clock=lambda: 1_635_790_389,
+    )
+    user = BrokerUser("snaptrade", "default", "user-1", "old-secret")
+    connection = BrokerConnection("snaptrade", "auth-1", "Wealthsimple", "connected")
+
+    rotated = provider.rotate_user_secret(user)
+    deleted = provider.delete_user(user)
+    provider.disconnect(user, connection)
+
+    assert rotated.user_secret == "new-secret"
+    assert deleted["status"] == "deleted"
+    assert session.calls[0]["url"] == "https://api.test/api/v1/snapTrade/resetUserSecret"
+    assert session.calls[1]["url"] == "https://api.test/api/v1/snapTrade/deleteUser"
+    assert session.calls[2]["url"] == "https://api.test/api/v1/authorizations/auth-1/disable"
 
 
 def test_snaptrade_provider_maps_connections_accounts_positions_and_transactions():
@@ -346,6 +374,7 @@ def test_broker_cli_prints_snaptrade_read_only_portal(tmp_path, capsys):
         custom_redirect=None,
         immediate_redirect=False,
         register_if_missing=False,
+        reconnect=None,
     ):
         assert user_key == "default"
         assert broker == "WEALTHSIMPLE"
@@ -367,6 +396,69 @@ def test_broker_cli_prints_snaptrade_read_only_portal(tmp_path, capsys):
     assert "read-only connection portal URL" in out
     assert "https://app.snaptrade.com/portal" in out
     assert "session-1" in out
+
+
+def test_broker_manager_rotates_and_unlinks_snaptrade_user(tmp_path, monkeypatch):
+    db = DB(str(tmp_path / "broker_lifecycle.db"))
+    init_db(db)
+    repo = BrokerSyncRepository(db.conn)
+    cipher = LocalSecretCipher("test-key")
+    repo.upsert_broker_user(
+        BrokerUser("snaptrade", "default", "user-1", "old-secret"),
+        cipher,
+    )
+    manager = DashboardManager(db)
+    monkeypatch.setattr(manager, "_broker_secret_cipher", lambda: cipher)
+    monkeypatch.setattr(
+        manager,
+        "_snaptrade_config",
+        lambda: SnapTradeConfig("client-id", "consumer-key", base_url="https://api.test/api/v1"),
+    )
+    session = FakeSnapTradeSession(
+        [
+            {"userSecret": "new-secret"},
+            {"status": "deleted", "userId": "user-1"},
+        ]
+    )
+    monkeypatch.setattr("dashboard.brokers.snaptrade.requests.Session", lambda: session)
+
+    rotated = manager.broker_snaptrade_rotate_secret("default")
+    manager.broker_snaptrade_unlink_user("default", delete_provider_user=True)
+    restored = repo.get_broker_user("snaptrade", "default", cipher)
+
+    assert rotated.user_secret == "new-secret"
+    assert restored is not None
+    assert restored.status == "unlinked"
+    assert restored.user_secret == "new-secret"
+
+
+def test_broker_cli_lifecycle_commands(tmp_path, capsys):
+    db = DB(str(tmp_path / "broker_cli_lifecycle.db"))
+    init_db(db)
+    manager = DashboardManager(db)
+    view = DashboardView(manager)
+    calls = []
+
+    manager.broker_snaptrade_rotate_secret = lambda user_key: type(
+        "User", (), {"user_key": user_key}
+    )()
+    manager.broker_snaptrade_unlink_user = lambda user_key, delete_provider_user=False: calls.append(
+        ("unlink", user_key, delete_provider_user)
+    )
+    manager.broker_snaptrade_disable_connection = lambda user_key, provider_connection_id: calls.append(
+        ("disable", user_key, provider_connection_id)
+    )
+
+    view.handle_input("broker snaptrade rotate-secret default")
+    view.handle_input("broker snaptrade unlink-user default --delete-provider-user")
+    view.handle_input("broker snaptrade disable-connection default auth-1")
+    out = capsys.readouterr().out
+
+    assert "Rotated SnapTrade user secret for default." in out
+    assert "Unlinked SnapTrade user default." in out
+    assert "Disabled SnapTrade connection auth-1." in out
+    assert ("unlink", "default", True) in calls
+    assert ("disable", "default", "auth-1") in calls
 
 
 def test_broker_cli_lists_and_maps_accounts(tmp_path, capsys):
