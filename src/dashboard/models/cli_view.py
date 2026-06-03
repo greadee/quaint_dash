@@ -142,6 +142,7 @@ class DashboardView(View):
                 broker snaptrade sync <user-key>,
                 broker snaptrade accounts,
                 broker snaptrade map-account <account-id> <portfolio-id>,
+                broker snaptrade import-transactions [--portfolio-id id],
 
                 help [command-name], 
                 quit/exit
@@ -470,6 +471,21 @@ class DashboardView(View):
                         f"Mapped SnapTrade account {ns.provider_account_id} "
                         f"to portfolio {ns.portfolio_id}."
                     )
+                    return self
+
+                if ns.broker_command == "import-transactions":
+                    result = self.access.broker_import_transactions(
+                        provider="snaptrade",
+                        portfolio_id=ns.portfolio_id,
+                    )
+                    print(
+                        f"Imported {result.imported_transactions} broker transaction(s) "
+                        f"into local portfolios."
+                    )
+                    if result.skipped_transactions:
+                        print(f"Skipped transactions: {result.skipped_transactions}.")
+                    if result.batch_id is not None:
+                        print(f"Batch: {result.batch_id}.")
                     return self
 
         return self # fallback
@@ -814,6 +830,13 @@ class DashboardView(View):
         )
         p_map.add_argument("provider_account_id")
         p_map.add_argument("portfolio_id", type=int)
+
+        p_import = snaptrade_subp.add_parser(
+            "import-transactions",
+            add_help=True,
+            description="Import mapped SnapTrade transactions into local portfolios.",
+        )
+        p_import.add_argument("--portfolio-id", dest="portfolio_id", type=int, default=None)
         parsers["broker"] = p
 
         return parsers

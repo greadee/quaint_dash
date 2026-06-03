@@ -10,6 +10,7 @@ from dashboard.brokers.models import (
     BrokerTransaction,
     BrokerUser,
 )
+from dashboard.brokers.portfolio import BrokerPortfolioIntegrationService
 from dashboard.brokers.repository import BrokerSyncRepository
 from dashboard.brokers.secrets import LocalSecretCipher
 from dashboard.brokers.snaptrade import SnapTradeConfig, SnapTradeProvider, compute_snaptrade_signature
@@ -42,6 +43,7 @@ def test_init_db_creates_broker_sync_tables(tmp_path):
         "broker_account",
         "broker_position_snapshot",
         "broker_transaction",
+        "broker_portfolio_txn_map",
         "broker_sync_run",
     }.issubset(tables)
     assert "encrypted_user_secret" in table_columns(db.conn, "broker_user")
@@ -353,6 +355,151 @@ def test_broker_cli_lists_and_maps_accounts(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "Mapped SnapTrade account acct-1 to portfolio 1." in out
     assert repo.list_accounts("snaptrade")[0].portfolio_id == 1
+
+
+def test_broker_portfolio_integration_imports_mapped_transactions_idempotently(tmp_path):
+    db = DB(str(tmp_path / "broker_portfolio_import.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Broker')")
+    repo = BrokerSyncRepository(db.conn)
+    repo.upsert_account(
+        BrokerAccount(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_connection_id="conn-1",
+            account_name="TFSA",
+            account_type="registered",
+            currency="CAD",
+            balance=1000.0,
+        )
+    )
+    repo.upsert_transaction(
+        BrokerTransaction(
+            provider="snaptrade",
+            provider_transaction_id="buy-1",
+            provider_account_id="acct-1",
+            txn_type="BUY",
+            trade_date=date(2026, 1, 4),
+            symbol="AAPL",
+            quantity=2.0,
+            price=200.0,
+            amount=-400.0,
+            currency="USD",
+        )
+    )
+
+    service = BrokerPortfolioIntegrationService(db.conn)
+    unmapped = service.import_mapped_transactions()
+    repo.map_account_to_portfolio("snaptrade", "acct-1", 1)
+    first = service.import_mapped_transactions()
+    second = service.import_mapped_transactions()
+
+    assert unmapped.imported_transactions == 0
+    assert first.imported_transactions == 1
+    assert first.batch_id is not None
+    assert second.imported_transactions == 0
+    assert db.conn.execute("SELECT COUNT(*) FROM txn").fetchone()[0] == 1
+    assert db.conn.execute("SELECT COUNT(*) FROM broker_portfolio_txn_map").fetchone()[0] == 1
+    txn_row = db.conn.execute(
+        "SELECT portfolio_id, txn_type, asset_id, qty, price, ccy, cash_amt FROM txn"
+    ).fetchone()
+    assert txn_row == (1, "buy", "AAPL", 2.0, 200.0, "USD", None)
+    position_row = db.conn.execute(
+        "SELECT portfolio_id, asset_id, qty, book_cost FROM position"
+    ).fetchone()
+    assert position_row == (1, "AAPL", 2.0, 400.0)
+
+
+def test_broker_portfolio_integration_normalizes_sells_and_skips_bad_asset_rows(tmp_path):
+    db = DB(str(tmp_path / "broker_portfolio_sell.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Broker')")
+    repo = BrokerSyncRepository(db.conn)
+    repo.upsert_account(
+        BrokerAccount(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_connection_id="conn-1",
+            account_name="Margin",
+            account_type="non_registered",
+            currency="CAD",
+            balance=1000.0,
+            portfolio_id=1,
+        )
+    )
+    repo.upsert_transaction(
+        BrokerTransaction(
+            provider="snaptrade",
+            provider_transaction_id="sell-1",
+            provider_account_id="acct-1",
+            txn_type="SELL",
+            trade_date=date(2026, 1, 4),
+            symbol="AAPL",
+            quantity=1.0,
+            price=220.0,
+            amount=220.0,
+            currency="USD",
+        )
+    )
+    repo.upsert_transaction(
+        BrokerTransaction(
+            provider="snaptrade",
+            provider_transaction_id="bad-1",
+            provider_account_id="acct-1",
+            txn_type="BUY",
+            trade_date=date(2026, 1, 4),
+            quantity=1.0,
+            price=100.0,
+            currency="USD",
+        )
+    )
+
+    result = BrokerPortfolioIntegrationService(db.conn).import_mapped_transactions()
+
+    assert result.imported_transactions == 1
+    assert result.skipped_transactions == 1
+    row = db.conn.execute("SELECT txn_type, asset_id, qty, price FROM txn").fetchone()
+    assert row == ("sell", "AAPL", -1.0, 220.0)
+
+
+def test_broker_cli_imports_mapped_transactions(tmp_path, capsys):
+    db = DB(str(tmp_path / "broker_cli_import.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Broker')")
+    repo = BrokerSyncRepository(db.conn)
+    repo.upsert_account(
+        BrokerAccount(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_connection_id="conn-1",
+            account_name="TFSA",
+            account_type="registered",
+            currency="CAD",
+            balance=1000.0,
+            portfolio_id=1,
+        )
+    )
+    repo.upsert_transaction(
+        BrokerTransaction(
+            provider="snaptrade",
+            provider_transaction_id="buy-1",
+            provider_account_id="acct-1",
+            txn_type="BUY",
+            trade_date=date(2026, 1, 4),
+            symbol="AAPL",
+            quantity=2.0,
+            price=200.0,
+            amount=-400.0,
+            currency="USD",
+        )
+    )
+    view = DashboardView(DashboardManager(db))
+
+    view.handle_input("broker snaptrade import-transactions --portfolio-id 1")
+    out = capsys.readouterr().out
+
+    assert "Imported 1 broker transaction(s)" in out
+    assert db.conn.execute("SELECT COUNT(*) FROM txn").fetchone()[0] == 1
 
 
 class FakeBrokerProvider:

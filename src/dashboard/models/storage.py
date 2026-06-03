@@ -444,6 +444,23 @@ class DashboardManager:
             portfolio_id,
         )
 
+    def broker_import_transactions(
+        self,
+        provider: str = "snaptrade",
+        portfolio_id: int | None = None,
+    ):
+        from dashboard.brokers.portfolio import BrokerPortfolioIntegrationService
+
+        if portfolio_id is not None and not self.conn.execute(
+            "SELECT 1 FROM portfolio WHERE portfolio_id = ?",
+            [portfolio_id],
+        ).fetchone():
+            raise ValueError(f"Portfolio not found: {portfolio_id}")
+        return BrokerPortfolioIntegrationService(self.conn).import_mapped_transactions(
+            provider=provider,
+            portfolio_id=portfolio_id,
+        )
+
     @staticmethod
     def _snaptrade_config():
         from dashboard.brokers.snaptrade import SnapTradeConfig
