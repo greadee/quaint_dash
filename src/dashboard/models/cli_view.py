@@ -10,6 +10,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 import argparse
 import shlex
+from dashboard.analytics import analytics_report_json
 from dashboard.models.storage import DashboardManager, PortfolioManager
 from dashboard.services.txn_importer import TxnImporterManual, TxnImporterCSV, tTestTxn
 
@@ -133,6 +134,9 @@ class DashboardView(View):
                 quant-refresh <ticker|all>,
                 quant-summary <ticker>,
                 live-price-stream [--include-watchlist] [--no-extended-hours],
+                analytics asset <asset-id> [--benchmark index-id],
+                analytics portfolio <portfolio-id> [--benchmark index-id],
+                analytics storage [status|enable|disable|refresh],
 
                 help [command-name], 
                 quit/exit
@@ -349,6 +353,62 @@ class DashboardView(View):
 
             return self
 
+        if cmd == "analytics":
+            if ns.analytics_command == "asset":
+                report = self.access.asset_analytics_report(
+                    ns.asset_id,
+                    benchmark_index_id=ns.benchmark,
+                )
+                if ns.json:
+                    print(analytics_report_json(report))
+                    return self
+                self._print_analytics_context(report.ai_context)
+                return self
+
+            if ns.analytics_command == "portfolio":
+                report = self.access.portfolio_analytics_report(
+                    ns.portfolio_id,
+                    benchmark_index_id=ns.benchmark,
+                )
+                if ns.json:
+                    print(analytics_report_json(report))
+                    return self
+                self._print_analytics_context(report.ai_context)
+                return self
+
+            if ns.analytics_command == "storage":
+                if ns.storage_command == "status":
+                    state = "enabled" if self.access.analytics_storage_enabled() else "disabled"
+                    print(f"Analytics storage is {state}.")
+                    return self
+
+                if ns.storage_command == "enable":
+                    self.access.set_analytics_storage_enabled(True)
+                    print("Analytics storage enabled.")
+                    return self
+
+                if ns.storage_command == "disable":
+                    self.access.set_analytics_storage_enabled(False)
+                    print("Analytics storage disabled.")
+                    return self
+
+                if ns.storage_command == "refresh":
+                    asset_ids = [asset.upper().strip() for asset in ns.asset] if ns.asset else None
+                    portfolio_ids = ns.portfolio if ns.portfolio else None
+                    result = self.access.refresh_analytics_storage(
+                        asset_ids=asset_ids,
+                        portfolio_ids=portfolio_ids,
+                        benchmark_index_id=ns.benchmark,
+                    )
+                    if result.skipped:
+                        print(f"Analytics refresh skipped: {result.reason}.")
+                    else:
+                        print(
+                            f"Analytics refresh stored {result.assets_stored} asset snapshot(s) "
+                            f"and {result.portfolios_stored} portfolio snapshot(s)."
+                        )
+                    return self
+
         return self # fallback
 
     def _handle_help(self, args: list[str]):
@@ -415,6 +475,24 @@ class DashboardView(View):
         for i, row in enumerate(rows, start=1):
             text = row[3] or row[4] or ""
             print(f"{i}. [{row[1]}] {text} - score {row[7] or 0} - {row[5] or ''}")
+
+    @staticmethod
+    def _print_analytics_context(context) -> None:
+        print(context.summary)
+        facts = [fact for fact in context.facts if fact.value is not None][:8]
+        if facts:
+            print("Facts:")
+            for fact in facts:
+                unit = f" {fact.unit}" if fact.unit else ""
+                print(f"- {fact.label}: {fact.value}{unit}")
+        if context.anomalies:
+            print("Anomalies:")
+            for anomaly in context.anomalies:
+                print(f"- [{anomaly.severity}] {anomaly.message}")
+        if context.missing_inputs:
+            print("Missing inputs:")
+            for item in context.missing_inputs:
+                print(f"- {item}")
 
     @staticmethod
     def build_dash_parsers():
@@ -555,6 +633,31 @@ class DashboardView(View):
         p.add_argument("--include-watchlist", dest="include_watchlist", action="store_true", help="Also stream active watchlist assets. Default: portfolio assets only.",)
         p.add_argument("--no-extended-hours", dest="no_extended_hours", action="store_true", help="Disable pre-market and after-hours streaming.",)
         parsers["live-price-stream"] = p
+
+        p = _NoExitParser(prog="analytics", add_help=True, description="Run analytics reports and manage optional analytics storage.")
+        analytics_subp = p.add_subparsers(dest="analytics_command", required=True)
+
+        p_asset = analytics_subp.add_parser("asset", add_help=True, description="Run analytics for one asset.")
+        p_asset.add_argument("asset_id")
+        p_asset.add_argument("--benchmark", dest="benchmark", default=None)
+        p_asset.add_argument("--json", dest="json", action="store_true")
+
+        p_portfolio = analytics_subp.add_parser("portfolio", add_help=True, description="Run analytics for one portfolio.")
+        p_portfolio.add_argument("portfolio_id", type=int)
+        p_portfolio.add_argument("--benchmark", dest="benchmark", default=None)
+        p_portfolio.add_argument("--json", dest="json", action="store_true")
+
+        p_storage = analytics_subp.add_parser("storage", add_help=True, description="Manage optional analytics storage.")
+        storage_subp = p_storage.add_subparsers(dest="storage_command", required=True)
+        storage_subp.add_parser("status", add_help=True, description="Show analytics storage status.")
+        storage_subp.add_parser("enable", add_help=True, description="Enable analytics snapshot storage.")
+        storage_subp.add_parser("disable", add_help=True, description="Disable analytics snapshot storage.")
+        p_refresh = storage_subp.add_parser("refresh", add_help=True, description="Refresh due analytics snapshots.")
+        p_refresh.add_argument("--asset", dest="asset", action="append", default=None)
+        p_refresh.add_argument("--portfolio", dest="portfolio", action="append", type=int, default=None)
+        p_refresh.add_argument("--benchmark", dest="benchmark", default=None)
+
+        parsers["analytics"] = p
 
         return parsers
 

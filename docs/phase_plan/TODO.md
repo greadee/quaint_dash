@@ -1,5 +1,37 @@
 # Investment Dashboard To-Do List
 
+## Phase 3 - Analytics
+Design Decisions: [ADR's](../adr/adr_ph3.md)
+
+### Completed:
+- Calculation-first analytics module over stored data
+    - Risk and return metrics
+    - Relative benchmark metrics
+    - Dividend discount model
+    - Discounted cash flow model
+    - Implied priced-in growth
+    - Valuation depth metrics from stored statement JSON
+    - ETF expense, distribution, tracking-error, exposure, holding, and overlap analytics
+    - Forecast metrics with blended expected CAGR and simulation bands
+    - AI-ready facts, explanations, anomaly flags, and snapshot comparisons
+    - Portfolio weighted return series
+    - Portfolio valuation rollups and holding expected-return contributions
+    - Default benchmark selection by ETF profile, benchmark metadata, geography, and currency
+    - Stable analytics report payload schema
+- Data coverage and missing-input reporting
+- Optional analytics snapshot storage
+    - Disabled by default
+    - Stores compact metric columns and JSON payloads when enabled
+    - Refreshes daily
+    - Refreshes same-day portfolio snapshots when portfolio state changes
+- Dashboard CLI analytics commands
+    - Asset and portfolio analytics reports
+    - JSON report output
+    - Storage status, enable, disable, and refresh
+
+### Tasks:
+- Add migration/schema docs for analytics snapshot tables once the storage surface is promoted beyond service-level opt-in
+
 ## Phase 2 - Metric Ingestion
 Design Decisions: [ADR's](../adr/adr_ph2.md)
 - Leave (Non-Core) index snapshot ingestion for later in the phase:

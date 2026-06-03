@@ -7,6 +7,7 @@ This test suite works on two databases (dashes), one empty and one populated.
     Avoid booting the cli for every test by calling _cli_iter which uses the command line's handling logic/function.
 """
 import pytest
+import json
 from dashboard.db.db_conn import DB, init_db
 from dashboard.models.storage import DashboardManager
 from dashboard.models.cli_view import DashboardView, PortfolioView
@@ -60,6 +61,7 @@ def empty_dash(tmp_path) -> DashboardView:
     ("help create", ["usage: create"]),
     ("help open", ["usage: open"]),
     ("help import", ["usage: import"]),
+    ("help analytics", ["usage: analytics"]),
     ("help quit", ["exit the program"]),
     ("help nope", ["No such command"]),
     ("nope", ["Unknown command: nope"]),
@@ -240,6 +242,80 @@ def test_bad_date_filter(popl_dash, capsys):
     _cli_iter(popl_dash, "list txn --day 2026-01-02")  # YYYY-MM-DD when MM-DD-YYYY expected
     out = capsys.readouterr().out
     assert "Date" in out and "invalid" in out
+
+
+def test_analytics_asset_command_and_storage_toggle(popl_dash, capsys):
+    popl_dash.access.conn.execute(
+        """
+        INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+        VALUES
+            ('AAPL', DATE '2026-01-01', 100, 100, 'test'),
+            ('AAPL', DATE '2026-01-02', 105, 105, 'test')
+        """
+    )
+
+    _cli_iter(popl_dash, "analytics asset AAPL")
+    out = capsys.readouterr().out
+    assert "AAPL has latest price" in out
+    assert "Facts:" in out
+
+    _cli_iter(popl_dash, "analytics storage status")
+    out = capsys.readouterr().out
+    assert "Analytics storage is disabled" in out
+
+    _cli_iter(popl_dash, "analytics storage enable")
+    out = capsys.readouterr().out
+    assert "Analytics storage enabled" in out
+
+    _cli_iter(popl_dash, "analytics storage refresh --asset AAPL")
+    out = capsys.readouterr().out
+    assert "asset snapshot" in out
+
+    _cli_iter(popl_dash, "analytics storage disable")
+    out = capsys.readouterr().out
+    assert "Analytics storage disabled" in out
+
+
+def test_analytics_asset_command_can_emit_json_payload(popl_dash, capsys):
+    popl_dash.access.conn.execute(
+        """
+        INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+        VALUES ('AAPL', DATE '2026-01-01', 100, 100, 'test')
+        """
+    )
+
+    _cli_iter(popl_dash, "analytics asset AAPL --json")
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+
+    assert payload["schema_version"] == "phase3.analytics.v1"
+    assert payload["report_type"] == "asset"
+    assert payload["subject_id"] == "AAPL"
+    assert payload["report"]["asset_id"] == "AAPL"
+
+
+def test_analytics_portfolio_command(popl_dash, capsys):
+    popl_dash.access.update_positions()
+    start = "2026-01-01"
+    rows = [
+        ("AAPL", start, 100.0),
+        ("AAPL", "2026-01-02", 105.0),
+        ("MSFT", start, 200.0),
+        ("MSFT", "2026-01-02", 202.0),
+    ]
+    for asset_id, day, close in rows:
+        popl_dash.access.conn.execute(
+            """
+            INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+            VALUES (?, ?, ?, ?, 'test')
+            """,
+            [asset_id, day, close, close],
+        )
+
+    _cli_iter(popl_dash, "analytics portfolio 1")
+    out = capsys.readouterr().out
+    assert "Portfolio 1 has market value" in out
+    assert "Facts:" in out
 
 
 #####################################################################
