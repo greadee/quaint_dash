@@ -40,6 +40,7 @@ def test_init_db_creates_broker_sync_tables(tmp_path):
 
     assert {
         "broker_user",
+        "broker_storage_config",
         "broker_connection",
         "broker_account",
         "broker_position_snapshot",
@@ -133,6 +134,28 @@ def test_broker_repository_persists_user_connection_account_and_sync_run(tmp_pat
         [sync_run_id],
     ).fetchone()
     assert row == ("done", "default", 1, 2, 3)
+
+
+def test_broker_repository_can_disable_raw_payload_storage(tmp_path):
+    db = DB(str(tmp_path / "broker_raw_payload_toggle.db"))
+    init_db(db)
+    repo = BrokerSyncRepository(db.conn)
+
+    assert repo.raw_payload_storage_enabled() is True
+    repo.set_raw_payload_storage_enabled(False)
+    repo.upsert_connection(
+        BrokerConnection(
+            provider="snaptrade",
+            provider_connection_id="conn-1",
+            provider_user_id="snap-user-1",
+            institution_name="Wealthsimple",
+            status="connected",
+            raw_payload={"secret": "do-not-store"},
+        )
+    )
+
+    assert repo.raw_payload_storage_enabled() is False
+    assert repo.list_connections("snaptrade")[0].raw_payload == {}
 
 
 def test_fake_broker_provider_outputs_can_be_persisted(tmp_path):
@@ -772,6 +795,23 @@ def test_broker_cli_runs_due_sync(tmp_path, capsys):
 
     assert "checked 3 user(s) and synced 2 user(s)" in out
     assert "Saw 4 account(s), 5 position(s), and 6 transaction(s)." in out
+
+
+def test_broker_cli_toggles_raw_payload_storage(tmp_path, capsys):
+    db = DB(str(tmp_path / "broker_cli_storage.db"))
+    init_db(db)
+    view = DashboardView(DashboardManager(db))
+
+    view.handle_input("broker storage status")
+    view.handle_input("broker storage disable-raw")
+    view.handle_input("broker storage status")
+    view.handle_input("broker storage enable-raw")
+    out = capsys.readouterr().out
+
+    assert "Broker raw payload storage is enabled." in out
+    assert "Broker raw payload storage disabled." in out
+    assert "Broker raw payload storage is disabled." in out
+    assert "Broker raw payload storage enabled." in out
 
 
 class FakeBrokerProvider:

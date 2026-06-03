@@ -21,6 +21,31 @@ class BrokerSyncRepository:
     def __init__(self, conn) -> None:
         self.conn = conn
 
+    def raw_payload_storage_enabled(self) -> bool:
+        row = self.conn.execute(
+            """
+            SELECT config_value
+            FROM broker_storage_config
+            WHERE config_key = 'raw_payloads_enabled'
+            """
+        ).fetchone()
+        return not row or str(row[0]).lower() == "true"
+
+    def set_raw_payload_storage_enabled(self, enabled: bool) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO broker_storage_config(config_key, config_value, updated_at)
+            VALUES ('raw_payloads_enabled', ?, now())
+            ON CONFLICT(config_key) DO UPDATE SET
+                config_value = excluded.config_value,
+                updated_at = now()
+            """,
+            ["true" if enabled else "false"],
+        )
+
+    def _raw_json(self, value: dict[str, Any]) -> str:
+        return _json_dumps(value) if self.raw_payload_storage_enabled() else "{}"
+
     def upsert_broker_user(
         self,
         user: BrokerUser,
@@ -207,7 +232,7 @@ class BrokerSyncRepository:
                 connection.provider_user_id,
                 connection.institution_name,
                 connection.status,
-                _json_dumps(connection.raw_payload),
+                self._raw_json(connection.raw_payload),
             ],
         )
         row = self.conn.execute(
@@ -291,7 +316,7 @@ class BrokerSyncRepository:
                 account.currency,
                 account.balance,
                 account.portfolio_id,
-                _json_dumps(account.raw_payload),
+                self._raw_json(account.raw_payload),
             ],
         )
 
@@ -386,7 +411,7 @@ class BrokerSyncRepository:
                 position.quantity,
                 position.market_value,
                 position.currency,
-                _json_dumps(position.raw_payload),
+                self._raw_json(position.raw_payload),
             ],
         )
 
@@ -434,7 +459,7 @@ class BrokerSyncRepository:
                 transaction.price,
                 transaction.amount,
                 transaction.currency,
-                _json_dumps(transaction.raw_payload),
+                self._raw_json(transaction.raw_payload),
             ],
         )
 

@@ -144,6 +144,7 @@ class DashboardView(View):
                 broker snaptrade map-account <account-id> <portfolio-id>,
                 broker snaptrade import-transactions [--portfolio-id id],
                 broker snaptrade sync-due [--max-users n] [--force],
+                broker storage [status|enable-raw|disable-raw],
 
                 help [command-name], 
                 quit/exit
@@ -417,6 +418,20 @@ class DashboardView(View):
                     return self
 
         if cmd == "broker":
+            if ns.broker_provider == "storage":
+                if ns.storage_command == "status":
+                    state = "enabled" if self.access.broker_raw_payload_storage_enabled() else "disabled"
+                    print(f"Broker raw payload storage is {state}.")
+                    return self
+                if ns.storage_command == "enable-raw":
+                    self.access.set_broker_raw_payload_storage_enabled(True)
+                    print("Broker raw payload storage enabled.")
+                    return self
+                if ns.storage_command == "disable-raw":
+                    self.access.set_broker_raw_payload_storage_enabled(False)
+                    print("Broker raw payload storage disabled.")
+                    return self
+
             if ns.broker_provider == "snaptrade":
                 if ns.broker_command == "register-user":
                     user = self.access.broker_register_snaptrade_user(
@@ -800,6 +815,16 @@ class DashboardView(View):
             description="Manage read-only broker account links.",
         )
         broker_subp = p.add_subparsers(dest="broker_provider", required=True)
+        p_storage = broker_subp.add_parser(
+            "storage",
+            add_help=True,
+            description="Manage optional broker raw payload storage.",
+        )
+        storage_subp = p_storage.add_subparsers(dest="storage_command", required=True)
+        storage_subp.add_parser("status", add_help=True)
+        storage_subp.add_parser("enable-raw", add_help=True)
+        storage_subp.add_parser("disable-raw", add_help=True)
+
         p_snaptrade = broker_subp.add_parser(
             "snaptrade",
             add_help=True,

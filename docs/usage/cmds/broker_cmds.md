@@ -25,6 +25,20 @@ BROKER_SYNC_MIN_AGE_HOURS=24
 
 When `BROKER_SYNC_ON_STARTUP=true`, dashboard startup runs `broker snaptrade sync-due` behavior automatically. This refreshes provider-side broker data only; it does not import transactions into portfolios.
 
+## Broker Storage
+
+```
+broker storage status
+broker storage enable-raw
+broker storage disable-raw
+```
+
+Controls whether raw provider payload JSON is retained in broker sync tables.
+
+- Raw payload storage is enabled by default.
+- Disabling raw storage keeps normalized broker records needed for sync, mapping, and imports.
+- Disabling raw storage does not delete previously stored raw payloads.
+
 ## Register User
 
 ```

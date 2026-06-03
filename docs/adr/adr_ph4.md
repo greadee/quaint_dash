@@ -186,6 +186,28 @@ The same endpoint documents common activity types such as `BUY`, `SELL`, `DIVIDE
 - `INTEREST` becomes interest.
 - Unsupported asset transactions without a symbol are skipped during portfolio import.
 
+## ADR-072B: Optional Raw Provider Payload Storage
+
+**Decision:** Broker sync keeps normalized records required for app behavior, while raw provider payload JSON can be disabled by user configuration.
+
+**Context:**
+Raw provider payloads help debugging, audit review, and later AI context. They can also increase local storage and may contain more provider-specific account detail than some users want to retain.
+
+**Rationale:**
+- Preserves the normalized data needed for sync, mapping, and idempotent imports.
+- Gives users a storage/privacy control without disabling broker linking entirely.
+- Keeps default behavior useful for debugging during early broker integration.
+- Avoids erasing existing audit history when the toggle is changed.
+
+**Implementation Notes:**
+- `broker_storage_config.raw_payloads_enabled` controls future raw payload writes.
+- CLI commands:
+  - `broker storage status`
+  - `broker storage enable-raw`
+  - `broker storage disable-raw`
+- Disabling raw payload storage stores `{}` in future `raw_json` fields.
+- The toggle does not delete raw payloads already written.
+
 ## ADR-073: Daily Due Sync Scheduler
 
 **Decision:** Broker sync can be run through a due-user scheduler that refreshes active users whose latest successful sync is older than the configured freshness window. The dashboard can also run that due sync automatically on startup when explicitly enabled by environment configuration.

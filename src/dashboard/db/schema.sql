@@ -182,6 +182,12 @@ CREATE TABLE IF NOT EXISTS broker_user (
     PRIMARY KEY (provider, user_key)
 );
 
+CREATE TABLE IF NOT EXISTS broker_storage_config (
+    config_key TEXT PRIMARY KEY,
+    config_value TEXT NOT NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS broker_connection (
     connection_id BIGINT PRIMARY KEY DEFAULT nextval('seq_broker_connection_id'),
     provider TEXT NOT NULL,

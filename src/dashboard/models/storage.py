@@ -536,6 +536,16 @@ class DashboardManager:
             portfolio_id=portfolio_id,
         )
 
+    def broker_raw_payload_storage_enabled(self) -> bool:
+        from dashboard.brokers.repository import BrokerSyncRepository
+
+        return BrokerSyncRepository(self.conn).raw_payload_storage_enabled()
+
+    def set_broker_raw_payload_storage_enabled(self, enabled: bool) -> None:
+        from dashboard.brokers.repository import BrokerSyncRepository
+
+        BrokerSyncRepository(self.conn).set_raw_payload_storage_enabled(enabled)
+
     @staticmethod
     def _snaptrade_config():
         from dashboard.brokers.snaptrade import SnapTradeConfig
