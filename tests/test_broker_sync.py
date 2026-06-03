@@ -257,18 +257,20 @@ def test_snaptrade_provider_maps_connections_accounts_positions_and_transactions
                     "last_updated": "2026-01-05T12:00:00Z",
                 }
             ],
-            [
-                {
-                    "id": "act-1",
-                    "type": "BUY",
-                    "trade_date": "2026-01-04",
-                    "symbol": {"symbol": "AAPL"},
-                    "units": 2,
-                    "price": 200,
-                    "amount": -400,
-                    "currency": "USD",
-                }
-            ],
+            {
+                "data": [
+                    {
+                        "id": "act-1",
+                        "type": "BUY",
+                        "trade_date": "2026-01-04",
+                        "symbol": {"symbol": "AAPL"},
+                        "units": 2,
+                        "price": 200,
+                        "amount": -400,
+                        "currency": "USD",
+                    }
+                ]
+            },
         ]
     )
     provider = SnapTradeProvider(
@@ -294,6 +296,67 @@ def test_snaptrade_provider_maps_connections_accounts_positions_and_transactions
     activities_call = session.calls[-1]
     assert ("startDate", "2026-01-01") in activities_call["params"]
     assert ("endDate", "2026-01-05") in activities_call["params"]
+
+
+def test_snaptrade_provider_paginates_account_activities():
+    session = FakeSnapTradeSession(
+        [
+            {
+                "data": [
+                    {
+                        "id": "act-1",
+                        "type": "BUY",
+                        "trade_date": "2026-01-04",
+                        "symbol": {"symbol": "AAPL"},
+                        "units": 1,
+                        "price": 200,
+                        "currency": "USD",
+                    },
+                    {
+                        "id": "act-2",
+                        "type": "SELL",
+                        "trade_date": "2026-01-05",
+                        "symbol": {"symbol": "AAPL"},
+                        "units": 1,
+                        "price": 210,
+                        "currency": "USD",
+                    },
+                ]
+            },
+            {
+                "data": [
+                    {
+                        "id": "act-3",
+                        "type": "DIVIDEND",
+                        "trade_date": "2026-01-06",
+                        "symbol": {"symbol": "AAPL"},
+                        "amount": 5,
+                        "currency": "USD",
+                    }
+                ]
+            },
+        ]
+    )
+    provider = SnapTradeProvider(
+        SnapTradeConfig(
+            "client-id",
+            "consumer-key",
+            base_url="https://api.test/api/v1",
+            activity_page_limit=2,
+        ),
+        session=session,
+        clock=lambda: 1_635_790_389,
+    )
+
+    rows = provider.list_transactions(
+        BrokerUser("snaptrade", "default", "user-1", "secret"),
+        BrokerAccount("snaptrade", "acct-1", "conn-1", "TFSA", "registered", "CAD", 0),
+    )
+
+    assert [row.provider_transaction_id for row in rows] == ["act-1", "act-2", "act-3"]
+    assert ("offset", "0") in session.calls[0]["params"]
+    assert ("limit", "2") in session.calls[0]["params"]
+    assert ("offset", "2") in session.calls[1]["params"]
 
 
 def test_broker_sync_service_persists_provider_data_and_sync_run(tmp_path):
@@ -594,6 +657,49 @@ def test_broker_portfolio_integration_normalizes_sells_and_skips_bad_asset_rows(
     assert result.skipped_transactions == 1
     row = db.conn.execute("SELECT txn_type, asset_id, qty, price FROM txn").fetchone()
     assert row == ("sell", "AAPL", -1.0, 220.0)
+
+
+def test_broker_portfolio_integration_normalizes_cash_and_reinvestment_types(tmp_path):
+    db = DB(str(tmp_path / "broker_portfolio_activity_types.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Broker')")
+    repo = BrokerSyncRepository(db.conn)
+    repo.upsert_account(
+        BrokerAccount(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_connection_id="conn-1",
+            account_name="TFSA",
+            account_type="registered",
+            currency="CAD",
+            balance=1000.0,
+            portfolio_id=1,
+        )
+    )
+    for txn in [
+        BrokerTransaction("snaptrade", "rei-1", "acct-1", "REI", date(2026, 1, 1), "AAPL", None, 1, 100, None, "USD"),
+        BrokerTransaction("snaptrade", "fee-1", "acct-1", "FEE", date(2026, 1, 2), amount=-5, currency="CAD"),
+        BrokerTransaction("snaptrade", "tax-1", "acct-1", "TAX", date(2026, 1, 3), amount=2, currency="CAD"),
+        BrokerTransaction("snaptrade", "int-1", "acct-1", "INTEREST", date(2026, 1, 4), amount=3, currency="CAD"),
+    ]:
+        repo.upsert_transaction(txn)
+
+    result = BrokerPortfolioIntegrationService(db.conn).import_mapped_transactions()
+    rows = db.conn.execute(
+        """
+        SELECT txn_type, asset_id, qty, price, cash_amt
+        FROM txn
+        ORDER BY time_stamp, txn_id
+        """
+    ).fetchall()
+
+    assert result.imported_transactions == 4
+    assert rows == [
+        ("buy", "AAPL", 1.0, 100.0, None),
+        ("withdrawal", None, None, None, -5.0),
+        ("withdrawal", None, None, None, -2.0),
+        ("interest", None, None, None, 3.0),
+    ]
 
 
 def test_broker_cli_imports_mapped_transactions(tmp_path, capsys):

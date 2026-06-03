@@ -163,6 +163,29 @@ Local portfolio analytics depend on `txn` and `position`. Automatically importin
   - cash amount is reserved for cash-like events and dividend income
 - After import, derived positions and portfolio tickers are refreshed.
 
+## ADR-072A: Paginated Activity Sync and Broker Transaction Normalization
+
+**Decision:** Broker transaction sync must retrieve all SnapTrade activity pages and normalize common provider activity types into the local transaction vocabulary.
+
+**Context:**
+SnapTrade documents that account activities are paginated, default to 1000 rows, return a maximum of 1000 transactions per request, and support `offset` and `limit` query parameters: https://docs.snaptrade.com/reference/Account%20Information/AccountInformation_getAccountActivities
+
+The same endpoint documents common activity types such as `BUY`, `SELL`, `DIVIDEND`, `CONTRIBUTION`, `WITHDRAWAL`, `REI`, `STOCK_DIVIDEND`, `INTEREST`, `FEE`, `TAX`, `TRANSFER`, and split/option events: https://docs.snaptrade.com/reference/Account%20Information/AccountInformation_getAccountActivities
+
+**Rationale:**
+- Large accounts can exceed a single response page.
+- Broker activity categories are broader than the local transaction vocabulary.
+- Skipping or misclassifying common cash events would distort analytics.
+- Keeping unknown activity conservative is better than inventing unsupported local semantics.
+
+**Implementation Notes:**
+- `SnapTradeProvider.list_transactions()` loops with `offset` and `limit` until the final partial page.
+- `SNAPTRADE_ACTIVITY_PAGE_LIMIT` can override the default page limit for testing or tuning.
+- `REI` and stock-dividend-like activity becomes a local buy when symbol, quantity, and price are available.
+- `FEE` and `TAX` become withdrawals.
+- `INTEREST` becomes interest.
+- Unsupported asset transactions without a symbol are skipped during portfolio import.
+
 ## ADR-073: Daily Due Sync Scheduler
 
 **Decision:** Broker sync can be run through a due-user scheduler that refreshes active users whose latest successful sync is older than the configured freshness window.

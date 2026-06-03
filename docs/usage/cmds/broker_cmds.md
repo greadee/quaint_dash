@@ -82,6 +82,8 @@ Fetches and stores read-only broker data:
 - account activities/transactions
 - sync run status
 
+Account activities are fetched page by page so large accounts are not limited to the first provider response.
+
 This does not import anything into local portfolios.
 
 ## Sync Due Broker Users

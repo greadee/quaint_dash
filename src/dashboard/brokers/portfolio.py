@@ -237,7 +237,7 @@ def _normalize_broker_transaction(row: tuple) -> _NormalizedBrokerTxn | None:
         return None
     if txn_type in {"buy", "sell"} and (qty is None or price is None):
         return None
-    if txn_type in {"contribution", "withdrawal"} and cash_amt is None:
+    if txn_type in {"contribution", "withdrawal", "interest"} and cash_amt is None:
         return None
 
     return _NormalizedBrokerTxn(
@@ -259,17 +259,23 @@ def _normalize_broker_transaction(row: tuple) -> _NormalizedBrokerTxn | None:
 
 def _normalize_type(value) -> str:
     text = str(value or "").strip().lower().replace("_", " ")
+    if text in {"rei", "dividend reinvestment"}:
+        return "buy"
     if any(token in text for token in ("buy", "purchase")):
         return "buy"
     if any(token in text for token in ("sell", "sale")):
         return "sell"
+    if "stock dividend" in text:
+        return "buy"
     if "dividend" in text or text in {"div"}:
         return "dividend"
     if any(token in text for token in ("deposit", "contribution", "transfer in")):
         return "contribution"
     if any(token in text for token in ("withdraw", "transfer out")):
         return "withdrawal"
-    if "interest" in text:
+    if any(token in text for token in ("fee", "tax")):
+        return "withdrawal"
+    if any(token in text for token in ("interest", "cash")):
         return "interest"
     return "interest"
 
@@ -295,6 +301,10 @@ def _normalize_cash_amount(txn_type: str, amount, qty: float | None, price: floa
         return None
     cash_amt = _float_or_none(amount)
     if cash_amt is not None:
+        if txn_type == "withdrawal":
+            return -abs(cash_amt)
+        if txn_type in {"contribution", "dividend", "interest"}:
+            return abs(cash_amt)
         return cash_amt
     if txn_type == "dividend" and qty is not None and price is not None:
         return abs(qty * price)

@@ -40,6 +40,7 @@ class SnapTradeConfig:
     consumer_key: str
     base_url: str = SNAPTRADE_API_BASE_URL
     timeout_seconds: float = 20.0
+    activity_page_limit: int = 1000
 
     @classmethod
     def from_env(cls) -> "SnapTradeConfig":
@@ -55,6 +56,7 @@ class SnapTradeConfig:
             consumer_key=consumer_key,
             base_url=os.getenv("SNAPTRADE_BASE_URL", SNAPTRADE_API_BASE_URL).rstrip("/"),
             timeout_seconds=float(os.getenv("SNAPTRADE_TIMEOUT_SECONDS", "20")),
+            activity_page_limit=int(os.getenv("SNAPTRADE_ACTIVITY_PAGE_LIMIT", "1000")),
         )
 
 
@@ -218,18 +220,32 @@ class SnapTradeProvider:
         start_date=None,
         end_date=None,
     ) -> list[BrokerTransaction]:
-        query_params: list[tuple[str, str]] = []
+        base_params: list[tuple[str, str]] = []
         if start_date is not None:
-            query_params.append(("startDate", start_date.isoformat()))
+            base_params.append(("startDate", start_date.isoformat()))
         if end_date is not None:
-            query_params.append(("endDate", end_date.isoformat()))
-        data = self._request(
-            "GET",
-            f"/accounts/{account.provider_account_id}/activities",
-            query_params=query_params,
-            user=user,
-        )
-        rows = _require_list(data, "activities")
+            base_params.append(("endDate", end_date.isoformat()))
+
+        rows: list[dict[str, Any]] = []
+        offset = 0
+        limit = self.config.activity_page_limit
+        while True:
+            query_params = [
+                *base_params,
+                ("offset", str(offset)),
+                ("limit", str(limit)),
+            ]
+            data = self._request(
+                "GET",
+                f"/accounts/{account.provider_account_id}/activities",
+                query_params=query_params,
+                user=user,
+            )
+            page_rows = _activity_rows(data)
+            rows.extend(page_rows)
+            if len(page_rows) < limit:
+                break
+            offset += limit
         return [_transaction_from_snaptrade(row, account.provider_account_id) for row in rows]
 
     def disconnect(self, user: BrokerUser, connection: BrokerConnection) -> None:
@@ -292,6 +308,14 @@ def _require_list(data: Any, label: str) -> list[dict[str, Any]]:
     if not isinstance(data, list):
         raise SnapTradeError(f"SnapTrade {label} response was not a list.")
     return [row for row in data if isinstance(row, dict)]
+
+
+def _activity_rows(data: Any) -> list[dict[str, Any]]:
+    if isinstance(data, dict):
+        rows = data.get("data")
+    else:
+        rows = data
+    return _require_list(rows, "activities")
 
 
 def _connection_from_snaptrade(row: dict[str, Any], provider_user_id: str) -> BrokerConnection:
