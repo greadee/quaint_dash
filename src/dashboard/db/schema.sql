@@ -163,6 +163,111 @@ CREATE TABLE IF NOT EXISTS txn (
 CREATE INDEX IF NOT EXISTS portolioTxn_by_asset ON txn(portfolio_id, asset_id);
 
 --------------------------
+--      broker sync domain
+-------------------------
+
+CREATE SEQUENCE IF NOT EXISTS seq_broker_connection_id START 1;
+CREATE SEQUENCE IF NOT EXISTS seq_broker_sync_run_id START 1;
+
+CREATE TABLE IF NOT EXISTS broker_user (
+    provider TEXT NOT NULL,
+    user_key TEXT NOT NULL,
+    provider_user_id TEXT NOT NULL,
+    encrypted_user_secret TEXT NOT NULL,
+    secret_cipher TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (provider, user_key)
+);
+
+CREATE TABLE IF NOT EXISTS broker_connection (
+    connection_id BIGINT PRIMARY KEY DEFAULT nextval('seq_broker_connection_id'),
+    provider TEXT NOT NULL,
+    provider_connection_id TEXT NOT NULL,
+    provider_user_id TEXT,
+    institution_name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    raw_json TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    UNIQUE (provider, provider_connection_id)
+);
+
+CREATE TABLE IF NOT EXISTS broker_account (
+    provider TEXT NOT NULL,
+    provider_account_id TEXT NOT NULL,
+    provider_connection_id TEXT NOT NULL,
+    account_name TEXT,
+    account_type TEXT,
+    currency TEXT,
+    balance DOUBLE PRECISION,
+    portfolio_id BIGINT,
+    raw_json TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (provider, provider_account_id),
+    FOREIGN KEY (portfolio_id) REFERENCES portfolio(portfolio_id)
+);
+
+CREATE TABLE IF NOT EXISTS broker_position_snapshot (
+    provider TEXT NOT NULL,
+    provider_account_id TEXT NOT NULL,
+    provider_position_id TEXT NOT NULL,
+    as_of_date DATE NOT NULL,
+    asset_id TEXT,
+    symbol TEXT,
+    description TEXT,
+    quantity DOUBLE PRECISION,
+    market_value DOUBLE PRECISION,
+    currency TEXT,
+    raw_json TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (provider, provider_account_id, provider_position_id, as_of_date),
+    FOREIGN KEY (asset_id) REFERENCES asset(asset_id)
+);
+
+CREATE TABLE IF NOT EXISTS broker_transaction (
+    provider TEXT NOT NULL,
+    provider_transaction_id TEXT NOT NULL,
+    provider_account_id TEXT NOT NULL,
+    trade_date DATE NOT NULL,
+    txn_type TEXT NOT NULL,
+    asset_id TEXT,
+    symbol TEXT,
+    quantity DOUBLE PRECISION,
+    price DOUBLE PRECISION,
+    amount DOUBLE PRECISION,
+    currency TEXT,
+    raw_json TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (provider, provider_transaction_id),
+    FOREIGN KEY (asset_id) REFERENCES asset(asset_id)
+);
+
+CREATE TABLE IF NOT EXISTS broker_sync_run (
+    sync_run_id BIGINT PRIMARY KEY DEFAULT nextval('seq_broker_sync_run_id'),
+    provider TEXT NOT NULL,
+    connection_id BIGINT,
+    status TEXT NOT NULL,
+    started_at TIMESTAMP NOT NULL DEFAULT now(),
+    completed_at TIMESTAMP,
+    accounts_seen BIGINT NOT NULL DEFAULT 0,
+    positions_seen BIGINT NOT NULL DEFAULT 0,
+    transactions_seen BIGINT NOT NULL DEFAULT 0,
+    error_message TEXT,
+
+    FOREIGN KEY (connection_id) REFERENCES broker_connection(connection_id)
+);
+
+--------------------------
 --      ingestion domain a
 -------------------------
 
