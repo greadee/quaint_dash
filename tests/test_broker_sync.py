@@ -12,6 +12,7 @@ from dashboard.brokers.models import (
 )
 from dashboard.brokers.portfolio import BrokerPortfolioIntegrationService
 from dashboard.brokers.repository import BrokerSyncRepository
+from dashboard.brokers.scheduler import BrokerSyncScheduler
 from dashboard.brokers.secrets import LocalSecretCipher
 from dashboard.brokers.snaptrade import SnapTradeConfig, SnapTradeProvider, compute_snaptrade_signature
 from dashboard.brokers.sync import BrokerSyncService
@@ -112,7 +113,7 @@ def test_broker_repository_persists_user_connection_account_and_sync_run(tmp_pat
     assert connections[0].raw_payload["institution"] == "Wealthsimple"
     assert accounts[0].portfolio_id == 1
 
-    sync_run_id = repo.create_sync_run("snaptrade", connection_id)
+    sync_run_id = repo.create_sync_run("snaptrade", connection_id, user_key="default")
     repo.finish_sync_run(
         sync_run_id,
         BrokerSyncResult(
@@ -125,13 +126,13 @@ def test_broker_repository_persists_user_connection_account_and_sync_run(tmp_pat
     )
     row = db.conn.execute(
         """
-        SELECT status, accounts_seen, positions_seen, transactions_seen
+        SELECT status, user_key, accounts_seen, positions_seen, transactions_seen
         FROM broker_sync_run
         WHERE sync_run_id = ?
         """,
         [sync_run_id],
     ).fetchone()
-    assert row == ("done", 1, 2, 3)
+    assert row == ("done", "default", 1, 2, 3)
 
 
 def test_fake_broker_provider_outputs_can_be_persisted(tmp_path):
@@ -290,6 +291,47 @@ def test_broker_sync_service_persists_provider_data_and_sync_run(tmp_path):
     assert db.conn.execute("SELECT COUNT(*) FROM broker_position_snapshot").fetchone()[0] == 1
     assert db.conn.execute("SELECT COUNT(*) FROM broker_transaction").fetchone()[0] == 1
     assert db.conn.execute("SELECT status FROM broker_sync_run").fetchone()[0] == "done"
+    assert db.conn.execute("SELECT user_key FROM broker_sync_run").fetchone()[0] == "default"
+
+
+def test_broker_sync_scheduler_syncs_due_users_once_per_day(tmp_path):
+    db = DB(str(tmp_path / "broker_scheduler.db"))
+    init_db(db)
+    repo = BrokerSyncRepository(db.conn)
+    cipher = LocalSecretCipher("test-key")
+    repo.upsert_broker_user(
+        BrokerUser("snaptrade", "default", "user-1", "secret"),
+        cipher,
+    )
+    scheduler = BrokerSyncScheduler(repo, FakeBrokerProvider(), cipher)
+
+    first = scheduler.sync_due_users()
+    second = scheduler.sync_due_users()
+
+    assert first.users_checked == 1
+    assert first.users_synced == 1
+    assert second.users_checked == 0
+    assert second.users_synced == 0
+    assert db.conn.execute("SELECT COUNT(*) FROM broker_sync_run").fetchone()[0] == 1
+
+
+def test_broker_sync_scheduler_force_resyncs_active_users(tmp_path):
+    db = DB(str(tmp_path / "broker_scheduler_force.db"))
+    init_db(db)
+    repo = BrokerSyncRepository(db.conn)
+    cipher = LocalSecretCipher("test-key")
+    repo.upsert_broker_user(
+        BrokerUser("snaptrade", "default", "user-1", "secret"),
+        cipher,
+    )
+    scheduler = BrokerSyncScheduler(repo, FakeBrokerProvider(), cipher)
+    scheduler.sync_due_users()
+
+    forced = scheduler.sync_due_users(force=True)
+
+    assert forced.users_checked == 1
+    assert forced.users_synced == 1
+    assert db.conn.execute("SELECT COUNT(*) FROM broker_sync_run").fetchone()[0] == 2
 
 
 def test_broker_cli_prints_snaptrade_read_only_portal(tmp_path, capsys):
@@ -500,6 +542,38 @@ def test_broker_cli_imports_mapped_transactions(tmp_path, capsys):
 
     assert "Imported 1 broker transaction(s)" in out
     assert db.conn.execute("SELECT COUNT(*) FROM txn").fetchone()[0] == 1
+
+
+def test_broker_cli_runs_due_sync(tmp_path, capsys):
+    db = DB(str(tmp_path / "broker_cli_due_sync.db"))
+    init_db(db)
+    manager = DashboardManager(db)
+    view = DashboardView(manager)
+
+    def fake_sync_due(max_users=None, min_age_hours=24, force=False):
+        assert max_users == 2
+        assert min_age_hours == 1
+        assert force is True
+        return type(
+            "DueSync",
+            (),
+            {
+                "users_checked": 3,
+                "users_synced": 2,
+                "accounts_seen": 4,
+                "positions_seen": 5,
+                "transactions_seen": 6,
+                "failed_connections": 0,
+            },
+        )()
+
+    manager.broker_snaptrade_sync_due = fake_sync_due
+
+    view.handle_input("broker snaptrade sync-due --max-users 2 --min-age-hours 1 --force")
+    out = capsys.readouterr().out
+
+    assert "checked 3 user(s) and synced 2 user(s)" in out
+    assert "Saw 4 account(s), 5 position(s), and 6 transaction(s)." in out
 
 
 class FakeBrokerProvider:

@@ -143,6 +143,7 @@ class DashboardView(View):
                 broker snaptrade accounts,
                 broker snaptrade map-account <account-id> <portfolio-id>,
                 broker snaptrade import-transactions [--portfolio-id id],
+                broker snaptrade sync-due [--max-users n] [--force],
 
                 help [command-name], 
                 quit/exit
@@ -451,6 +452,25 @@ class DashboardView(View):
                     print(
                         f"Broker sync saw {result.connections_seen} connection(s), "
                         f"{result.accounts_seen} account(s), {result.positions_seen} position(s), "
+                        f"and {result.transactions_seen} transaction(s)."
+                    )
+                    if result.failed_connections:
+                        print(f"Failed connections: {result.failed_connections}.")
+                    return self
+
+                if ns.broker_command == "sync-due":
+                    result = self.access.broker_snaptrade_sync_due(
+                        max_users=ns.max_users,
+                        min_age_hours=ns.min_age_hours,
+                        force=ns.force,
+                    )
+                    print(
+                        f"Broker due sync checked {result.users_checked} user(s) "
+                        f"and synced {result.users_synced} user(s)."
+                    )
+                    print(
+                        f"Saw {result.accounts_seen} account(s), "
+                        f"{result.positions_seen} position(s), "
                         f"and {result.transactions_seen} transaction(s)."
                     )
                     if result.failed_connections:
@@ -816,6 +836,15 @@ class DashboardView(View):
         p_sync.add_argument("user_key", help="Local immutable user key.")
         p_sync.add_argument("--start-date", dest="start_date", default=None)
         p_sync.add_argument("--end-date", dest="end_date", default=None)
+
+        p_sync_due = snaptrade_subp.add_parser(
+            "sync-due",
+            add_help=True,
+            description="Sync SnapTrade users whose latest successful sync is stale.",
+        )
+        p_sync_due.add_argument("--max-users", dest="max_users", type=int, default=None)
+        p_sync_due.add_argument("--min-age-hours", dest="min_age_hours", type=int, default=24)
+        p_sync_due.add_argument("--force", dest="force", action="store_true")
 
         snaptrade_subp.add_parser(
             "accounts",

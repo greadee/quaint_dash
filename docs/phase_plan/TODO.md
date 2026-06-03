@@ -20,6 +20,7 @@ Design Decisions: [ADR's](../adr/adr_ph4.md)
     - list stored accounts
     - map account to local portfolio
     - sync provider account data
+    - sync active users whose latest successful sync is stale
 - Portfolio integration
     - import only mapped broker accounts
     - idempotent broker transaction projection
@@ -28,7 +29,7 @@ Design Decisions: [ADR's](../adr/adr_ph4.md)
 - Dashboard CLI broker commands
 
 ### Tasks:
-- Add daily broker sync scheduler
+- Add background broker sync scheduler
 - Add connection disabled/reconnect workflow
 - Add SnapTrade user-secret rotation command
 - Add paginated activity sync for very large accounts

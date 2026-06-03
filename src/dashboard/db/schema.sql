@@ -269,6 +269,7 @@ CREATE TABLE IF NOT EXISTS broker_portfolio_txn_map (
 CREATE TABLE IF NOT EXISTS broker_sync_run (
     sync_run_id BIGINT PRIMARY KEY DEFAULT nextval('seq_broker_sync_run_id'),
     provider TEXT NOT NULL,
+    user_key TEXT,
     connection_id BIGINT,
     status TEXT NOT NULL,
     started_at TIMESTAMP NOT NULL DEFAULT now(),
@@ -280,6 +281,8 @@ CREATE TABLE IF NOT EXISTS broker_sync_run (
 
     FOREIGN KEY (connection_id) REFERENCES broker_connection(connection_id)
 );
+
+ALTER TABLE broker_sync_run ADD COLUMN IF NOT EXISTS user_key TEXT;
 
 --------------------------
 --      ingestion domain a

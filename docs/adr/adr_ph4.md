@@ -136,9 +136,33 @@ Local portfolio analytics depend on `txn` and `position`. Automatically importin
   - cash amount is reserved for cash-like events and dividend income
 - After import, derived positions and portfolio tickers are refreshed.
 
-## ADR-073: Current Limits and Next Phase Hooks
+## ADR-073: Daily Due Sync Scheduler
 
-**Decision:** Phase 4 stops at read-only sync, account mapping, and portfolio import. It does not implement automatic daily broker scheduling, webhooks, disconnect/rotate-secret UX, or a graphical account-linking portal.
+**Decision:** Broker sync can be run through a due-user scheduler that refreshes active users whose latest successful sync is older than the configured freshness window.
+
+**Context:**
+SnapTrade documents that account activity data is daily cached and refreshed once per day, with exact timing varying by brokerage: https://docs.snaptrade.com/reference/Account%20Information/AccountInformation_getAccountActivities
+
+The application already records broker sync runs. A daily scheduler can use those run records to avoid repeatedly refreshing the same user inside the same freshness window.
+
+**Rationale:**
+- Matches SnapTrade's documented daily account-activity freshness.
+- Avoids unnecessary provider calls.
+- Keeps automatic sync separate from local portfolio import.
+- Allows users to force a refresh when they know a connection changed.
+- Preserves the existing rule that local portfolio ledger writes are explicit.
+
+**Implementation Notes:**
+- `broker_sync_run.user_key` records which local broker user was synced.
+- `BrokerSyncRepository.due_broker_users()` selects users with no successful sync or a stale successful sync.
+- `BrokerSyncScheduler.sync_due_users()` runs the existing read-only sync service for due users.
+- CLI command:
+  - `broker snaptrade sync-due [--max-users n] [--min-age-hours hours] [--force]`
+- Due sync stores provider-side data only. Users must still run `broker snaptrade import-transactions` to write mapped transactions into local portfolios.
+
+## ADR-074: Current Limits and Next Phase Hooks
+
+**Decision:** Phase 4 stops at read-only sync, account mapping, portfolio import, and CLI-triggered due sync. It does not implement background broker scheduling, webhooks, disconnect/rotate-secret UX, or a graphical account-linking portal.
 
 **Context:**
 SnapTrade documents account data freshness and notes that account activity data is cached and refreshed daily: https://docs.snaptrade.com/reference/Account%20Information/AccountInformation_getAccountActivities
@@ -153,7 +177,7 @@ SnapTrade also exposes connection refresh, disabled connection repair, secret ro
 
 **Implementation Notes:**
 - Future work should add:
-  - daily broker sync scheduler
+  - background broker sync scheduler
   - connection disabled/reconnect handling
   - secret rotation workflow
   - paginated account activity retrieval

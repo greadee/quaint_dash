@@ -80,6 +80,78 @@ class BrokerSyncRepository:
             status=row[4],
         )
 
+    def list_broker_users(
+        self,
+        provider: str,
+        cipher: SecretCipher,
+        status: str = "active",
+    ) -> list[BrokerUser]:
+        rows = self.conn.execute(
+            """
+            SELECT provider, user_key, provider_user_id, encrypted_user_secret, status
+            FROM broker_user
+            WHERE provider = ?
+              AND status = ?
+            ORDER BY user_key
+            """,
+            [provider, status],
+        ).fetchall()
+        return [
+            BrokerUser(
+                provider=row[0],
+                user_key=row[1],
+                provider_user_id=row[2],
+                user_secret=cipher.decrypt(row[3]),
+                status=row[4],
+            )
+            for row in rows
+        ]
+
+    def due_broker_users(
+        self,
+        provider: str,
+        cipher: SecretCipher,
+        stale_before: datetime,
+    ) -> list[BrokerUser]:
+        rows = self.conn.execute(
+            """
+            SELECT
+                u.provider,
+                u.user_key,
+                u.provider_user_id,
+                u.encrypted_user_secret,
+                u.status,
+                MAX(r.completed_at) AS last_completed_at
+            FROM broker_user u
+            LEFT JOIN broker_sync_run r
+              ON r.provider = u.provider
+             AND r.user_key = u.user_key
+             AND r.status = 'done'
+            WHERE u.provider = ?
+              AND u.status = 'active'
+            GROUP BY
+                u.provider,
+                u.user_key,
+                u.provider_user_id,
+                u.encrypted_user_secret,
+                u.status
+            HAVING last_completed_at IS NULL
+                OR last_completed_at < ?
+            ORDER BY u.user_key
+            """,
+            [provider, stale_before],
+        ).fetchall()
+        return [
+            BrokerUser(
+                provider=row[0],
+                user_key=row[1],
+                provider_user_id=row[2],
+                user_secret=cipher.decrypt(row[3]),
+                status=row[4],
+            )
+            for row in rows
+        ]
+
     def upsert_connection(self, connection: BrokerConnection) -> int:
         self.conn.execute(
             """
@@ -337,15 +409,27 @@ class BrokerSyncRepository:
             ],
         )
 
-    def create_sync_run(self, provider: str, connection_id: int | None = None) -> int:
+    def create_sync_run(
+        self,
+        provider: str,
+        connection_id: int | None = None,
+        user_key: str | None = None,
+    ) -> int:
         row = self.conn.execute("SELECT nextval('seq_broker_sync_run_id')").fetchone()
         sync_run_id = int(row[0])
         self.conn.execute(
             """
-            INSERT INTO broker_sync_run(sync_run_id, provider, connection_id, status, started_at)
-            VALUES (?, ?, ?, 'running', ?)
+            INSERT INTO broker_sync_run(
+                sync_run_id,
+                provider,
+                user_key,
+                connection_id,
+                status,
+                started_at
+            )
+            VALUES (?, ?, ?, ?, 'running', ?)
             """,
-            [sync_run_id, provider, connection_id, datetime.now()],
+            [sync_run_id, provider, user_key, connection_id, datetime.now()],
         )
         return sync_run_id
 
@@ -382,4 +466,3 @@ def _json_loads(value: str | None) -> dict[str, Any]:
         return {}
     parsed = json.loads(value)
     return parsed if isinstance(parsed, dict) else {}
-

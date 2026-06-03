@@ -61,7 +61,11 @@ class BrokerSyncService:
 
         for connection in connections:
             connection_id = self.repo.upsert_connection(connection)
-            sync_run_id = self.repo.create_sync_run(self.provider.provider_name, connection_id)
+            sync_run_id = self.repo.create_sync_run(
+                self.provider.provider_name,
+                connection_id,
+                user_key=user.user_key,
+            )
             run_accounts = 0
             run_positions = 0
             run_transactions = 0

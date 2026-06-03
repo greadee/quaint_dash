@@ -59,6 +59,19 @@ Fetches and stores read-only broker data:
 
 This does not import anything into local portfolios.
 
+## Sync Due Broker Users
+
+```
+broker snaptrade sync-due [--max-users n] [--min-age-hours hours] [--force]
+```
+
+Syncs active SnapTrade users whose latest successful sync is older than the configured freshness window.
+
+- Default freshness window is 24 hours.
+- `--force` syncs active users even if they are not stale.
+- `--max-users` caps the number of due users synced in one run.
+- This stores provider-side data only; it does not import transactions into local portfolios.
+
 ## List Broker Accounts
 
 ```

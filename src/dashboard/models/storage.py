@@ -420,6 +420,27 @@ class DashboardManager:
             end_date=self._broker_parse_date(end_date),
         )
 
+    def broker_snaptrade_sync_due(
+        self,
+        max_users: int | None = None,
+        min_age_hours: int = 24,
+        force: bool = False,
+    ):
+        from dashboard.brokers.repository import BrokerSyncRepository
+        from dashboard.brokers.scheduler import BrokerSyncScheduler
+        from dashboard.brokers.snaptrade import SnapTradeProvider
+
+        scheduler = BrokerSyncScheduler(
+            BrokerSyncRepository(self.conn),
+            SnapTradeProvider(self._snaptrade_config()),
+            self._broker_secret_cipher(),
+        )
+        return scheduler.sync_due_users(
+            max_users=max_users,
+            min_age_hours=min_age_hours,
+            force=force,
+        )
+
     def broker_accounts(self, provider: str = "snaptrade"):
         from dashboard.brokers.repository import BrokerSyncRepository
 
