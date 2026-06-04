@@ -3,7 +3,7 @@ Author: Connor Proulx
 
 Terminal-based portfolio management dashboard built in Python. The system allows users to create and manage portfolios, track transactions, view actively held positions.
 
-Project emphasizes seperation of concerns, function dependant layered structure, documentation through UML class diagrams, ADR's, development through CI-backed testing and phase planning.
+The project emphasizes separation of concerns, function-dependent layers, UML class diagrams, architecture decision records, CI-backed testing, and phase planning.
 
 I am building this project to help consolidate, and manage my own personal finances, as well as familiarize myself with software engineering practices as I am actively learning in CMPUT 301: Software Engineering at the University of Alberta (W2026).
 <br>
@@ -138,6 +138,8 @@ App Architecture:
 
 ![App Architecture](docs/classes/to-display/app_ph2.svg)
 - [Phase 2 Ingestion Architecture](docs/classes/to-display/ingestion_ph2.svg)
+- [Phase 3 Analytics Architecture](docs/classes/to-display/analytics_ph3.svg)
+- [Phase 4 Broker-Sync Architecture](docs/classes/to-display/broker_sync_ph4.svg)
 - [Phase 1 Display Formatters](docs/classes/to-display/formatters_ph1.svg)
 
 ### Database E-R:

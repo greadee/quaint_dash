@@ -4,7 +4,7 @@
     -- positions and cash are derived from the ledger.
     -- portfolio and asset tables for non-transaction derived data. 
     -- ingestion domain A: daily quotes, dividends, splits, ingestion jobs and sync state
-    -- ingestion domain B: fundamentals seperate (later)
+    -- ingestion domain B: fundamentals separate (later)
 
 BEGIN TRANSACTION;
 

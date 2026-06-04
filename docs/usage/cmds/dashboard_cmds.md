@@ -3,8 +3,8 @@
 ```
 open <portfolio-name>
 ``` 
-Open the Portfolio View for the portfolio specified by portfolio-name. If the search for portfolio-name is unsuccesful, returns a string informing the user of a lack of portfolio exisiting by that name.
-- argument (Required): item-type - Case sensitive, name of portfolio to open
+Open the Portfolio View for the portfolio specified by `portfolio-name`. If no matching portfolio exists, the command reports that it could not find one.
+- argument (Required): `portfolio-name` - Case-sensitive name of the portfolio to open
 ## Create Portfolio
 ```
 create <portfolio-name>

@@ -17,8 +17,13 @@ Analytics must therefore work with partial data and identify missing inputs clea
 - Keeps future ingestion decisions separate from analytics model design
 
 **Implementation Notes:**
-- Analytics live in:
-  - `dashboard.analytics`
+- The public analytics API remains `dashboard.analytics`.
+- Focused implementation modules are:
+  - `dashboard.analytics.models` for report and metric contracts
+  - `dashboard.analytics.repository` for stored-data access
+  - `dashboard.analytics.calculations` for deterministic calculations
+  - `dashboard.analytics.engine` for report orchestration
+  - `dashboard.analytics.persistence` for optional snapshot storage
 - Core asset analytics include:
   - cumulative return
   - expected CAGR
@@ -171,6 +176,7 @@ The analytics engine is useful only if users and future application layers can a
   - AI context
   - full report payload
 - `analytics storage status|enable|disable|refresh` manages optional analytics snapshot storage.
+- `dashboard.models.commands.analytics.AnalyticsCommands` is the application-facing command boundary.
 
 ## ADR-067: Benchmark Defaults and Portfolio Valuation Rollups
 
@@ -235,3 +241,25 @@ For AI use, the latest snapshot should be fresh enough to answer current questio
   - latest available price dates
 - Refresh state is stored in:
   - `analytics_refresh_state`
+
+## ADR-068: Focused Analytics Package Boundaries
+
+**Decision:** Keep `dashboard.analytics` as the stable public import surface while splitting analytics implementation into focused model, repository, calculation, orchestration, and persistence modules.
+
+**Context:**
+Phase 3 grew from a small set of risk calculations into a broad analytics system covering valuation, ETF analysis, forecasting, portfolio decomposition, AI-ready context, and optional persistence. Keeping all responsibilities in one module made ownership and onboarding harder.
+
+**Rationale:**
+- Keeps deterministic calculations independent from database access.
+- Keeps report orchestration readable without hiding calculation behavior.
+- Isolates optional persistence from ad hoc analytics.
+- Preserves existing public imports for downstream commands and tests.
+- Gives future contributors clear module ownership.
+
+**Implementation Notes:**
+- `AnalyticsRepository` is the only analytics component responsible for reading stored market and portfolio data.
+- `AnalyticsEngine` orchestrates repository reads and pure calculation functions into reports.
+- `AnalyticsStorageService` owns opt-in snapshot schema creation and refresh behavior.
+- Analytics dataclasses in `dashboard.analytics.models` define the stable internal report contracts.
+- `dashboard.analytics.__init__` re-exports the supported public API.
+- The package relationships are documented in `docs/classes/plantuml-code/analytics_ph3.puml`.

@@ -259,24 +259,47 @@ The application already records broker sync runs. A daily scheduler can use thos
 
 ## ADR-074: Current Limits and Next Phase Hooks
 
-**Decision:** Phase 4 stops at read-only sync, account mapping, portfolio import, CLI-triggered due sync, and opt-in dashboard-startup due sync. It does not implement a long-running scheduler process, webhooks, or a graphical account-linking portal.
+**Decision:** Phase 4 delivers a complete read-only broker-sync application boundary: hosted account linking, lifecycle management, paginated sync, optional raw-payload storage, explicit portfolio projection, CLI-triggered due sync, and opt-in dashboard-startup due sync. It does not implement trading, a long-running scheduler process, webhooks, or a graphical account-linking portal.
 
 **Context:**
 SnapTrade documents account data freshness and notes that account activity data is cached and refreshed daily: https://docs.snaptrade.com/reference/Account%20Information/AccountInformation_getAccountActivities
 
-SnapTrade also exposes connection refresh, disabled connection repair, secret rotation, and broader account data endpoints, but Phase 4 is intentionally scoped to the smallest useful read-only sync path.
+SnapTrade's hosted connection portal provides the browser-facing account-link and reconnect flow while keeping brokerage credentials outside this application: https://docs.snaptrade.com/docs/implement-connection-portal
+
+Phase 4 now covers the useful read-only lifecycle around that portal. Continuously running infrastructure and graphical application surfaces remain separate product decisions.
 
 **Rationale:**
 - Keeps Phase 4 shippable and testable.
-- Avoids background scheduling before the CLI flow is proven.
-- Keeps provider connection lifecycle concerns out of the first implementation.
+- Keeps automatic refresh opt-in and bounded to dashboard startup.
+- Keeps broker data separate from the local transaction ledger until users explicitly map and import accounts.
 - Leaves a clean surface for a later AI and UI layer to present account-linking status.
 
 **Implementation Notes:**
-- Future work should add:
-  - long-running broker sync scheduler process
-  - connection disabled/reconnect handling
-  - secret rotation workflow
-  - paginated account activity retrieval
-  - optional broker sync storage toggle if users want account linking without persisted provider payloads
+- Phase 4 includes connection reconnect handling, secret rotation, paginated activity retrieval, and the raw-payload storage toggle.
+- Deliberately deferred beyond Phase 4:
+  - a long-running broker sync daemon or webhook consumer
   - a web UI portal launcher once the application has a browser-facing layer
+  - any order preview, placement, cancellation, replacement, or other trading behavior
+
+## ADR-075: Focused Broker-Sync Service Boundaries
+
+**Decision:** Keep broker-sync responsibilities in focused provider, repository, sync, scheduler, portfolio-integration, secret, and CLI modules behind the application-facing `BrokerCommands` boundary.
+
+**Context:**
+Broker sync crosses external API access, encrypted credentials, provider-state persistence, refresh scheduling, and explicit projection into the local transaction ledger. Those responsibilities have different failure modes and should remain independently understandable and testable.
+
+**Rationale:**
+- Keeps SnapTrade-specific HTTP and signing behavior out of application commands.
+- Keeps provider-state persistence separate from local portfolio projection.
+- Makes due-sync scheduling reuse the same read-only sync service as manual refreshes.
+- Keeps secret encryption replaceable behind `SecretCipher`.
+- Gives future broker providers a provider-neutral domain boundary.
+
+**Implementation Notes:**
+- `dashboard.brokers.snaptrade.SnapTradeProvider` implements the read-only `BrokerProvider` contract.
+- `BrokerSyncRepository` owns broker users, connections, accounts, snapshots, transactions, sync runs, mappings, and storage configuration.
+- `BrokerSyncService` synchronizes one linked user; `BrokerSyncScheduler` selects and synchronizes due users.
+- `BrokerPortfolioIntegrationService` is the only broker service that projects mapped provider transactions into the local ledger.
+- `dashboard.models.commands.broker.BrokerCommands` is the application-facing lifecycle and orchestration boundary.
+- `dashboard.brokers.cli` owns broker command parsing and presentation.
+- The package relationships are documented in `docs/classes/plantuml-code/broker_sync_ph4.puml`.

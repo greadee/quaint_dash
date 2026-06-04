@@ -1,0 +1,111 @@
+@startuml
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+
+package "Application Boundary" {
+  class BrokerCommands {
+    + broker_register_snaptrade_user(user_key)
+    + broker_snaptrade_portal(user_key)
+    + broker_snaptrade_sync(user_key)
+    + broker_snaptrade_sync_due()
+    + broker_map_account(account_id, portfolio_id)
+    + broker_import_transactions(portfolio_id)
+  }
+
+  class BrokerCLI <<module>> {
+    + build_broker_parser(parser_cls)
+    + handle_broker_command(access, namespace)
+  }
+}
+
+package "Provider Boundary" {
+  interface BrokerProvider
+  interface SecretCipher
+
+  class SnapTradeProvider {
+    - config : SnapTradeConfig
+    + register_user(user_id) : BrokerUser
+    + create_connection_portal(user) : BrokerConnectionPortal
+    + list_connections(user)
+    + list_accounts(user, connection)
+    + list_positions(user, account)
+    + list_transactions(user, account)
+  }
+
+  class LocalSecretCipher {
+    + encrypt(plaintext) : str
+    + decrypt(ciphertext) : str
+  }
+}
+
+package "Broker-Sync Services" {
+  class BrokerSyncRepository {
+    - conn
+    + upsert_broker_user(user, cipher)
+    + upsert_connection(connection)
+    + upsert_account(account)
+    + upsert_position_snapshot(position)
+    + upsert_transaction(transaction)
+    + due_broker_users(provider, cipher, stale_before)
+  }
+
+  class BrokerSyncService {
+    - repo : BrokerSyncRepository
+    - provider : BrokerProvider
+    - cipher : SecretCipher
+    + sync_user(user_key) : BrokerSyncSummary
+    + sync_existing_user(user) : BrokerSyncSummary
+  }
+
+  class BrokerSyncScheduler {
+    - repo : BrokerSyncRepository
+    - provider : BrokerProvider
+    - cipher : SecretCipher
+    + sync_due_users(max_users, min_age_hours, force) : BrokerDueSyncResult
+  }
+
+  class BrokerPortfolioIntegrationService {
+    - conn
+    + import_mapped_transactions(provider, portfolio_id) : BrokerPortfolioImportResult
+  }
+}
+
+package "Broker Domain Models" {
+  class BrokerUser
+  class BrokerConnection
+  class BrokerAccount
+  class BrokerPosition
+  class BrokerTransaction
+  class BrokerSyncSummary
+  class BrokerDueSyncResult
+  class BrokerPortfolioImportResult
+}
+
+BrokerCLI --> BrokerCommands : dispatches
+BrokerCommands --> SnapTradeProvider : lifecycle/read-only API
+BrokerCommands --> BrokerSyncRepository : persists/maps
+BrokerCommands --> BrokerSyncService : manual sync
+BrokerCommands --> BrokerSyncScheduler : due sync
+BrokerCommands --> BrokerPortfolioIntegrationService : explicit import
+BrokerCommands --> LocalSecretCipher : protects user secret
+
+SnapTradeProvider ..|> BrokerProvider
+LocalSecretCipher ..|> SecretCipher
+BrokerSyncService --> BrokerSyncRepository
+BrokerSyncService --> BrokerProvider
+BrokerSyncService --> SecretCipher
+BrokerSyncScheduler --> BrokerSyncRepository
+BrokerSyncScheduler --> BrokerProvider
+BrokerSyncScheduler --> SecretCipher
+BrokerSyncScheduler --> BrokerSyncService : reuses
+BrokerPortfolioIntegrationService --> BrokerTransaction : reads mapped rows
+
+BrokerSyncRepository --> BrokerUser
+BrokerSyncRepository --> BrokerConnection
+BrokerSyncRepository --> BrokerAccount
+BrokerSyncRepository --> BrokerPosition
+BrokerSyncRepository --> BrokerTransaction
+BrokerSyncService --> BrokerSyncSummary : creates
+BrokerSyncScheduler --> BrokerDueSyncResult : creates
+BrokerPortfolioIntegrationService --> BrokerPortfolioImportResult : creates
+@enduml
