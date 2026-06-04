@@ -3,7 +3,7 @@ Author: Connor Proulx
 
 Terminal-based portfolio management dashboard built in Python. The system allows users to create and manage portfolios, track transactions, view actively held positions.
 
-Project emphasizes seperation of concerns, function dependant layered structure, documentation through UML class diagrams, ADR's, development through CI-backed testing and phase planning.
+The project emphasizes separation of concerns, function-dependent layers, UML class diagrams, architecture decision records, CI-backed testing, and phase planning.
 
 I am building this project to help consolidate, and manage my own personal finances, as well as familiarize myself with software engineering practices as I am actively learning in CMPUT 301: Software Engineering at the University of Alberta (W2026).
 <br>
@@ -42,6 +42,7 @@ dashboard           # or python -m dashboard
 ```
 #### Dashboard Commands: [Dashboard Commands](docs/usage/cmds/dashboard_cmds.md)
 #### Portfolio Commands: [Portfolio Commands](docs/usage/cmds/portfolio_cmds.md)
+#### Broker Commands: [Broker Commands](docs/usage/cmds/broker_cmds.md)
 <br>
 
 ## Records 
@@ -108,6 +109,25 @@ dashboard           # or python -m dashboard
 ---
 <br>
 
+### Phase 4: Broker Sync
+
+```
+- Read-only broker account linking through SnapTrade
+- Hosted connection portal URLs; broker credentials are never collected by this app
+- SnapTrade user registration with encrypted local user-secret storage
+- Signed direct SnapTrade REST client for register, portal, connections, accounts, positions, and activities
+- Provider-neutral broker sync domain models and repository tables
+- Broker sync run tracking for account, position, and transaction refreshes
+- Manual broker-account-to-portfolio mapping
+- Idempotent import of mapped broker transactions into the local transaction ledger
+- Broker-to-ledger provenance through broker_portfolio_txn_map
+- Dashboard CLI commands for broker registration, portal creation, sync, account listing, mapping, and import
+```
+
+#### Architectural Decision Records: [Main Decisions](docs/adr/adr_ph4.md)
+---
+<br>
+
 ## Diagrams
 
 
@@ -118,6 +138,8 @@ App Architecture:
 
 ![App Architecture](docs/classes/to-display/app_ph2.svg)
 - [Phase 2 Ingestion Architecture](docs/classes/to-display/ingestion_ph2.svg)
+- [Phase 3 Analytics Architecture](docs/classes/to-display/analytics_ph3.svg)
+- [Phase 4 Broker-Sync Architecture](docs/classes/to-display/broker_sync_ph4.svg)
 - [Phase 1 Display Formatters](docs/classes/to-display/formatters_ph1.svg)
 
 ### Database E-R:

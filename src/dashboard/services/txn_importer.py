@@ -1,12 +1,4 @@
-"""~/services/
-
-dispatch for import csv or manual transaction
-
-    tTestTxn: Txn object without the batch_id attribute for testing, and validation prior to database storage.
-    TxnImporter: Abstract parent class for importing transactions into the database.
-    TxnImporterManual: Abstract child class for importing manual entries from the user in the CLI.
-    TxnImporterCSV: Abstract child class for importing batches of transactions from csv files.
-"""
+"""Transaction importers for manual and CSV portfolio ledger entries."""
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -46,37 +38,13 @@ class tTestTxn:
 
 @dataclass
 class TxnImporter(ABC):
-    """
-    Transaction import parent class
-
-    attr:     manager                       - DashboardManager object (for DashboardManager.conn)
-
-              batch_id                     - None on instantiation, insertion to the import_batch table sets the batch_id
-
-              import_time                  - None on instantiation, insertion to the import_batch table sets the datetime object
-
-    methods:  run()                     - the only function that is accesible to use in CLI; runs all other functions 
-
-              _get_batch_id_for_stage() - gets the next batch_id in seq. without incrementing the seq.
-
-     abstract _stage_import()           - implemented by both child classes w/ their unique staging logic     
-
-              _normalize_txn_stage()    - normalizes valid and invalid fields in the staged txn table
-
-              _validate_txn_stage()     - runs an validation query suite on the normalized txn table
-
-     abstract _handle_import()          - inserts the validated normalized table into the txn table
-                                          returns a ImportData object detailing the import batch
-    """
+    """Template for staging, validating, and committing transaction imports."""
     manager: DashboardManager
     batch_id: int | None = field(default=None, init=False)
     import_time: datetime | None = field(default=None, init=False)
 
     def run(self):
-        """
-        Runs all importer functions as an atomic operation
-        Returns an ImportData object if succesful
-        """
+        """Run the import pipeline and return a summary of affected portfolios."""
         self.batch_id, self.import_time = self._append_batch_table()
         self._stage_import()
         self._normalize_txn_stage()
@@ -89,20 +57,12 @@ class TxnImporter(ABC):
         return import_data
     
     def _normalize_txn_stage(self):
-        """
-        Normalizes transaction field types
-        Casts column fields as intended types
-        Handles which columns can be left blank and what that means
-        Normalizes errors to a sentinel value for the validation suite
-        """
+        """Normalize staged string fields into database-ready transaction columns."""
         conn = self.manager.conn
         conn.execute(qry.NORMALIZE_TXN)
 
     def _validate_txn_stage(self):
-        """
-        Runs a suite of SQL queries on the staged txn table
-        Breaks and raises a ValueError if any of the queries yield a bad result
-        """
+        """Run validation queries and fail before committing invalid staged rows."""
         conn = self.manager.conn 
         for q in qry.VALIDATE_TXN_SUITE:
             result = conn.execute(q).fetchone()[0] 
@@ -111,21 +71,13 @@ class TxnImporter(ABC):
                 self._handle_validation_fail(q)
 
     def _initialize_imported_assets(self):
-        """
-        Initializes any distinct staged asset ids into the asset table
-        and creates metadata sync rows for the scheduler before
-        transaction rows are inserted.
-        """
+        """Create referenced assets and metadata sync rows before inserting txns."""
         conn = self.manager.conn
         conn.execute(qry.INITIALIZE_IMPORTED_ASSETS)
         conn.execute(qry.INITIALIZE_IMPORTED_ASSET_METADATA_SYNC)
 
     def _ingest_imported_asset_metadata(self):
-        """
-        Trigger metadata ingestion for staged asset ids.
-
-        Non-fatal: failures should not block txn import.
-        """
+        """Best-effort metadata refresh for assets referenced by the import."""
         try:
             from dashboard.services.asset_importer import AssetImporter
 
@@ -137,11 +89,7 @@ class TxnImporter(ABC):
             pass
             
     def _handle_validation_fail(self, query_failure):
-        """
-        Called upon a failure in the validation query suite
-        Removes the bad entry in import_batch table
-        Raises a ValueError
-        """
+        """Remove the import batch marker and surface the validation failure."""
         self.manager.conn.execute("DELETE FROM import_batch WHERE batch_id = ?", [self.batch_id],)
         raise ValueError(f"Transaction validation failed: {query_failure}")
     
@@ -159,45 +107,22 @@ class TxnImporter(ABC):
 
 @dataclass
 class TxnImporterManual(TxnImporter): 
-    """
-    Manual child class of TxnImporter
-
-    param: txn                          - Txn object
-
-           create_portfolio             - Whether or not this transaction belongs to an existing portfolio
-
-           create_portfolio_name        - If this transaction is for a new portfolio, what is the name? Else, None
-
-           batch_type                   - Batch type field for appending to import batch table
-
-    methods:  abstract _stage_import()  - Populates staging table
-
-              abstract _handle_import() - inserts the validated normalized table into the txn table
-                                          returns a ImportData object detailing the import batch
-    """
+    """Import one manually entered transaction through the shared staging path."""
     txn: tTestTxn
     create_portfolio: bool | None = None
     batch_type: str = "manual-entry"
 
     def _append_batch_table(self):
-        """
-        Appends import batch to database and returns tuple (batch_id, import_time)
-        """
+        """Create an import batch row and return its id and timestamp."""
         row = self.manager.conn.execute(qry.INSERT_IMPORT_BATCH, [self.batch_type],).fetchone()
         return (row[0], row[1])
 
     def _stage_import(self):
-        """
-        Insert transaction values into staging table as strings for normalization and type casting in database
-        """
+        """Stage the manual transaction for normalization and validation."""
         self.manager.conn.execute(qry.STAGE_TXN_MANUAL, list(vars(self.txn).values())[1:],)
       
     def _handle_import(self):
-        """
-        Docstring for _handle_import
-        
-        :param self: Description
-        """
+        """Commit the validated manual transaction batch."""
         conn = self.manager.conn
 
         p_id = self.txn.portfolio_id
@@ -222,37 +147,18 @@ class TxnImporterManual(TxnImporter):
 
 @dataclass
 class TxnImporterCSV(TxnImporter):
-    """
-    Manual child class of TxnImporter
-
-    param: csv_path                - Path object for the intended csv to import
-
-           delim                   - String representing what delimeter columns are seperated by in the csv file
-
-           batch_type              - Batch type field for appending to import batch table
-    
-    methods:  _validate_csv_cols() - Validate that the imported csv contains all of the required columns by looking at the staged table
-
-     abstract _stage_import()      - Populates staging table and validates csv file was valid by running _validate_csv_cols()
-              
-     abstract _handle_import()     - inserts the validated normalized table into the txn table
-                                     returns a ImportData object detailing the import batch
-    """
+    """Import a CSV transaction batch through the shared staging path."""
     csv_path: Path
     delim: str = ","
     batch_type: str = "csv-import"
 
     def _append_batch_table(self):
-        """
-        Appends import batch to database and returns tuple (batch_id, import_time)
-        """
+        """Create an import batch row and return its id and timestamp."""
         row = self.manager.conn.execute(qry.INSERT_IMPORT_BATCH, [self.batch_type],).fetchone()
         return (row[0], row[1])
 
     def _validate_csv_cols(self):
-        """
-        Ensures that the staged transaction table derived from the csv file has all required columns
-        """
+        """Ensure the staged CSV has every required transaction column."""
         conn = self.manager.conn
         cols = [r[0] for r in conn.execute("DESCRIBE stg_txn").fetchall()]
         missing = [c for c in REQUIRED_CSV_COLUMNS if c not in cols]
@@ -260,19 +166,13 @@ class TxnImporterCSV(TxnImporter):
             raise ValueError(f"CSV missing required columns: {missing}. Found columns: {cols}")
 
     def _stage_import(self):
-        """
-        Insert transaction csv columns into staging table as strings for normalization and type casting in database
-        """
+        """Load the CSV into staging, then validate its columns."""
         conn = self.manager.conn
         conn.execute(qry.STAGE_TXN_CSV, [str(self.csv_path), self.delim],)
         self._validate_csv_cols()
 
     def _handle_import(self): 
-        """
-        Docstring for _handle_import
-        
-        :param self: Description
-        """
+        """Commit the validated CSV transaction batch."""
         conn = self.manager.conn
         p_aff = []
 

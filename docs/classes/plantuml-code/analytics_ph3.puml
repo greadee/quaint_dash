@@ -1,0 +1,98 @@
+@startuml
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+
+package "Application Boundary" {
+  class AnalyticsCommands {
+    + asset_analytics_report(asset_id, benchmark_index_id)
+    + portfolio_analytics_report(portfolio_id, benchmark_index_id)
+    + analytics_storage_enabled() : bool
+    + set_analytics_storage_enabled(enabled)
+    + refresh_analytics_storage()
+  }
+}
+
+package "Analytics Orchestration" {
+  class AnalyticsEngine {
+    - repo : AnalyticsRepository
+    + asset_report(asset_id, benchmark_index_id) : AssetAnalyticsReport
+    + portfolio_report(portfolio_id, benchmark_index_id) : PortfolioAnalyticsReport
+  }
+
+  class AnalyticsStorageService {
+    - repo : AnalyticsRepository
+    - engine : AnalyticsEngine
+    - enabled : bool
+    + set_enabled(enabled)
+    + refresh_due() : AnalyticsRefreshResult
+    + store_asset_report(report, as_of_date)
+    + store_portfolio_report(report, as_of_date)
+  }
+}
+
+package "Stored Data Access" {
+  class AnalyticsRepository {
+    - conn
+    + data_coverage(asset_id) : DataCoverage
+    + price_history(asset_id) : list[PricePoint]
+    + financial_statement_history(asset_id, statement_type)
+    + default_benchmark_for_asset(asset_id)
+    + tracked_asset_ids()
+    + portfolio_ids()
+  }
+}
+
+package "Deterministic Calculations" {
+  class AnalyticsCalculations <<module>> {
+    + risk_return_metrics()
+    + relative_risk_metrics()
+    + dividend_discount_model()
+    + discounted_cash_flow_model()
+    + valuation_depth_metrics()
+    + etf_analytics()
+    + asset_forecast_metrics()
+    + portfolio_risk_decomposition()
+    + asset_ai_context()
+    + portfolio_ai_context()
+  }
+}
+
+package "Report Contracts" {
+  class AssetAnalyticsReport
+  class PortfolioAnalyticsReport
+  class RiskReturnMetrics
+  class RelativeRiskMetrics
+  class ValuationDepthMetrics
+  class ETFAnalytics
+  class ForecastMetrics
+  class AIReadinessContext
+  class AnalyticsRefreshResult
+}
+
+AnalyticsCommands --> AnalyticsRepository : creates
+AnalyticsCommands --> AnalyticsEngine : requests reports
+AnalyticsCommands --> AnalyticsStorageService : configures/refreshes
+AnalyticsEngine --> AnalyticsRepository : reads stored data
+AnalyticsEngine --> AnalyticsCalculations : orchestrates
+AnalyticsStorageService --> AnalyticsRepository : reads/writes snapshots
+AnalyticsStorageService --> AnalyticsEngine : calculates due reports
+
+AnalyticsEngine --> AssetAnalyticsReport : creates
+AnalyticsEngine --> PortfolioAnalyticsReport : creates
+AnalyticsCalculations --> RiskReturnMetrics : creates
+AnalyticsCalculations --> RelativeRiskMetrics : creates
+AnalyticsCalculations --> ValuationDepthMetrics : creates
+AnalyticsCalculations --> ETFAnalytics : creates
+AnalyticsCalculations --> ForecastMetrics : creates
+AnalyticsCalculations --> AIReadinessContext : creates
+AnalyticsStorageService --> AnalyticsRefreshResult : creates
+
+AssetAnalyticsReport o-- RiskReturnMetrics
+AssetAnalyticsReport o-- RelativeRiskMetrics
+AssetAnalyticsReport o-- ValuationDepthMetrics
+AssetAnalyticsReport o-- ETFAnalytics
+AssetAnalyticsReport o-- ForecastMetrics
+AssetAnalyticsReport o-- AIReadinessContext
+PortfolioAnalyticsReport o-- ForecastMetrics
+PortfolioAnalyticsReport o-- AIReadinessContext
+@enduml

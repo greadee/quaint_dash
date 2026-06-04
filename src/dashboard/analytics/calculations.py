@@ -1,13 +1,9 @@
-"""Phase 3 analytics calculations for assets, ETFs, and portfolios.
-
-This module is intentionally calculation-first: it reads existing market,
-portfolio, dividend, and financial-statement tables and reports missing inputs
-instead of triggering new ingestion.
-"""
+"""Pure analytics calculations, forecasting, valuation, and AI context."""
+# ruff: noqa: F403, F405
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict
 from datetime import date, datetime
 import hashlib
 import json
@@ -16,1528 +12,7 @@ import random
 import statistics
 from typing import Any
 
-
-TRADING_DAYS_PER_YEAR = 252
-ANALYTICS_REPORT_SCHEMA_VERSION = "phase3.analytics.v1"
-REVENUE_ALIASES = ("revenue", "totalRevenue", "total_revenue")
-GROSS_PROFIT_ALIASES = ("grossProfit", "gross_profit")
-OPERATING_INCOME_ALIASES = ("operatingIncome", "operating_income")
-NET_INCOME_ALIASES = ("netIncome", "net_income")
-EPS_ALIASES = ("eps", "epsDiluted", "dilutedEPS", "dilutedEps")
-EBITDA_ALIASES = ("ebitda", "EBITDA")
-EQUITY_ALIASES = ("totalStockholdersEquity", "totalShareholderEquity", "total_equity")
-ASSETS_ALIASES = ("totalAssets", "total_assets")
-DEBT_ALIASES = ("totalDebt", "shortLongTermDebtTotal", "total_debt")
-CASH_ALIASES = ("cashAndCashEquivalents", "cashAndShortTermInvestments", "cash")
-FREE_CASH_FLOW_ALIASES = ("freeCashFlow", "free_cash_flow", "free_cashflow")
-OPERATING_CASH_FLOW_ALIASES = (
-    "operatingCashFlow",
-    "cashFlowFromOperations",
-    "netCashProvidedByOperatingActivities",
-)
-CAPEX_ALIASES = ("capitalExpenditure", "capital_expenditure", "capex")
-DEFAULT_BENCHMARK_BY_COUNTRY = {
-    "US": "SP500",
-    "USA": "SP500",
-    "UNITED STATES": "SP500",
-    "CA": "TSXCOMP",
-    "CAN": "TSXCOMP",
-    "CANADA": "TSXCOMP",
-    "GB": "FTSE100",
-    "UK": "FTSE100",
-    "UNITED KINGDOM": "FTSE100",
-    "JP": "NIKKEI225",
-    "JAPAN": "NIKKEI225",
-}
-DEFAULT_BENCHMARK_BY_CURRENCY = {
-    "USD": "SP500",
-    "CAD": "TSXCOMP",
-    "GBP": "FTSE100",
-    "JPY": "NIKKEI225",
-}
-
-
-@dataclass(frozen=True)
-class PricePoint:
-    date: date
-    close: float
-
-
-@dataclass(frozen=True)
-class DataCoverage:
-    asset_count: int
-    position_count: int
-    daily_price_count: int
-    dividend_count: int
-    split_count: int
-    financial_statement_count: int
-    benchmark_price_count: int
-
-
-@dataclass(frozen=True)
-class RiskReturnMetrics:
-    start_date: date | None
-    end_date: date | None
-    observations: int
-    cumulative_return: float | None
-    cagr: float | None
-    annualized_volatility: float | None
-    downside_deviation: float | None
-    sharpe_ratio: float | None
-    sortino_ratio: float | None
-    max_drawdown: float | None
-    best_daily_return: float | None
-    worst_daily_return: float | None
-
-
-@dataclass(frozen=True)
-class RelativeRiskMetrics:
-    observations: int
-    beta: float | None
-    alpha_annualized: float | None
-    correlation: float | None
-    r_squared: float | None
-    excess_cagr: float | None
-
-
-@dataclass(frozen=True)
-class PortfolioPerformanceMetrics:
-    start_date: date | None
-    end_date: date | None
-    beginning_market_value: float
-    ending_market_value: float
-    net_contributions: float
-    net_withdrawals: float
-    net_external_cash_flow: float
-    dividend_income: float
-    realized_gain: float | None
-    unrealized_gain: float | None
-    total_gain: float | None
-    modified_dietz_return: float | None
-    money_weighted_return: float | None
-    missing_inputs: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class AssetRiskContribution:
-    asset_id: str
-    weight: float
-    annualized_volatility: float | None
-    portfolio_volatility_contribution: float | None
-    percent_of_portfolio_volatility: float | None
-
-
-@dataclass(frozen=True)
-class PortfolioRiskDecomposition:
-    asset_count: int
-    effective_asset_count: float | None
-    concentration_hhi: float | None
-    largest_position_weight: float | None
-    diversification_score: float | None
-    portfolio_volatility: float | None
-    average_pairwise_correlation: float | None
-    correlation_matrix: dict[str, dict[str, float | None]] = field(default_factory=dict)
-    volatility_contributions: list[AssetRiskContribution] = field(default_factory=list)
-    sector_exposure: dict[str, float] = field(default_factory=dict)
-    country_exposure: dict[str, float] = field(default_factory=dict)
-    currency_exposure: dict[str, float] = field(default_factory=dict)
-    missing_inputs: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class DcfScenario:
-    scenario_name: str
-    growth_rate: float
-    discount_rate: float
-    terminal_growth_rate: float
-    intrinsic_value_per_share: float | None
-    margin_of_safety: float | None
-    implied_growth_rate: float | None
-
-
-@dataclass(frozen=True)
-class ValuationDepthMetrics:
-    revenue_growth_yoy: float | None
-    eps_growth_yoy: float | None
-    free_cash_flow_growth_yoy: float | None
-    gross_margin: float | None
-    operating_margin: float | None
-    net_margin: float | None
-    return_on_equity: float | None
-    return_on_assets: float | None
-    debt_to_equity: float | None
-    net_debt_to_ebitda: float | None
-    payout_ratio: float | None
-    pe_ratio: float | None
-    price_to_book: float | None
-    price_to_sales: float | None
-    price_to_free_cash_flow: float | None
-    ev_to_ebitda: float | None
-    dcf_scenarios: list[DcfScenario] = field(default_factory=list)
-    missing_inputs: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class EtfHoldingAnalytics:
-    holding_symbol: str
-    holding_name: str | None
-    weight: float | None
-    sector: str | None
-    country: str | None
-    currency: str | None
-
-
-@dataclass(frozen=True)
-class EtfOverlapAnalytics:
-    holding_symbol: str
-    direct_asset_id: str
-    etf_weight: float | None
-    direct_portfolio_weight: float | None
-
-
-@dataclass(frozen=True)
-class ETFAnalytics:
-    is_etf: bool
-    expense_ratio: float | None
-    benchmark_index_id: str | None
-    annual_distribution_per_share: float | None
-    distribution_yield: float | None
-    tracking_error: float | None
-    holding_count: int
-    top_holdings: list[EtfHoldingAnalytics] = field(default_factory=list)
-    overlap_with_portfolio: list[EtfOverlapAnalytics] = field(default_factory=list)
-    sector_exposure: dict[str, float] = field(default_factory=dict)
-    country_exposure: dict[str, float] = field(default_factory=dict)
-    currency_exposure: dict[str, float] = field(default_factory=dict)
-    missing_inputs: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class ForecastBand:
-    horizon_years: int
-    expected_value: float | None
-    p10_value: float | None
-    p50_value: float | None
-    p90_value: float | None
-    expected_cagr: float | None
-    p10_cagr: float | None
-    p50_cagr: float | None
-    p90_cagr: float | None
-
-
-@dataclass(frozen=True)
-class ForecastMetrics:
-    horizon_years: int
-    expected_cagr_from_valuation: float | None
-    dividend_growth_projection: float | None
-    fundamental_growth_assumption: float | None
-    blended_expected_cagr: float | None
-    simulation: ForecastBand | None
-    missing_inputs: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class PositionValuationContribution:
-    asset_id: str
-    weight: float | None
-    margin_of_safety: float | None
-    pe_ratio: float | None
-    price_to_free_cash_flow: float | None
-    dividend_yield: float | None
-    expected_cagr: float | None
-    weighted_expected_cagr_contribution: float | None
-
-
-@dataclass(frozen=True)
-class PortfolioValuationRollup:
-    weighted_margin_of_safety: float | None
-    weighted_pe_ratio: float | None
-    weighted_price_to_free_cash_flow: float | None
-    weighted_dividend_yield: float | None
-    weighted_expected_cagr: float | None
-    undervalued_weight: float
-    overvalued_weight: float
-    fair_value_weight: float
-    position_contributions: list[PositionValuationContribution] = field(default_factory=list)
-    missing_inputs: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class AnalyticsFact:
-    key: str
-    label: str
-    value: float | int | str | bool | None
-    unit: str | None
-    source: str
-    confidence: float
-
-
-@dataclass(frozen=True)
-class AnalyticsExplanation:
-    topic: str
-    summary: str
-    evidence: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class AnalyticsAnomaly:
-    severity: str
-    metric: str
-    message: str
-    value: float | int | str | bool | None = None
-
-
-@dataclass(frozen=True)
-class SnapshotMetricChange:
-    key: str
-    previous_value: float | int | str | bool | None
-    current_value: float | int | str | bool | None
-    absolute_change: float | None
-    relative_change: float | None
-
-
-@dataclass(frozen=True)
-class AIReadinessContext:
-    subject_type: str
-    subject_id: str
-    summary: str
-    facts: list[AnalyticsFact] = field(default_factory=list)
-    explanations: list[AnalyticsExplanation] = field(default_factory=list)
-    anomalies: list[AnalyticsAnomaly] = field(default_factory=list)
-    missing_inputs: list[str] = field(default_factory=list)
-    snapshot_hash: str | None = None
-
-
-@dataclass(frozen=True)
-class ValuationResult:
-    method: str
-    intrinsic_value_per_share: float | None
-    market_price: float | None
-    margin_of_safety: float | None
-    expected_cagr: float | None
-    implied_growth_rate: float | None
-    inputs_used: dict[str, float | int | str | None] = field(default_factory=dict)
-    missing_inputs: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class AssetAnalyticsReport:
-    asset_id: str
-    benchmark_index_id: str | None
-    latest_price: float | None
-    data_coverage: DataCoverage
-    risk: RiskReturnMetrics
-    relative: RelativeRiskMetrics | None
-    dividend_discount: ValuationResult
-    discounted_cash_flow: ValuationResult
-    valuation_depth: ValuationDepthMetrics
-    etf: ETFAnalytics | None
-    forecast: ForecastMetrics
-    ai_context: AIReadinessContext
-
-
-@dataclass(frozen=True)
-class PositionAnalytics:
-    portfolio_id: int
-    asset_id: str
-    qty: float
-    book_cost: float
-    latest_price: float | None
-    market_value: float | None
-    weight: float | None
-    unrealized_gain: float | None
-
-
-@dataclass(frozen=True)
-class PortfolioAnalyticsReport:
-    portfolio_id: int
-    benchmark_index_id: str | None
-    positions: list[PositionAnalytics]
-    market_value: float
-    performance: PortfolioPerformanceMetrics
-    risk_decomposition: PortfolioRiskDecomposition
-    valuation: PortfolioValuationRollup
-    risk: RiskReturnMetrics | None
-    relative: RelativeRiskMetrics | None
-    forecast: ForecastMetrics
-    missing_inputs: list[str]
-    ai_context: AIReadinessContext
-
-
-@dataclass(frozen=True)
-class AnalyticsRefreshResult:
-    assets_stored: int = 0
-    portfolios_stored: int = 0
-    skipped: bool = False
-    reason: str | None = None
-
-
-class AnalyticsRepository:
-    """Read-only access to existing analytics inputs."""
-
-    def __init__(self, conn: Any) -> None:
-        self.conn = conn
-
-    def data_coverage(self) -> DataCoverage:
-        return DataCoverage(
-            asset_count=self._count("asset"),
-            position_count=self._count("position"),
-            daily_price_count=self._count("asset_quote_daily"),
-            dividend_count=self._count("dividend_event"),
-            split_count=self._count("split_event"),
-            financial_statement_count=self._count("financial_statement"),
-            benchmark_price_count=self._count("benchmark_index_daily_price"),
-        )
-
-    def price_history(
-        self,
-        asset_id: str,
-        start_date: date | None = None,
-        end_date: date | None = None,
-    ) -> list[PricePoint]:
-        where = ["asset_id = ?", "COALESCE(adj_close, close) IS NOT NULL"]
-        params: list[Any] = [asset_id.upper().strip()]
-        if start_date is not None:
-            where.append("date >= ?")
-            params.append(start_date)
-        if end_date is not None:
-            where.append("date <= ?")
-            params.append(end_date)
-
-        rows = self.conn.execute(
-            f"""
-            SELECT date, COALESCE(adj_close, close) AS close
-            FROM asset_quote_daily
-            WHERE {" AND ".join(where)}
-            ORDER BY date
-            """,
-            params,
-        ).fetchall()
-        return [PricePoint(row[0], float(row[1])) for row in rows if row[1] and row[1] > 0]
-
-    def benchmark_price_history(
-        self,
-        index_id: str,
-        start_date: date | None = None,
-        end_date: date | None = None,
-    ) -> list[PricePoint]:
-        if not self._table_exists("benchmark_index_daily_price"):
-            return []
-
-        where = ["index_id = ?", "COALESCE(adj_close, close) IS NOT NULL"]
-        params: list[Any] = [index_id]
-        if start_date is not None:
-            where.append("price_date >= ?")
-            params.append(start_date)
-        if end_date is not None:
-            where.append("price_date <= ?")
-            params.append(end_date)
-
-        rows = self.conn.execute(
-            f"""
-            SELECT price_date, COALESCE(adj_close, close) AS close
-            FROM benchmark_index_daily_price
-            WHERE {" AND ".join(where)}
-            ORDER BY price_date
-            """,
-            params,
-        ).fetchall()
-        return [PricePoint(row[0], float(row[1])) for row in rows if row[1] and row[1] > 0]
-
-    def default_benchmark_for_asset(self, asset_id: str) -> str | None:
-        asset_id = asset_id.upper().strip()
-        etf_benchmark = self.etf_profile(asset_id).get("benchmark_index_id")
-        if etf_benchmark and self.benchmark_price_history(str(etf_benchmark)):
-            return str(etf_benchmark)
-
-        row = self.conn.execute(
-            """
-            SELECT country, ccy
-            FROM asset
-            WHERE asset_id = ?
-            """,
-            [asset_id],
-        ).fetchone()
-        if not row:
-            return self._available_static_benchmark(None, None)
-        return self._default_benchmark_for_country_currency(row[0], row[1])
-
-    def default_benchmark_for_portfolio(self, positions: list[PositionAnalytics]) -> str | None:
-        weights = {p.asset_id: p.weight for p in positions if p.weight is not None and p.weight > 0}
-        if not weights:
-            return self._available_static_benchmark(None, None)
-
-        metadata = self.asset_exposure_metadata(list(weights))
-        country_weights: dict[str, float] = {}
-        currency_weights: dict[str, float] = {}
-        for asset_id, weight in weights.items():
-            meta = metadata.get(asset_id, {})
-            country = _normalize_code(meta.get("country"))
-            currency = _normalize_code(meta.get("currency"))
-            if country:
-                country_weights[country] = country_weights.get(country, 0.0) + weight
-            if currency:
-                currency_weights[currency] = currency_weights.get(currency, 0.0) + weight
-
-        dominant_country = max(country_weights, key=country_weights.get) if country_weights else None
-        dominant_currency = max(currency_weights, key=currency_weights.get) if currency_weights else None
-        return self._default_benchmark_for_country_currency(dominant_country, dominant_currency)
-
-    def _default_benchmark_for_country_currency(
-        self,
-        country: str | None,
-        currency: str | None,
-    ) -> str | None:
-        country = _normalize_code(country)
-        currency = _normalize_code(currency)
-        metadata_match = self._benchmark_metadata_match(country, currency)
-        if metadata_match:
-            return metadata_match
-        return self._available_static_benchmark(country, currency)
-
-    def _benchmark_metadata_match(self, country: str | None, currency: str | None) -> str | None:
-        if not self._table_exists("benchmark_index") or not self._table_exists("benchmark_index_daily_price"):
-            return None
-        if not country and not currency:
-            return None
-
-        match_clauses = []
-        params: list[Any] = []
-        if country:
-            match_clauses.append("UPPER(b.country_code) = ?")
-            params.append(country)
-        if currency:
-            match_clauses.append("UPPER(b.currency) = ?")
-            params.append(currency)
-
-        rows = self.conn.execute(
-            f"""
-            SELECT b.index_id
-            FROM benchmark_index b
-            WHERE b.is_active = TRUE
-              AND ({" OR ".join(match_clauses)})
-              AND EXISTS (
-                  SELECT 1
-                  FROM benchmark_index_daily_price p
-                  WHERE p.index_id = b.index_id
-              )
-            ORDER BY
-                CASE WHEN UPPER(COALESCE(b.country_code, '')) = ? THEN 0 ELSE 1 END,
-                CASE WHEN b.is_core THEN 0 ELSE 1 END,
-                b.index_id
-            LIMIT 1
-            """,
-            [*params, country or ""],
-        ).fetchall()
-        return rows[0][0] if rows else None
-
-    def _available_static_benchmark(self, country: str | None, currency: str | None) -> str | None:
-        candidates = []
-        country_key = _normalize_code(country)
-        currency_key = _normalize_code(currency)
-        if country_key and country_key in DEFAULT_BENCHMARK_BY_COUNTRY:
-            candidates.append(DEFAULT_BENCHMARK_BY_COUNTRY[country_key])
-        if currency_key and currency_key in DEFAULT_BENCHMARK_BY_CURRENCY:
-            candidates.append(DEFAULT_BENCHMARK_BY_CURRENCY[currency_key])
-        candidates.extend(["SP500", "TSXCOMP", "DEV_INTL"])
-        for candidate in dict.fromkeys(candidates):
-            if self.benchmark_price_history(candidate):
-                return candidate
-        return None
-
-    def latest_price(self, asset_id: str) -> float | None:
-        row = self.conn.execute(
-            """
-            SELECT COALESCE(adj_close, close)
-            FROM asset_quote_daily
-            WHERE asset_id = ?
-              AND COALESCE(adj_close, close) IS NOT NULL
-            ORDER BY date DESC
-            LIMIT 1
-            """,
-            [asset_id.upper().strip()],
-        ).fetchone()
-        return float(row[0]) if row and row[0] is not None else None
-
-    def annual_dividend_per_share(self, asset_id: str, as_of_date: date | None = None) -> float | None:
-        where = ["asset_id = ?", "dividend_per_share IS NOT NULL"]
-        params: list[Any] = [asset_id.upper().strip()]
-        if as_of_date is not None:
-            where.append("ex_date <= ?")
-            params.append(as_of_date)
-
-        rows = self.conn.execute(
-            f"""
-            SELECT dividend_per_share
-            FROM dividend_event
-            WHERE {" AND ".join(where)}
-            ORDER BY ex_date DESC
-            LIMIT 8
-            """,
-            params,
-        ).fetchall()
-        values = [float(row[0]) for row in rows if row[0] is not None and row[0] > 0]
-        if not values:
-            return None
-        return sum(values[:4])
-
-    def dividend_history(self, asset_id: str, limit: int = 12) -> list[tuple[date, float]]:
-        rows = self.conn.execute(
-            """
-            SELECT ex_date, dividend_per_share
-            FROM dividend_event
-            WHERE asset_id = ?
-              AND dividend_per_share IS NOT NULL
-            ORDER BY ex_date DESC
-            LIMIT ?
-            """,
-            [asset_id.upper().strip(), limit],
-        ).fetchall()
-        return [(row[0], float(row[1])) for row in rows if row[1] is not None and row[1] > 0]
-
-    def shares_outstanding(self, asset_id: str) -> float | None:
-        row = self.conn.execute(
-            """
-            SELECT shares_outstanding
-            FROM asset
-            WHERE asset_id = ?
-            """,
-            [asset_id.upper().strip()],
-        ).fetchone()
-        return float(row[0]) if row and row[0] is not None and row[0] > 0 else None
-
-    def latest_free_cash_flow(self, asset_id: str) -> float | None:
-        rows = self.conn.execute(
-            """
-            SELECT data_json
-            FROM financial_statement
-            WHERE asset_id = ?
-              AND statement_type = 'cashflow'
-            ORDER BY year DESC, quarter DESC
-            LIMIT 8
-            """,
-            [asset_id.upper().strip()],
-        ).fetchall()
-        for row in rows:
-            data = _json_object(row[0])
-            fcf = _extract_number(data, ("freeCashFlow", "free_cash_flow", "free_cashflow"))
-            if fcf is None:
-                operating = _extract_number(
-                    data,
-                    ("operatingCashFlow", "cashFlowFromOperations", "netCashProvidedByOperatingActivities"),
-                )
-                capex = _extract_number(data, ("capitalExpenditure", "capital_expenditure", "capex"))
-                if operating is not None and capex is not None:
-                    fcf = operating - abs(capex)
-            if fcf is not None and fcf > 0:
-                return fcf
-        return None
-
-    def financial_statement_history(self, asset_id: str, statement_type: str) -> list[dict[str, Any]]:
-        rows = self.conn.execute(
-            """
-            SELECT year, quarter, period_end_date, report_date, data_json
-            FROM financial_statement
-            WHERE asset_id = ?
-              AND statement_type = ?
-            ORDER BY year DESC, quarter DESC
-            """,
-            [asset_id.upper().strip(), statement_type],
-        ).fetchall()
-        return [
-            {
-                "year": int(row[0]),
-                "quarter": int(row[1]),
-                "period_end_date": row[2],
-                "report_date": row[3],
-                "data": _json_object(row[4]),
-            }
-            for row in rows
-        ]
-
-    def asset_profile(self, asset_id: str) -> dict[str, str | None]:
-        row = self.conn.execute(
-            """
-            SELECT asset_type, asset_subtype, symbol
-            FROM asset
-            WHERE asset_id = ?
-            """,
-            [asset_id.upper().strip()],
-        ).fetchone()
-        if row is None:
-            return {"asset_type": None, "asset_subtype": None, "symbol": None}
-        return {"asset_type": row[0], "asset_subtype": row[1], "symbol": row[2]}
-
-    def etf_profile(self, asset_id: str) -> dict[str, Any]:
-        if not self._table_exists("etf_profile"):
-            return {}
-        row = self.conn.execute(
-            """
-            SELECT expense_ratio, benchmark_index_id
-            FROM etf_profile
-            WHERE asset_id = ?
-            """,
-            [asset_id.upper().strip()],
-        ).fetchone()
-        if row is None:
-            return {}
-        return {"expense_ratio": row[0], "benchmark_index_id": row[1]}
-
-    def etf_holdings(self, asset_id: str) -> list[EtfHoldingAnalytics]:
-        if not self._table_exists("etf_holding"):
-            return []
-        rows = self.conn.execute(
-            """
-            SELECT
-                holding_symbol,
-                holding_name,
-                weight_pct,
-                sector,
-                country,
-                currency
-            FROM etf_holding
-            WHERE asset_id = ?
-            ORDER BY weight_pct DESC NULLS LAST, holding_symbol
-            """,
-            [asset_id.upper().strip()],
-        ).fetchall()
-        return [
-            EtfHoldingAnalytics(
-                holding_symbol=row[0],
-                holding_name=row[1],
-                weight=normalize_weight(row[2]),
-                sector=row[3],
-                country=row[4],
-                currency=row[5],
-            )
-            for row in rows
-        ]
-
-    def portfolio_direct_holding_weights(self, portfolio_id: int) -> dict[str, tuple[str, float | None]]:
-        rows = self.conn.execute(
-            """
-            SELECT
-                p.asset_id,
-                COALESCE(a.symbol, p.asset_id) AS symbol,
-                p.qty * q.latest_price AS market_value
-            FROM position p
-            JOIN asset a
-              ON a.asset_id = p.asset_id
-            LEFT JOIN (
-                SELECT asset_id, COALESCE(adj_close, close) AS latest_price
-                FROM asset_quote_daily
-                QUALIFY ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY date DESC) = 1
-            ) q
-              ON q.asset_id = p.asset_id
-            WHERE p.portfolio_id = ?
-              AND COALESCE(p.qty, 0) <> 0
-            """,
-            [portfolio_id],
-        ).fetchall()
-        total_value = sum(float(row[2]) for row in rows if row[2] is not None and row[2] > 0)
-        result: dict[str, tuple[str, float | None]] = {}
-        for row in rows:
-            symbol = str(row[1]).upper()
-            weight = float(row[2]) / total_value if row[2] is not None and total_value > 0 else None
-            result[symbol] = (row[0], weight)
-        return result
-
-    def portfolio_positions(self, portfolio_id: int) -> list[tuple[int, str, float, float]]:
-        rows = self.conn.execute(
-            """
-            SELECT portfolio_id, asset_id, qty, book_cost
-            FROM position
-            WHERE portfolio_id = ?
-              AND COALESCE(qty, 0) <> 0
-            ORDER BY asset_id
-            """,
-            [portfolio_id],
-        ).fetchall()
-        return [(int(row[0]), row[1], float(row[2]), float(row[3])) for row in rows]
-
-    def portfolio_transactions(self, portfolio_id: int) -> list[tuple[Any, ...]]:
-        rows = self.conn.execute(
-            """
-            SELECT
-                txn_id,
-                portfolio_id,
-                time_stamp,
-                txn_type,
-                asset_id,
-                qty,
-                price,
-                ccy,
-                cash_amt,
-                fee_amt
-            FROM txn
-            WHERE portfolio_id = ?
-            ORDER BY time_stamp, txn_id
-            """,
-            [portfolio_id],
-        ).fetchall()
-        return rows
-
-    def asset_exposure_metadata(self, asset_ids: list[str]) -> dict[str, dict[str, str | None]]:
-        if not asset_ids:
-            return {}
-        placeholders = ", ".join("?" for _ in asset_ids)
-        rows = self.conn.execute(
-            f"""
-            SELECT asset_id, sector, country, ccy
-            FROM asset
-            WHERE asset_id IN ({placeholders})
-            """,
-            asset_ids,
-        ).fetchall()
-        return {
-            row[0]: {
-                "sector": row[1],
-                "country": row[2],
-                "currency": row[3],
-            }
-            for row in rows
-        }
-
-    def tracked_asset_ids(self) -> list[str]:
-        rows = self.conn.execute(
-            """
-            SELECT asset_id
-            FROM asset
-            WHERE COALESCE(track, TRUE) = TRUE
-            ORDER BY asset_id
-            """
-        ).fetchall()
-        return [row[0] for row in rows]
-
-    def portfolio_ids(self) -> list[int]:
-        rows = self.conn.execute(
-            """
-            SELECT portfolio_id
-            FROM portfolio
-            ORDER BY portfolio_id
-            """
-        ).fetchall()
-        return [int(row[0]) for row in rows]
-
-    def _count(self, table_name: str) -> int:
-        if not self._table_exists(table_name):
-            return 0
-        return int(self.conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0])
-
-    def _table_exists(self, table_name: str) -> bool:
-        row = self.conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM information_schema.tables
-            WHERE table_name = ?
-            """,
-            [table_name],
-        ).fetchone()
-        return bool(row and row[0])
-
-
-class AnalyticsEngine:
-    def __init__(self, repo: AnalyticsRepository) -> None:
-        self.repo = repo
-
-    def asset_report(
-        self,
-        asset_id: str,
-        benchmark_index_id: str | None = None,
-        portfolio_id: int | None = None,
-        risk_free_rate: float = 0.0,
-        discount_rate: float = 0.10,
-        dividend_growth_rate: float = 0.03,
-        terminal_growth_rate: float = 0.03,
-        forecast_years: int = 5,
-    ) -> AssetAnalyticsReport:
-        asset_id = asset_id.upper().strip()
-        benchmark_index_id = benchmark_index_id or self.repo.default_benchmark_for_asset(asset_id)
-        prices = self.repo.price_history(asset_id)
-        benchmark = (
-            self.repo.benchmark_price_history(benchmark_index_id)
-            if benchmark_index_id is not None
-            else []
-        )
-        latest_price = prices[-1].close if prices else self.repo.latest_price(asset_id)
-
-        dividend = self.repo.annual_dividend_per_share(asset_id, prices[-1].date if prices else None)
-        fcf = self.repo.latest_free_cash_flow(asset_id)
-        shares = self.repo.shares_outstanding(asset_id)
-        fcf_per_share = fcf / shares if fcf is not None and shares else None
-        risk = risk_return_metrics(prices, risk_free_rate=risk_free_rate)
-        relative = relative_risk_metrics(prices, benchmark, risk_free_rate) if benchmark else None
-        dividend_discount = dividend_discount_model(
-            annual_dividend=dividend,
-            market_price=latest_price,
-            discount_rate=discount_rate,
-            growth_rate=dividend_growth_rate,
-            forecast_years=forecast_years,
-        )
-        discounted_cash_flow = discounted_cash_flow_model(
-            cashflow_per_share=fcf_per_share,
-            market_price=latest_price,
-            discount_rate=discount_rate,
-            growth_rate=dividend_growth_rate,
-            terminal_growth_rate=terminal_growth_rate,
-            forecast_years=forecast_years,
-        )
-        valuation_depth = valuation_depth_metrics(
-            income_statements=self.repo.financial_statement_history(asset_id, "income"),
-            balance_sheets=self.repo.financial_statement_history(asset_id, "balance"),
-            cashflow_statements=self.repo.financial_statement_history(asset_id, "cashflow"),
-            market_price=latest_price,
-            shares_outstanding=shares,
-            annual_dividend=dividend,
-            discount_rate=discount_rate,
-            base_growth_rate=dividend_growth_rate,
-            terminal_growth_rate=terminal_growth_rate,
-            forecast_years=forecast_years,
-        )
-        etf = etf_analytics(
-            asset_id=asset_id,
-            asset_profile=self.repo.asset_profile(asset_id),
-            etf_profile=self.repo.etf_profile(asset_id),
-            holdings=self.repo.etf_holdings(asset_id),
-            annual_distribution_per_share=dividend,
-            latest_price=latest_price,
-            price_history=prices,
-            benchmark_price_history=self.repo.benchmark_price_history(
-                benchmark_index_id or self.repo.etf_profile(asset_id).get("benchmark_index_id")
-            )
-            if (benchmark_index_id or self.repo.etf_profile(asset_id).get("benchmark_index_id"))
-            else [],
-            direct_portfolio_weights=self.repo.portfolio_direct_holding_weights(portfolio_id)
-            if portfolio_id is not None
-            else {},
-        )
-        forecast = asset_forecast_metrics(
-            market_price=latest_price,
-            risk=risk,
-            valuation_depth=valuation_depth,
-            dividend_history=self.repo.dividend_history(asset_id),
-            annual_dividend=dividend,
-            forecast_years=forecast_years,
-        )
-        ai_context = asset_ai_context(
-            asset_id=asset_id,
-            latest_price=latest_price,
-            risk=risk,
-            relative=relative,
-            dividend_discount=dividend_discount,
-            discounted_cash_flow=discounted_cash_flow,
-            valuation_depth=valuation_depth,
-            etf=etf,
-            forecast=forecast,
-        )
-
-        return AssetAnalyticsReport(
-            asset_id=asset_id,
-            benchmark_index_id=benchmark_index_id,
-            latest_price=latest_price,
-            data_coverage=self.repo.data_coverage(),
-            risk=risk,
-            relative=relative,
-            dividend_discount=dividend_discount,
-            discounted_cash_flow=discounted_cash_flow,
-            valuation_depth=valuation_depth,
-            etf=etf,
-            forecast=forecast,
-            ai_context=ai_context,
-        )
-
-    def portfolio_report(
-        self,
-        portfolio_id: int,
-        benchmark_index_id: str | None = None,
-        risk_free_rate: float = 0.0,
-    ) -> PortfolioAnalyticsReport:
-        positions = []
-        missing: list[str] = []
-        total_value = 0.0
-
-        for row in self.repo.portfolio_positions(portfolio_id):
-            _portfolio_id, asset_id, qty, book_cost = row
-            latest_price = self.repo.latest_price(asset_id)
-            market_value = qty * latest_price if latest_price is not None else None
-            if market_value is None:
-                missing.append(f"{asset_id}: latest price")
-            else:
-                total_value += market_value
-            positions.append(
-                PositionAnalytics(
-                    portfolio_id=portfolio_id,
-                    asset_id=asset_id,
-                    qty=qty,
-                    book_cost=book_cost,
-                    latest_price=latest_price,
-                    market_value=market_value,
-                    weight=None,
-                    unrealized_gain=market_value - book_cost if market_value is not None else None,
-                )
-            )
-
-        weighted_positions = [
-            PositionAnalytics(
-                portfolio_id=p.portfolio_id,
-                asset_id=p.asset_id,
-                qty=p.qty,
-                book_cost=p.book_cost,
-                latest_price=p.latest_price,
-                market_value=p.market_value,
-                weight=p.market_value / total_value if p.market_value is not None and total_value > 0 else None,
-                unrealized_gain=p.unrealized_gain,
-            )
-            for p in positions
-        ]
-        benchmark_index_id = benchmark_index_id or self.repo.default_benchmark_for_portfolio(weighted_positions)
-
-        portfolio_prices = self._synthetic_portfolio_prices(weighted_positions)
-        performance = portfolio_performance_metrics(
-            transactions=self.repo.portfolio_transactions(portfolio_id),
-            ending_market_value=total_value,
-            unrealized_gain=sum(
-                p.unrealized_gain for p in weighted_positions if p.unrealized_gain is not None
-            )
-            if weighted_positions
-            else None,
-        )
-        risk_decomposition = portfolio_risk_decomposition(
-            positions=weighted_positions,
-            price_history_by_asset={
-                p.asset_id: self.repo.price_history(p.asset_id)
-                for p in weighted_positions
-                if p.weight is not None and p.weight > 0
-            },
-            exposure_metadata=self.repo.asset_exposure_metadata(
-                [p.asset_id for p in weighted_positions]
-            ),
-        )
-        valuation = self._portfolio_valuation_rollup(weighted_positions)
-        benchmark = (
-            self.repo.benchmark_price_history(benchmark_index_id)
-            if benchmark_index_id is not None
-            else []
-        )
-
-        risk = risk_return_metrics(portfolio_prices, risk_free_rate) if portfolio_prices else None
-        relative = (
-            relative_risk_metrics(portfolio_prices, benchmark, risk_free_rate)
-            if portfolio_prices and benchmark
-            else None
-        )
-        forecast = portfolio_forecast_metrics(
-            market_value=total_value,
-            risk=risk,
-            performance=performance,
-            forecast_years=5,
-        )
-        if not weighted_positions:
-            missing.append("portfolio positions")
-        if not portfolio_prices:
-            missing.append("overlapping position price history")
-        ai_context = portfolio_ai_context(
-            portfolio_id=portfolio_id,
-            positions=weighted_positions,
-            market_value=total_value,
-            performance=performance,
-            risk_decomposition=risk_decomposition,
-            valuation=valuation,
-            risk=risk,
-            relative=relative,
-            forecast=forecast,
-            missing_inputs=missing,
-        )
-
-        return PortfolioAnalyticsReport(
-            portfolio_id=portfolio_id,
-            benchmark_index_id=benchmark_index_id,
-            positions=weighted_positions,
-            market_value=total_value,
-            performance=performance,
-            risk_decomposition=risk_decomposition,
-            valuation=valuation,
-            risk=risk,
-            relative=relative,
-            forecast=forecast,
-            missing_inputs=missing,
-            ai_context=ai_context,
-        )
-
-    def _synthetic_portfolio_prices(self, positions: list[PositionAnalytics]) -> list[PricePoint]:
-        weighted = [p for p in positions if p.weight is not None and p.weight > 0]
-        if not weighted:
-            return []
-
-        series_by_asset = {
-            p.asset_id: {point.date: point.close for point in self.repo.price_history(p.asset_id)}
-            for p in weighted
-        }
-        common_dates = set.intersection(*(set(series) for series in series_by_asset.values()))
-        if not common_dates:
-            return []
-
-        sorted_dates = sorted(common_dates)
-        bases = {
-            asset_id: series_by_asset[asset_id][sorted_dates[0]]
-            for asset_id in series_by_asset
-            if series_by_asset[asset_id][sorted_dates[0]] > 0
-        }
-        if len(bases) != len(series_by_asset):
-            return []
-
-        points: list[PricePoint] = []
-        for point_date in sorted_dates:
-            normalized_value = 0.0
-            for position in weighted:
-                price = series_by_asset[position.asset_id][point_date]
-                normalized_value += position.weight * (price / bases[position.asset_id])
-            points.append(PricePoint(point_date, normalized_value))
-        return points
-
-    def _portfolio_valuation_rollup(
-        self,
-        positions: list[PositionAnalytics],
-        discount_rate: float = 0.10,
-        growth_rate: float = 0.03,
-        terminal_growth_rate: float = 0.03,
-        forecast_years: int = 5,
-    ) -> PortfolioValuationRollup:
-        contributions: list[PositionValuationContribution] = []
-        missing: list[str] = []
-
-        for position in positions:
-            if position.weight is None or position.weight <= 0:
-                continue
-            asset_id = position.asset_id
-            latest_price = position.latest_price
-            annual_dividend = self.repo.annual_dividend_per_share(asset_id)
-            dividend_yield = safe_div(annual_dividend, latest_price)
-            shares = self.repo.shares_outstanding(asset_id)
-            fcf = self.repo.latest_free_cash_flow(asset_id)
-            fcf_per_share = fcf / shares if fcf is not None and shares else None
-            dcf = discounted_cash_flow_model(
-                cashflow_per_share=fcf_per_share,
-                market_price=latest_price,
-                discount_rate=discount_rate,
-                growth_rate=growth_rate,
-                terminal_growth_rate=terminal_growth_rate,
-                forecast_years=forecast_years,
-            )
-            valuation_depth = valuation_depth_metrics(
-                income_statements=self.repo.financial_statement_history(asset_id, "income"),
-                balance_sheets=self.repo.financial_statement_history(asset_id, "balance"),
-                cashflow_statements=self.repo.financial_statement_history(asset_id, "cashflow"),
-                market_price=latest_price,
-                shares_outstanding=shares,
-                annual_dividend=annual_dividend,
-                discount_rate=discount_rate,
-                base_growth_rate=growth_rate,
-                terminal_growth_rate=terminal_growth_rate,
-                forecast_years=forecast_years,
-            )
-            risk = risk_return_metrics(self.repo.price_history(asset_id))
-            forecast = asset_forecast_metrics(
-                market_price=latest_price,
-                risk=risk,
-                valuation_depth=valuation_depth,
-                dividend_history=self.repo.dividend_history(asset_id),
-                annual_dividend=annual_dividend,
-                forecast_years=forecast_years,
-            )
-            expected = forecast.blended_expected_cagr
-            contributions.append(
-                PositionValuationContribution(
-                    asset_id=asset_id,
-                    weight=position.weight,
-                    margin_of_safety=dcf.margin_of_safety,
-                    pe_ratio=valuation_depth.pe_ratio,
-                    price_to_free_cash_flow=valuation_depth.price_to_free_cash_flow,
-                    dividend_yield=dividend_yield,
-                    expected_cagr=expected,
-                    weighted_expected_cagr_contribution=position.weight * expected
-                    if expected is not None
-                    else None,
-                )
-            )
-            missing.extend(f"{asset_id}: {item}" for item in dcf.missing_inputs)
-            missing.extend(f"{asset_id}: {item}" for item in valuation_depth.missing_inputs)
-            missing.extend(f"{asset_id}: {item}" for item in forecast.missing_inputs)
-
-        undervalued_weight = sum(
-            item.weight or 0.0
-            for item in contributions
-            if item.margin_of_safety is not None and item.margin_of_safety >= 0.10
-        )
-        overvalued_weight = sum(
-            item.weight or 0.0
-            for item in contributions
-            if item.margin_of_safety is not None and item.margin_of_safety <= -0.10
-        )
-        fair_value_weight = sum(
-            item.weight or 0.0
-            for item in contributions
-            if item.margin_of_safety is not None and -0.10 < item.margin_of_safety < 0.10
-        )
-
-        return PortfolioValuationRollup(
-            weighted_margin_of_safety=_weighted_average(contributions, "margin_of_safety"),
-            weighted_pe_ratio=_weighted_average(contributions, "pe_ratio"),
-            weighted_price_to_free_cash_flow=_weighted_average(contributions, "price_to_free_cash_flow"),
-            weighted_dividend_yield=_weighted_average(contributions, "dividend_yield"),
-            weighted_expected_cagr=_weighted_average(contributions, "expected_cagr"),
-            undervalued_weight=undervalued_weight,
-            overvalued_weight=overvalued_weight,
-            fair_value_weight=fair_value_weight,
-            position_contributions=contributions,
-            missing_inputs=sorted(set(missing)),
-        )
-
-
-class AnalyticsStorageService:
-    """Optional persistence for the latest analytics snapshots.
-
-    The service is inert unless ``enabled`` is true. That lets users calculate
-    analytics ad hoc without storing records, while users who want an AI-ready
-    cache can opt into daily and portfolio-change refreshes.
-    """
-
-    def __init__(
-        self,
-        conn: Any,
-        enabled: bool = False,
-        benchmark_index_id: str | None = None,
-        risk_free_rate: float = 0.0,
-    ) -> None:
-        self.conn = conn
-        self.enabled = enabled
-        self.benchmark_index_id = benchmark_index_id
-        self.risk_free_rate = risk_free_rate
-        self.repo = AnalyticsRepository(conn)
-        self.engine = AnalyticsEngine(self.repo)
-
-    def set_enabled(self, enabled: bool) -> None:
-        self.enabled = enabled
-        if enabled:
-            self.ensure_schema()
-        else:
-            if self.repo._table_exists("analytics_storage_config"):
-                self.conn.execute(
-                    """
-                    INSERT INTO analytics_storage_config(config_key, config_value, updated_at)
-                    VALUES ('enabled', 'false', now())
-                    ON CONFLICT(config_key) DO UPDATE SET
-                        config_value = excluded.config_value,
-                        updated_at = now()
-                    """
-                )
-            return
-
-        self.conn.execute(
-            """
-            INSERT INTO analytics_storage_config(config_key, config_value, updated_at)
-            VALUES ('enabled', 'true', now())
-            ON CONFLICT(config_key) DO UPDATE SET
-                config_value = excluded.config_value,
-                updated_at = now()
-            """
-        )
-
-    def refresh_due(
-        self,
-        as_of_date: date | None = None,
-        asset_ids: list[str] | None = None,
-        portfolio_ids: list[int] | None = None,
-    ) -> AnalyticsRefreshResult:
-        if not self.enabled:
-            return AnalyticsRefreshResult(skipped=True, reason="analytics storage disabled")
-
-        self.ensure_schema()
-        as_of_date = as_of_date or date.today()
-        asset_ids = asset_ids if asset_ids is not None else self.repo.tracked_asset_ids()
-        portfolio_ids = portfolio_ids if portfolio_ids is not None else self.repo.portfolio_ids()
-
-        assets_stored = 0
-        for asset_id in asset_ids:
-            if self._asset_due(asset_id, as_of_date):
-                report = self.engine.asset_report(
-                    asset_id,
-                    benchmark_index_id=self.benchmark_index_id,
-                    risk_free_rate=self.risk_free_rate,
-                )
-                self.store_asset_report(report, as_of_date)
-                assets_stored += 1
-
-        portfolios_stored = 0
-        for portfolio_id in portfolio_ids:
-            signature = self.portfolio_signature(portfolio_id)
-            if self._portfolio_due(portfolio_id, as_of_date, signature):
-                report = self.engine.portfolio_report(
-                    portfolio_id,
-                    benchmark_index_id=self.benchmark_index_id,
-                    risk_free_rate=self.risk_free_rate,
-                )
-                self.store_portfolio_report(report, as_of_date, signature)
-                portfolios_stored += 1
-
-        return AnalyticsRefreshResult(
-            assets_stored=assets_stored,
-            portfolios_stored=portfolios_stored,
-        )
-
-    def store_asset_report(self, report: AssetAnalyticsReport, as_of_date: date) -> None:
-        payload = _json_dumps(report)
-        latest_missing = sorted(
-            set(report.dividend_discount.missing_inputs + report.discounted_cash_flow.missing_inputs)
-        )
-        self.conn.execute(
-            """
-            INSERT INTO asset_analytics_snapshot (
-                asset_id,
-                snapshot_date,
-                latest_price,
-                cagr,
-                sharpe_ratio,
-                sortino_ratio,
-                beta,
-                alpha_annualized,
-                dividend_discount_value,
-                discounted_cash_flow_value,
-                implied_dividend_growth,
-                implied_dcf_growth,
-                payload_json,
-                missing_inputs_json,
-                refreshed_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
-            ON CONFLICT(asset_id, snapshot_date) DO UPDATE SET
-                latest_price = excluded.latest_price,
-                cagr = excluded.cagr,
-                sharpe_ratio = excluded.sharpe_ratio,
-                sortino_ratio = excluded.sortino_ratio,
-                beta = excluded.beta,
-                alpha_annualized = excluded.alpha_annualized,
-                dividend_discount_value = excluded.dividend_discount_value,
-                discounted_cash_flow_value = excluded.discounted_cash_flow_value,
-                implied_dividend_growth = excluded.implied_dividend_growth,
-                implied_dcf_growth = excluded.implied_dcf_growth,
-                payload_json = excluded.payload_json,
-                missing_inputs_json = excluded.missing_inputs_json,
-                refreshed_at = now()
-            """,
-            [
-                report.asset_id,
-                as_of_date,
-                report.latest_price,
-                report.risk.cagr,
-                report.risk.sharpe_ratio,
-                report.risk.sortino_ratio,
-                report.relative.beta if report.relative else None,
-                report.relative.alpha_annualized if report.relative else None,
-                report.dividend_discount.intrinsic_value_per_share,
-                report.discounted_cash_flow.intrinsic_value_per_share,
-                report.dividend_discount.implied_growth_rate,
-                report.discounted_cash_flow.implied_growth_rate,
-                payload,
-                json.dumps(latest_missing),
-            ],
-        )
-        self._upsert_refresh_state("asset", report.asset_id, as_of_date, None)
-
-    def store_portfolio_report(
-        self,
-        report: PortfolioAnalyticsReport,
-        as_of_date: date,
-        state_signature: str | None = None,
-    ) -> None:
-        signature = state_signature or self.portfolio_signature(report.portfolio_id)
-        self.conn.execute(
-            """
-            INSERT INTO portfolio_analytics_snapshot (
-                portfolio_id,
-                snapshot_date,
-                market_value,
-                cagr,
-                sharpe_ratio,
-                sortino_ratio,
-                beta,
-                alpha_annualized,
-                position_count,
-                state_signature,
-                payload_json,
-                missing_inputs_json,
-                refreshed_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
-            ON CONFLICT(portfolio_id, snapshot_date) DO UPDATE SET
-                market_value = excluded.market_value,
-                cagr = excluded.cagr,
-                sharpe_ratio = excluded.sharpe_ratio,
-                sortino_ratio = excluded.sortino_ratio,
-                beta = excluded.beta,
-                alpha_annualized = excluded.alpha_annualized,
-                position_count = excluded.position_count,
-                state_signature = excluded.state_signature,
-                payload_json = excluded.payload_json,
-                missing_inputs_json = excluded.missing_inputs_json,
-                refreshed_at = now()
-            """,
-            [
-                report.portfolio_id,
-                as_of_date,
-                report.market_value,
-                report.risk.cagr if report.risk else None,
-                report.risk.sharpe_ratio if report.risk else None,
-                report.risk.sortino_ratio if report.risk else None,
-                report.relative.beta if report.relative else None,
-                report.relative.alpha_annualized if report.relative else None,
-                len(report.positions),
-                signature,
-                _json_dumps(report),
-                json.dumps(report.missing_inputs),
-            ],
-        )
-        self._upsert_refresh_state("portfolio", str(report.portfolio_id), as_of_date, signature)
-
-    def portfolio_signature(self, portfolio_id: int) -> str:
-        rows = self.conn.execute(
-            """
-            SELECT
-                p.asset_id,
-                p.qty,
-                p.book_cost,
-                p.updated_at,
-                MAX(q.date) AS latest_price_date
-            FROM position p
-            LEFT JOIN asset_quote_daily q
-              ON q.asset_id = p.asset_id
-            WHERE p.portfolio_id = ?
-            GROUP BY p.asset_id, p.qty, p.book_cost, p.updated_at
-            ORDER BY p.asset_id
-            """,
-            [portfolio_id],
-        ).fetchall()
-        encoded = json.dumps([_json_ready(row) for row in rows], sort_keys=True)
-        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-
-    def ensure_schema(self) -> None:
-        self.conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS analytics_storage_config (
-                config_key TEXT PRIMARY KEY,
-                config_value TEXT NOT NULL,
-                updated_at TIMESTAMP NOT NULL DEFAULT now()
-            )
-            """
-        )
-        self.conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS asset_analytics_snapshot (
-                asset_id TEXT NOT NULL,
-                snapshot_date DATE NOT NULL,
-                latest_price DOUBLE,
-                cagr DOUBLE,
-                sharpe_ratio DOUBLE,
-                sortino_ratio DOUBLE,
-                beta DOUBLE,
-                alpha_annualized DOUBLE,
-                dividend_discount_value DOUBLE,
-                discounted_cash_flow_value DOUBLE,
-                implied_dividend_growth DOUBLE,
-                implied_dcf_growth DOUBLE,
-                payload_json TEXT NOT NULL,
-                missing_inputs_json TEXT,
-                refreshed_at TIMESTAMP NOT NULL DEFAULT now(),
-                PRIMARY KEY(asset_id, snapshot_date)
-            )
-            """
-        )
-        self.conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS portfolio_analytics_snapshot (
-                portfolio_id BIGINT NOT NULL,
-                snapshot_date DATE NOT NULL,
-                market_value DOUBLE,
-                cagr DOUBLE,
-                sharpe_ratio DOUBLE,
-                sortino_ratio DOUBLE,
-                beta DOUBLE,
-                alpha_annualized DOUBLE,
-                position_count INTEGER NOT NULL DEFAULT 0,
-                state_signature TEXT NOT NULL,
-                payload_json TEXT NOT NULL,
-                missing_inputs_json TEXT,
-                refreshed_at TIMESTAMP NOT NULL DEFAULT now(),
-                PRIMARY KEY(portfolio_id, snapshot_date)
-            )
-            """
-        )
-        self.conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS analytics_refresh_state (
-                subject_type TEXT NOT NULL,
-                subject_id TEXT NOT NULL,
-                last_snapshot_date DATE,
-                last_refreshed_at TIMESTAMP,
-                state_signature TEXT,
-                PRIMARY KEY(subject_type, subject_id)
-            )
-            """
-        )
-
-    def _asset_due(self, asset_id: str, as_of_date: date) -> bool:
-        row = self.conn.execute(
-            """
-            SELECT last_snapshot_date
-            FROM analytics_refresh_state
-            WHERE subject_type = 'asset'
-              AND subject_id = ?
-            """,
-            [asset_id],
-        ).fetchone()
-        return row is None or row[0] is None or row[0] < as_of_date
-
-    def _portfolio_due(self, portfolio_id: int, as_of_date: date, signature: str) -> bool:
-        row = self.conn.execute(
-            """
-            SELECT last_snapshot_date, state_signature
-            FROM analytics_refresh_state
-            WHERE subject_type = 'portfolio'
-              AND subject_id = ?
-            """,
-            [str(portfolio_id)],
-        ).fetchone()
-        return (
-            row is None
-            or row[0] is None
-            or row[0] < as_of_date
-            or row[1] != signature
-        )
-
-    def _upsert_refresh_state(
-        self,
-        subject_type: str,
-        subject_id: str,
-        snapshot_date: date,
-        state_signature: str | None,
-    ) -> None:
-        self.conn.execute(
-            """
-            INSERT INTO analytics_refresh_state (
-                subject_type,
-                subject_id,
-                last_snapshot_date,
-                last_refreshed_at,
-                state_signature
-            )
-            VALUES (?, ?, ?, now(), ?)
-            ON CONFLICT(subject_type, subject_id) DO UPDATE SET
-                last_snapshot_date = excluded.last_snapshot_date,
-                last_refreshed_at = now(),
-                state_signature = excluded.state_signature
-            """,
-            [subject_type, subject_id, snapshot_date, state_signature],
-        )
+from .models import *
 
 
 def risk_return_metrics(
@@ -1591,7 +66,11 @@ def relative_risk_metrics(
     corr = correlation(asset_returns, benchmark_returns)
 
     asset_years = _years_between(dates[0], dates[-1])
-    asset_cagr = cagr(asset_by_date[dates[0]], asset_by_date[dates[-1]], asset_years) if asset_years else None
+    asset_cagr = (
+        cagr(asset_by_date[dates[0]], asset_by_date[dates[-1]], asset_years)
+        if asset_years
+        else None
+    )
     benchmark_cagr = (
         cagr(benchmark_by_date[dates[0]], benchmark_by_date[dates[-1]], asset_years)
         if asset_years
@@ -1702,7 +181,9 @@ def portfolio_performance_metrics(
     )
 
 
-def average_cost_realized_gain(transactions: list[tuple[Any, ...]]) -> tuple[float | None, list[str]]:
+def average_cost_realized_gain(
+    transactions: list[tuple[Any, ...]],
+) -> tuple[float | None, list[str]]:
     lots: dict[str, dict[str, float]] = {}
     realized = 0.0
     saw_sell = False
@@ -1949,7 +430,10 @@ def portfolio_returns_from_components(
     rows = []
     for idx in range(count):
         rows.append(
-            sum(weights.get(asset_id, 0.0) * returns[idx] for asset_id, returns in returns_by_asset.items())
+            sum(
+                weights.get(asset_id, 0.0) * returns[idx]
+                for asset_id, returns in returns_by_asset.items()
+            )
         )
     return rows
 
@@ -2060,7 +544,9 @@ def valuation_depth_metrics(
         if total_equity is not None and shares_outstanding
         else None
     )
-    revenue_per_share = revenue / shares_outstanding if revenue is not None and shares_outstanding else None
+    revenue_per_share = (
+        revenue / shares_outstanding if revenue is not None and shares_outstanding else None
+    )
     enterprise_value = None
     if market_price is not None and shares_outstanding:
         enterprise_value = market_price * shares_outstanding + (total_debt or 0.0) - (cash or 0.0)
@@ -2232,7 +718,9 @@ def etf_analytics(
     )
 
 
-def tracking_error(asset_prices: list[PricePoint], benchmark_prices: list[PricePoint]) -> float | None:
+def tracking_error(
+    asset_prices: list[PricePoint], benchmark_prices: list[PricePoint]
+) -> float | None:
     asset_by_date = {point.date: point.close for point in asset_prices if point.close > 0}
     benchmark_by_date = {point.date: point.close for point in benchmark_prices if point.close > 0}
     dates = sorted(set(asset_by_date).intersection(benchmark_by_date))
@@ -2307,7 +795,11 @@ def asset_forecast_metrics(
     forecast_years: int = 5,
 ) -> ForecastMetrics:
     base_scenario = next(
-        (scenario for scenario in valuation_depth.dcf_scenarios if scenario.scenario_name == "base"),
+        (
+            scenario
+            for scenario in valuation_depth.dcf_scenarios
+            if scenario.scenario_name == "base"
+        ),
         None,
     )
     intrinsic = base_scenario.intrinsic_value_per_share if base_scenario else None
@@ -2455,12 +947,11 @@ def simulated_forecast_band(
 
     rng = random.Random(seed)
     terminal_values = []
-    annual_drift = expected_cagr - 0.5 * (annualized_volatility ** 2)
+    annual_drift = expected_cagr - 0.5 * (annualized_volatility**2)
     for _ in range(simulations):
         shock = rng.gauss(0.0, 1.0)
         terminal = start_value * math.exp(
-            annual_drift * horizon_years
-            + annualized_volatility * math.sqrt(horizon_years) * shock
+            annual_drift * horizon_years + annualized_volatility * math.sqrt(horizon_years) * shock
         )
         terminal_values.append(terminal)
 
@@ -2542,9 +1033,15 @@ def asset_ai_context(
             "risk_return",
         ),
         _analytics_fact("sharpe_ratio", "Sharpe ratio", risk.sharpe_ratio, "ratio", "risk_return"),
-        _analytics_fact("sortino_ratio", "Sortino ratio", risk.sortino_ratio, "ratio", "risk_return"),
-        _analytics_fact("max_drawdown", "Max drawdown", risk.max_drawdown, "percent", "risk_return"),
-        _analytics_fact("beta", "Beta", relative.beta if relative else None, "ratio", "relative_risk"),
+        _analytics_fact(
+            "sortino_ratio", "Sortino ratio", risk.sortino_ratio, "ratio", "risk_return"
+        ),
+        _analytics_fact(
+            "max_drawdown", "Max drawdown", risk.max_drawdown, "percent", "risk_return"
+        ),
+        _analytics_fact(
+            "beta", "Beta", relative.beta if relative else None, "ratio", "relative_risk"
+        ),
         _analytics_fact(
             "alpha_annualized",
             "Annualized alpha",
@@ -2573,7 +1070,9 @@ def asset_ai_context(
             "percent",
             "discounted_cash_flow",
         ),
-        _analytics_fact("pe_ratio", "P/E ratio", valuation_depth.pe_ratio, "ratio", "valuation_depth"),
+        _analytics_fact(
+            "pe_ratio", "P/E ratio", valuation_depth.pe_ratio, "ratio", "valuation_depth"
+        ),
         _analytics_fact(
             "price_to_free_cash_flow",
             "Price to free cash flow",
@@ -2600,7 +1099,9 @@ def asset_ai_context(
         facts.extend(
             [
                 _analytics_fact("is_etf", "Is ETF", etf.is_etf, None, "etf_profile"),
-                _analytics_fact("expense_ratio", "Expense ratio", etf.expense_ratio, "percent", "etf_profile"),
+                _analytics_fact(
+                    "expense_ratio", "Expense ratio", etf.expense_ratio, "percent", "etf_profile"
+                ),
                 _analytics_fact(
                     "distribution_yield",
                     "Distribution yield",
@@ -2615,7 +1116,9 @@ def asset_ai_context(
                     "percent",
                     "etf_profile",
                 ),
-                _analytics_fact("holding_count", "ETF holding count", etf.holding_count, "count", "etf_holdings"),
+                _analytics_fact(
+                    "holding_count", "ETF holding count", etf.holding_count, "count", "etf_holdings"
+                ),
             ]
         )
 
@@ -2623,12 +1126,16 @@ def asset_ai_context(
         AnalyticsExplanation(
             topic="risk",
             summary=_asset_risk_summary(risk),
-            evidence=_present_fact_labels(facts, ["cagr", "annualized_volatility", "sharpe_ratio", "max_drawdown"]),
+            evidence=_present_fact_labels(
+                facts, ["cagr", "annualized_volatility", "sharpe_ratio", "max_drawdown"]
+            ),
         ),
         AnalyticsExplanation(
             topic="valuation",
             summary=_asset_valuation_summary(discounted_cash_flow, valuation_depth),
-            evidence=_present_fact_labels(facts, ["dcf_intrinsic_value", "dcf_margin_of_safety", "pe_ratio"]),
+            evidence=_present_fact_labels(
+                facts, ["dcf_intrinsic_value", "dcf_margin_of_safety", "pe_ratio"]
+            ),
         ),
         AnalyticsExplanation(
             topic="forecast",
@@ -2641,7 +1148,9 @@ def asset_ai_context(
             AnalyticsExplanation(
                 topic="etf",
                 summary=f"ETF profile covers {etf.holding_count} holdings and benchmark {etf.benchmark_index_id or 'unknown'}.",
-                evidence=_present_fact_labels(facts, ["expense_ratio", "distribution_yield", "tracking_error"]),
+                evidence=_present_fact_labels(
+                    facts, ["expense_ratio", "distribution_yield", "tracking_error"]
+                ),
             )
         )
 
@@ -2681,8 +1190,12 @@ def portfolio_ai_context(
         )
     )
     facts = [
-        _analytics_fact("market_value", "Market value", market_value, "currency", "portfolio_positions"),
-        _analytics_fact("position_count", "Position count", len(positions), "count", "portfolio_positions"),
+        _analytics_fact(
+            "market_value", "Market value", market_value, "currency", "portfolio_positions"
+        ),
+        _analytics_fact(
+            "position_count", "Position count", len(positions), "count", "portfolio_positions"
+        ),
         _analytics_fact(
             "modified_dietz_return",
             "Modified Dietz return",
@@ -2697,7 +1210,13 @@ def portfolio_ai_context(
             "percent",
             "portfolio_performance",
         ),
-        _analytics_fact("portfolio_cagr", "Portfolio CAGR", risk.cagr if risk else None, "percent", "risk_return"),
+        _analytics_fact(
+            "portfolio_cagr",
+            "Portfolio CAGR",
+            risk.cagr if risk else None,
+            "percent",
+            "risk_return",
+        ),
         _analytics_fact(
             "portfolio_volatility",
             "Portfolio volatility",
@@ -2705,7 +1224,13 @@ def portfolio_ai_context(
             "percent",
             "risk_decomposition",
         ),
-        _analytics_fact("sharpe_ratio", "Sharpe ratio", risk.sharpe_ratio if risk else None, "ratio", "risk_return"),
+        _analytics_fact(
+            "sharpe_ratio",
+            "Sharpe ratio",
+            risk.sharpe_ratio if risk else None,
+            "ratio",
+            "risk_return",
+        ),
         _analytics_fact(
             "sortino_ratio",
             "Sortino ratio",
@@ -2713,7 +1238,9 @@ def portfolio_ai_context(
             "ratio",
             "risk_return",
         ),
-        _analytics_fact("beta", "Beta", relative.beta if relative else None, "ratio", "relative_risk"),
+        _analytics_fact(
+            "beta", "Beta", relative.beta if relative else None, "ratio", "relative_risk"
+        ),
         _analytics_fact(
             "alpha_annualized",
             "Annualized alpha",
@@ -2796,14 +1323,21 @@ def portfolio_ai_context(
         AnalyticsExplanation(
             topic="portfolio_performance",
             summary=_portfolio_performance_summary(performance, risk),
-            evidence=_present_fact_labels(facts, ["market_value", "money_weighted_return", "portfolio_cagr"]),
+            evidence=_present_fact_labels(
+                facts, ["market_value", "money_weighted_return", "portfolio_cagr"]
+            ),
         ),
         AnalyticsExplanation(
             topic="portfolio_risk",
             summary=_portfolio_risk_summary(risk_decomposition),
             evidence=_present_fact_labels(
                 facts,
-                ["portfolio_volatility", "concentration_hhi", "largest_position_weight", "diversification_score"],
+                [
+                    "portfolio_volatility",
+                    "concentration_hhi",
+                    "largest_position_weight",
+                    "diversification_score",
+                ],
             ),
         ),
         AnalyticsExplanation(
@@ -2898,11 +1432,23 @@ def asset_ai_anomalies(
     anomalies: list[AnalyticsAnomaly] = []
     if risk.annualized_volatility is not None and risk.annualized_volatility > 0.40:
         anomalies.append(
-            AnalyticsAnomaly("high", "annualized_volatility", "Annualized volatility is above 40%.", risk.annualized_volatility)
+            AnalyticsAnomaly(
+                "high",
+                "annualized_volatility",
+                "Annualized volatility is above 40%.",
+                risk.annualized_volatility,
+            )
         )
     if risk.max_drawdown is not None and risk.max_drawdown < -0.30:
-        anomalies.append(AnalyticsAnomaly("high", "max_drawdown", "Maximum drawdown is deeper than 30%.", risk.max_drawdown))
-    if discounted_cash_flow.margin_of_safety is not None and discounted_cash_flow.margin_of_safety < -0.20:
+        anomalies.append(
+            AnalyticsAnomaly(
+                "high", "max_drawdown", "Maximum drawdown is deeper than 30%.", risk.max_drawdown
+            )
+        )
+    if (
+        discounted_cash_flow.margin_of_safety is not None
+        and discounted_cash_flow.margin_of_safety < -0.20
+    ):
         anomalies.append(
             AnalyticsAnomaly(
                 "medium",
@@ -2912,18 +1458,34 @@ def asset_ai_anomalies(
             )
         )
     if valuation_depth.pe_ratio is not None and valuation_depth.pe_ratio > 40:
-        anomalies.append(AnalyticsAnomaly("medium", "pe_ratio", "P/E ratio is above 40.", valuation_depth.pe_ratio))
+        anomalies.append(
+            AnalyticsAnomaly(
+                "medium", "pe_ratio", "P/E ratio is above 40.", valuation_depth.pe_ratio
+            )
+        )
     if valuation_depth.debt_to_equity is not None and valuation_depth.debt_to_equity > 2:
         anomalies.append(
-            AnalyticsAnomaly("medium", "debt_to_equity", "Debt-to-equity is above 2.", valuation_depth.debt_to_equity)
+            AnalyticsAnomaly(
+                "medium",
+                "debt_to_equity",
+                "Debt-to-equity is above 2.",
+                valuation_depth.debt_to_equity,
+            )
         )
     if etf and etf.tracking_error is not None and etf.tracking_error > 0.05:
         anomalies.append(
-            AnalyticsAnomaly("medium", "tracking_error", "ETF tracking error is above 5%.", etf.tracking_error)
+            AnalyticsAnomaly(
+                "medium", "tracking_error", "ETF tracking error is above 5%.", etf.tracking_error
+            )
         )
     if missing_inputs:
         anomalies.append(
-            AnalyticsAnomaly("low", "missing_inputs", "Some analytics inputs are unavailable.", len(missing_inputs))
+            AnalyticsAnomaly(
+                "low",
+                "missing_inputs",
+                "Some analytics inputs are unavailable.",
+                len(missing_inputs),
+            )
         )
     return anomalies
 
@@ -2939,14 +1501,26 @@ def portfolio_ai_anomalies(
     hhi = risk_decomposition.concentration_hhi
     if (largest is not None and largest > 0.25) or (hhi is not None and hhi > 0.25):
         anomalies.append(
-            AnalyticsAnomaly("high", "concentration", "Portfolio concentration is elevated.", largest or hhi)
+            AnalyticsAnomaly(
+                "high", "concentration", "Portfolio concentration is elevated.", largest or hhi
+            )
         )
     score = risk_decomposition.diversification_score
     if score is not None and score < 50:
-        anomalies.append(AnalyticsAnomaly("medium", "diversification_score", "Diversification score is below 50.", score))
-    volatility = risk_decomposition.portfolio_volatility or (risk.annualized_volatility if risk else None)
+        anomalies.append(
+            AnalyticsAnomaly(
+                "medium", "diversification_score", "Diversification score is below 50.", score
+            )
+        )
+    volatility = risk_decomposition.portfolio_volatility or (
+        risk.annualized_volatility if risk else None
+    )
     if volatility is not None and volatility > 0.35:
-        anomalies.append(AnalyticsAnomaly("medium", "portfolio_volatility", "Portfolio volatility is above 35%.", volatility))
+        anomalies.append(
+            AnalyticsAnomaly(
+                "medium", "portfolio_volatility", "Portfolio volatility is above 35%.", volatility
+            )
+        )
     if valuation and valuation.overvalued_weight > 0.50:
         anomalies.append(
             AnalyticsAnomaly(
@@ -2958,7 +1532,12 @@ def portfolio_ai_anomalies(
         )
     if missing_inputs:
         anomalies.append(
-            AnalyticsAnomaly("low", "missing_inputs", "Some portfolio analytics inputs are unavailable.", len(missing_inputs))
+            AnalyticsAnomaly(
+                "low",
+                "missing_inputs",
+                "Some portfolio analytics inputs are unavailable.",
+                len(missing_inputs),
+            )
         )
     return anomalies
 
@@ -2995,7 +1574,9 @@ def _asset_ai_summary(
 ) -> str:
     price = f"latest price {latest_price:.2f}" if latest_price is not None else "no latest price"
     expected = forecast.blended_expected_cagr
-    expectation = f"blended expected CAGR {expected:.2%}" if expected is not None else "no blended CAGR"
+    expectation = (
+        f"blended expected CAGR {expected:.2%}" if expected is not None else "no blended CAGR"
+    )
     return (
         f"{asset_id} has {price}, {expectation}, "
         f"{len(anomalies)} anomaly flags, and {len(missing_inputs)} missing input groups."
@@ -3293,10 +1874,7 @@ def downside_deviation(
     returns: list[float],
     minimum_acceptable_daily_return: float = 0.0,
 ) -> float | None:
-    downside = [
-        min(0.0, ret - minimum_acceptable_daily_return)
-        for ret in returns
-    ]
+    downside = [min(0.0, ret - minimum_acceptable_daily_return) for ret in returns]
     if len(downside) < 2 or all(ret == 0 for ret in downside):
         return None
     mean_square = sum(ret * ret for ret in downside) / len(downside)

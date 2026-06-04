@@ -128,7 +128,7 @@ Each view has its own command set and behavior.
 **Rationale:**
 - Views handle user input + display
 - Keeps commands close to the view that executes them
-- Seperate business and cmd parsing logic
+- Separate business and command parsing logic
 - CLI loop runs cleaner 
 
 **Status:** Implemented
@@ -162,10 +162,10 @@ CLI displays need to be more than just object instances.
 
 ---
 
-## ADR-011 Seperate Formatter UML diagram
+## ADR-011 Separate Formatter UML diagram
 
 **Decision:**
-Make the UML diagram for the Formatter class seperate from the main UMl diagram.
+Make the UML diagram for the Formatter class separate from the main UML diagram.
 
 **Context:**
 With the Formatters included, the core components were hard to decipher.

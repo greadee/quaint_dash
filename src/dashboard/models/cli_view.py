@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 import argparse
 import shlex
 from dashboard.analytics import analytics_report_json
+from dashboard.brokers.cli import build_broker_parser, handle_broker_command
 from dashboard.models.storage import DashboardManager, PortfolioManager
 from dashboard.services.txn_importer import TxnImporterManual, TxnImporterCSV, tTestTxn
 
@@ -137,6 +138,14 @@ class DashboardView(View):
                 analytics asset <asset-id> [--benchmark index-id],
                 analytics portfolio <portfolio-id> [--benchmark index-id],
                 analytics storage [status|enable|disable|refresh],
+                broker snaptrade register-user <user-key>,
+                broker snaptrade portal <user-key> [--broker slug],
+                broker snaptrade sync <user-key>,
+                broker snaptrade accounts,
+                broker snaptrade map-account <account-id> <portfolio-id>,
+                broker snaptrade import-transactions [--portfolio-id id],
+                broker snaptrade sync-due [--max-users n] [--force],
+                broker storage [status|enable-raw|disable-raw],
 
                 help [command-name], 
                 quit/exit
@@ -409,6 +418,10 @@ class DashboardView(View):
                         )
                     return self
 
+        if cmd == "broker":
+            handle_broker_command(self.access, ns)
+            return self
+
         return self # fallback
 
     def _handle_help(self, args: list[str]):
@@ -658,6 +671,8 @@ class DashboardView(View):
         p_refresh.add_argument("--benchmark", dest="benchmark", default=None)
 
         parsers["analytics"] = p
+
+        parsers["broker"] = build_broker_parser(_NoExitParser)
 
         return parsers
 

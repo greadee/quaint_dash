@@ -1,54 +1,25 @@
-"""
-root/tests/
-Tests the TxnImporter run() procedure for subclasses TxnImporterCSV and TxnImporterManual.
-Tests are built in a sequential order, and all operate on the same DB.
-"""
-from pathlib import Path
+"""Tests for CSV and manual transaction imports."""
+
 from datetime import datetime
 import pytest
 from dashboard.db.db_conn import DB, init_db
 from dashboard.models.storage import DashboardManager
 from dashboard.services.txn_importer import TxnImporterCSV, TxnImporterManual, tTestTxn
 
-TEST_DB_FOLDER = "data/test/"
-TEST_IMPORTER_DB = "test_importer.db"
-TMP_FOLDER = "tests/tmp/"
 
-
-@pytest.fixture(autouse=True)
-def ensure_test_dir():
-    Path("data/test").mkdir(parents=True, exist_ok=True)
-    Path("tests/tmp").mkdir(parents=True, exist_ok=True)
-
-
-@pytest.fixture(scope="module")
-def test_manager(test_db_path: Path = Path(TEST_DB_FOLDER + TEST_IMPORTER_DB)):
-    """
-    Create a fresh DB inside the temp folder and initialize schema.
-    Return a DashboardManager object for access by other tests.
-    """
-    if test_db_path.exists():
-        test_db_path.unlink()
-
-    db = DB(test_db_path)
+@pytest.fixture()
+def test_manager(tmp_path):
+    """Return an isolated manager so every importer test runs independently."""
+    db = DB(tmp_path / "test_importer.db")
     init_db(db)
     manager = DashboardManager(db)
-
     try:
         yield manager
     finally:
-        try:
-            manager.conn.close()
-        except Exception:
-            pass
-        try:
-            if test_db_path.exists():
-                test_db_path.unlink()
-        except Exception:
-            pass
+        manager.conn.close()
 
 
-def test_import_one_port_batch(test_manager: DashboardManager):
+def test_import_one_port_batch(test_manager: DashboardManager, tmp_path):
     """
     CSV batch import (single portfolio).
 
@@ -60,13 +31,15 @@ def test_import_one_port_batch(test_manager: DashboardManager):
       - initialization stage inserts staged asset ids into asset table
       - cash transactions do not create asset rows
     """
-    csv_path = Path(TMP_FOLDER + "test_import_one_batch.csv")
+    csv_path = tmp_path / "test_import_one_batch.csv"
     csv_path.write_text(
-        "\n".join([
-            "portfolio_name,time_stamp,txn_type,asset_id,qty,price,ccy,cash_amt,fee_amt",
-            "test 1,2026-01-01 09:30:00,buy,BN.TO,10,63.57,CAD,0,0",
-            "test 1,2026-01-02 12:00:00,contribution,,,,CAD,500,0",
-        ]),
+        "\n".join(
+            [
+                "portfolio_name,time_stamp,txn_type,asset_id,qty,price,ccy,cash_amt,fee_amt",
+                "test 1,2026-01-01 09:30:00,buy,BN.TO,10,63.57,CAD,0,0",
+                "test 1,2026-01-02 12:00:00,contribution,,,,CAD,500,0",
+            ]
+        ),
         encoding="utf-8",
     )
 
@@ -117,7 +90,7 @@ def test_import_one_port_batch(test_manager: DashboardManager):
     assert cash_asset_count == 0
 
 
-def test_import_mul_port_batch(test_manager: DashboardManager):
+def test_import_mul_port_batch(test_manager: DashboardManager, tmp_path):
     """
     CSV batch import (multiple portfolio).
 
@@ -129,15 +102,17 @@ def test_import_mul_port_batch(test_manager: DashboardManager):
       - txn table successfully normalizes null and float fields
       - initialization stage inserts new distinct asset ids only once
     """
-    csv_path = Path(TMP_FOLDER + "test_import_mul_port_batch.csv")
+    csv_path = tmp_path / "test_import_mul_port_batch.csv"
     csv_path.write_text(
-        "\n".join([
-            "portfolio_name,time_stamp,txn_type,asset_id,qty,price,ccy,cash_amt,fee_amt",
-            "test 1,2026-01-03 10:00:00,buy,AVUV,5,600,USD,,",
-            "test 2,2026-01-03 11:00:00,buy,MSFT,3,400,USD,,1",
-            "test 1,2026-01-04 09:00:00,dividend,MSFT,3,1,USD,,1",
-            "test 2,2026-01-04 09:27:27,withdrawal,,,,CAD,1919,1",
-        ]),
+        "\n".join(
+            [
+                "portfolio_name,time_stamp,txn_type,asset_id,qty,price,ccy,cash_amt,fee_amt",
+                "test 1,2026-01-03 10:00:00,buy,AVUV,5,600,USD,,",
+                "test 2,2026-01-03 11:00:00,buy,MSFT,3,400,USD,,1",
+                "test 1,2026-01-04 09:00:00,dividend,MSFT,3,1,USD,,1",
+                "test 2,2026-01-04 09:27:27,withdrawal,,,,CAD,1919,1",
+            ]
+        ),
         encoding="utf-8",
     )
 
@@ -145,7 +120,7 @@ def test_import_mul_port_batch(test_manager: DashboardManager):
     import_data = importer.run()
 
     # importer object assertions
-    assert importer.batch_id == 2
+    assert importer.batch_id == 1
 
     portfolios_aff = import_data.portfolios_affected
 
@@ -160,12 +135,11 @@ def test_import_mul_port_batch(test_manager: DashboardManager):
     for p_aff in portfolios_aff:
         assert p_aff.batch_id == import_data.batch_id
         assert p_aff.portfolio_name in ["test 1", "test 2"]
-        if p_aff.created:
-            assert p_aff.portfolio_name != "test 1"
+        assert p_aff.created
 
     # db: txn count and seq. id assertions
     n_txn = test_manager.conn.execute("SELECT COUNT(*) FROM txn").fetchone()[0]
-    assert n_txn == import_data.inserted_rows + 2
+    assert n_txn == import_data.inserted_rows
 
     max_id = test_manager.conn.execute("SELECT MAX(txn_id) FROM txn").fetchone()[0]
     assert max_id == n_txn
@@ -228,7 +202,7 @@ def test_import_mul_port_batch(test_manager: DashboardManager):
             "SELECT asset_id FROM asset ORDER BY asset_id"
         ).fetchall()
     ]
-    assert asset_ids == ["AVUV", "BN.TO", "MSFT"]
+    assert asset_ids == ["AVUV", "MSFT"]
 
     # MSFT appeared twice in staged txns but should only be initialized once
     msft_count = test_manager.conn.execute(
@@ -248,7 +222,7 @@ def test_manual_txn_create(test_manager: DashboardManager):
       - portfolio table both created_at and updated_at is changed to import time
       - cash-only manual imports do not create asset rows
     """
-    p_id = 3
+    p_id = 1
     txn = tTestTxn(
         portfolio_id=p_id,
         portfolio_name="test 3",
@@ -266,14 +240,14 @@ def test_manual_txn_create(test_manager: DashboardManager):
     import_data = importer.run()
 
     # importer object assertion
-    assert importer.batch_id == 3
+    assert importer.batch_id == 1
 
     # ImportData assertion
     assert len(import_data.portfolios_affected) == 1
 
     # db: txn count and seq. id assertions
     n_txn = test_manager.conn.execute("SELECT COUNT(*) FROM txn").fetchone()[0]
-    assert n_txn == import_data.inserted_rows + (2 + 4)
+    assert n_txn == import_data.inserted_rows
 
     max_id = test_manager.conn.execute("SELECT MAX(txn_id) FROM txn").fetchone()[0]
     assert max_id == n_txn
@@ -294,7 +268,7 @@ def test_manual_txn_create(test_manager: DashboardManager):
             "SELECT asset_id FROM asset ORDER BY asset_id"
         ).fetchall()
     ]
-    assert asset_ids == ["AVUV", "BN.TO", "MSFT"]
+    assert asset_ids == []
 
 
 def test_manual_txn_upd(test_manager: DashboardManager):
@@ -309,7 +283,10 @@ def test_manual_txn_upd(test_manager: DashboardManager):
       - portfolio table only updated_at is changed to import time
       - initialization stage inserts normalized manual asset id into asset table
     """
-    p_id = 3
+    test_manager.upsert_portfolio("test 3")
+    portfolio = test_manager.open_portfolio_by_name("test 3").load_portfolio()
+    p_id = portfolio.portfolio_id
+    created_at = portfolio.created_at
     txn = tTestTxn(
         portfolio_id=p_id,
         portfolio_name="test 3",
@@ -327,14 +304,14 @@ def test_manual_txn_upd(test_manager: DashboardManager):
     import_data = importer.run()
 
     # importer object assertion
-    assert importer.batch_id == 4
+    assert importer.batch_id == 1
 
     # ImportData object assertion
     assert len(import_data.portfolios_affected) == 1
 
     # db: txn count and seq. id assertions
     n_txn = test_manager.conn.execute("SELECT COUNT(*) FROM txn").fetchone()[0]
-    assert n_txn == import_data.inserted_rows + (2 + 4 + 1)
+    assert n_txn == import_data.inserted_rows
 
     max_id = test_manager.conn.execute("SELECT MAX(txn_id) FROM txn").fetchone()[0]
     assert max_id == n_txn
@@ -366,5 +343,6 @@ def test_manual_txn_upd(test_manager: DashboardManager):
         "SELECT created_at, updated_at FROM portfolio WHERE portfolio_id = ?",
         [p_id],
     ).fetchone()
-    assert importer.import_time != time_tuple[0]
+    assert time_tuple[0] == created_at
     assert importer.import_time == time_tuple[1]
+    assert time_tuple[1] >= time_tuple[0]
