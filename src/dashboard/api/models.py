@@ -100,3 +100,89 @@ class AssetDetail(BaseModel):
 class PricePointResponse(BaseModel):
     date: date
     close: float
+
+
+class BrokerUserCreate(BaseModel):
+    user_key: str = Field(min_length=1, max_length=100)
+
+
+class BrokerUserResponse(BaseModel):
+    provider: str
+    user_key: str
+    provider_user_id: str
+    status: str
+
+
+class BrokerPortalRequest(BaseModel):
+    user_key: str = Field(min_length=1, max_length=100)
+    broker: str | None = None
+    reconnect: str | None = None
+
+
+class BrokerPortalResponse(BaseModel):
+    url: str
+
+
+class BrokerSyncRequest(BaseModel):
+    user_key: str = Field(min_length=1, max_length=100)
+
+
+class BrokerConnectionResponse(BaseModel):
+    provider: str
+    connection_id: int | None
+    provider_connection_id: str
+    institution_name: str
+    status: str
+
+
+class BrokerAccountResponse(BaseModel):
+    provider: str
+    provider_account_id: str
+    provider_connection_id: str
+    account_name: str | None
+    account_type: str | None
+    currency: str | None
+    balance: float | None
+    portfolio_id: int | None
+
+
+class BrokerAccountMappingRequest(BaseModel):
+    portfolio_id: int
+
+
+class BrokerImportRequest(BaseModel):
+    portfolio_id: int | None = None
+
+
+class ActionResult(BaseModel):
+    status: str = "ok"
+    result: dict[str, Any] = Field(default_factory=dict)
+
+
+class IngestionJobResponse(BaseModel):
+    job_id: int
+    asset_id: str | None
+    domain: str
+    job_type: str
+    dataset: str
+    status: str
+    priority: int
+    requested_start_date: date | None
+    requested_end_date: date | None
+    attempt_count: int
+    error_message: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class IngestionScheduleRequest(BaseModel):
+    pipeline: str = "all"
+    asset_id: str | None = None
+    max_assets: int = Field(default=25, ge=1, le=100)
+    years: int = Field(default=10, ge=1, le=30)
+    prices_only: bool = False
+
+
+class IngestionRunRequest(BaseModel):
+    domain: str = "all"
+    max_jobs: int = Field(default=1, ge=1, le=25)

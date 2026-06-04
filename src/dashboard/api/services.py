@@ -1,7 +1,13 @@
 """Application-facing read and write services for the HTTP API."""
 
+from dataclasses import asdict
+
 from dashboard.api.models import (
     AssetDetail,
+    BrokerAccountResponse,
+    BrokerConnectionResponse,
+    BrokerUserResponse,
+    IngestionJobResponse,
     Page,
     PortfolioCreate,
     PortfolioSummary,
@@ -10,6 +16,8 @@ from dashboard.api.models import (
     TransactionSummary,
 )
 from dashboard.analytics import AnalyticsEngine, AnalyticsRepository, analytics_report_payload
+from dashboard.brokers.repository import BrokerSyncRepository
+from dashboard.models.commands import BrokerCommands, IngestionCommands
 
 
 class PortfolioApiService:
@@ -310,6 +318,79 @@ class AssetApiService:
             benchmark_index_id=benchmark_index_id,
         )
         return analytics_report_payload(report)
+
+
+class CommandApiService(BrokerCommands, IngestionCommands):
+    """Reuse command orchestration without coupling HTTP routes to the CLI manager."""
+
+    def __init__(self, conn) -> None:
+        self.conn = conn
+
+    def broker_connections(self) -> list[BrokerConnectionResponse]:
+        return [
+            BrokerConnectionResponse(
+                provider=item.provider,
+                connection_id=item.connection_id,
+                provider_connection_id=item.provider_connection_id,
+                institution_name=item.institution_name,
+                status=item.status,
+            )
+            for item in BrokerSyncRepository(self.conn).list_connections()
+        ]
+
+    def broker_account_responses(self) -> list[BrokerAccountResponse]:
+        return [
+            BrokerAccountResponse(
+                provider=item.provider,
+                provider_account_id=item.provider_account_id,
+                provider_connection_id=item.provider_connection_id,
+                account_name=item.account_name,
+                account_type=item.account_type,
+                currency=item.currency,
+                balance=item.balance,
+                portfolio_id=item.portfolio_id,
+            )
+            for item in self.broker_accounts()
+        ]
+
+    def register_broker_user(self, user_key: str) -> BrokerUserResponse:
+        user = self.broker_register_snaptrade_user(user_key)
+        return BrokerUserResponse(
+            provider=user.provider,
+            user_key=user.user_key,
+            provider_user_id=user.provider_user_id,
+            status=user.status,
+        )
+
+    def ingestion_jobs(self, status: str | None, domain: str | None, limit: int):
+        statuses = [status] if status else None
+        rows = self.list_ingestion_jobs(statuses=statuses, domain=domain, limit=limit)
+        return [
+            IngestionJobResponse(
+                job_id=int(row[0]),
+                asset_id=row[1],
+                domain=row[2],
+                job_type=row[3],
+                dataset=row[4],
+                status=row[5],
+                priority=int(row[6]),
+                requested_start_date=row[7],
+                requested_end_date=row[8],
+                attempt_count=int(row[9]),
+                error_message=row[10],
+                created_at=row[11],
+                updated_at=row[12],
+            )
+            for row in rows
+        ]
+
+    @staticmethod
+    def action_result(value) -> dict:
+        if hasattr(value, "__dataclass_fields__"):
+            return asdict(value)
+        if isinstance(value, dict):
+            return value
+        return {"count": value} if isinstance(value, int) else {"value": value}
 
 
 def _float_or_none(value) -> float | None:

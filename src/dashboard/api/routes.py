@@ -6,7 +6,20 @@ from fastapi import APIRouter, Depends, Query, Request, status
 
 from dashboard.api.dependencies import get_connection
 from dashboard.api.models import (
+    ActionResult,
     AssetDetail,
+    BrokerAccountMappingRequest,
+    BrokerAccountResponse,
+    BrokerConnectionResponse,
+    BrokerImportRequest,
+    BrokerPortalRequest,
+    BrokerPortalResponse,
+    BrokerSyncRequest,
+    BrokerUserCreate,
+    BrokerUserResponse,
+    IngestionJobResponse,
+    IngestionRunRequest,
+    IngestionScheduleRequest,
     Page,
     PortfolioCreate,
     PortfolioSummary,
@@ -14,7 +27,7 @@ from dashboard.api.models import (
     PricePointResponse,
     TransactionSummary,
 )
-from dashboard.api.services import AssetApiService, PortfolioApiService
+from dashboard.api.services import AssetApiService, CommandApiService, PortfolioApiService
 
 router = APIRouter(prefix="/api/v1")
 
@@ -81,3 +94,96 @@ def asset_analytics(
     conn=Depends(get_connection),
 ):
     return AssetApiService(conn).analytics(asset_id, benchmark_index_id)
+
+
+@router.get("/brokers/connections", response_model=list[BrokerConnectionResponse])
+def broker_connections(conn=Depends(get_connection)):
+    return CommandApiService(conn).broker_connections()
+
+
+@router.get("/brokers/accounts", response_model=list[BrokerAccountResponse])
+def broker_accounts(conn=Depends(get_connection)):
+    return CommandApiService(conn).broker_account_responses()
+
+
+@router.post("/brokers/snaptrade/users", response_model=BrokerUserResponse)
+def register_broker_user(payload: BrokerUserCreate, request: Request, conn=Depends(get_connection)):
+    with request.app.state.write_lock:
+        return CommandApiService(conn).register_broker_user(payload.user_key)
+
+
+@router.post("/brokers/snaptrade/portal", response_model=BrokerPortalResponse)
+def broker_portal(payload: BrokerPortalRequest, conn=Depends(get_connection)):
+    url = CommandApiService(conn).broker_snaptrade_portal(
+        payload.user_key,
+        broker=payload.broker,
+        reconnect=payload.reconnect,
+    )
+    return BrokerPortalResponse(url=url)
+
+
+@router.post("/brokers/snaptrade/sync", response_model=ActionResult)
+def broker_sync(payload: BrokerSyncRequest, request: Request, conn=Depends(get_connection)):
+    with request.app.state.write_lock:
+        result = CommandApiService(conn).broker_snaptrade_sync(payload.user_key)
+    return ActionResult(result=CommandApiService.action_result(result))
+
+
+@router.post("/brokers/accounts/{account_id}/mapping", response_model=ActionResult)
+def broker_account_mapping(
+    account_id: str,
+    payload: BrokerAccountMappingRequest,
+    request: Request,
+    conn=Depends(get_connection),
+):
+    with request.app.state.write_lock:
+        CommandApiService(conn).broker_map_account(account_id, payload.portfolio_id)
+    return ActionResult(result={"account_id": account_id, "portfolio_id": payload.portfolio_id})
+
+
+@router.post("/brokers/import-transactions", response_model=ActionResult)
+def broker_import(
+    payload: BrokerImportRequest,
+    request: Request,
+    conn=Depends(get_connection),
+):
+    with request.app.state.write_lock:
+        result = CommandApiService(conn).broker_import_transactions(portfolio_id=payload.portfolio_id)
+    return ActionResult(result=CommandApiService.action_result(result))
+
+
+@router.get("/ingestion/jobs", response_model=list[IngestionJobResponse])
+def ingestion_jobs(
+    job_status: str | None = Query(default=None, alias="status"),
+    domain: str | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    conn=Depends(get_connection),
+):
+    return CommandApiService(conn).ingestion_jobs(job_status, domain, limit)
+
+
+@router.post("/ingestion/schedule", response_model=ActionResult)
+def ingestion_schedule(
+    payload: IngestionScheduleRequest,
+    request: Request,
+    conn=Depends(get_connection),
+):
+    with request.app.state.write_lock:
+        count = CommandApiService(conn).schedule_ingestion_jobs(
+            pipeline=payload.pipeline,
+            asset_id=payload.asset_id,
+            max_assets=payload.max_assets,
+            years=payload.years,
+            prices_only=payload.prices_only,
+        )
+    return ActionResult(result={"scheduled_jobs": count})
+
+
+@router.post("/ingestion/run", response_model=ActionResult)
+def ingestion_run(payload: IngestionRunRequest, request: Request, conn=Depends(get_connection)):
+    with request.app.state.write_lock:
+        count = CommandApiService(conn).run_ingestion_jobs(
+            domain=payload.domain,
+            max_jobs=payload.max_jobs,
+        )
+    return ActionResult(result={"completed_jobs": count})
