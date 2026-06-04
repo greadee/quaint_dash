@@ -1,12 +1,15 @@
 """Application-facing read and write services for the HTTP API."""
 
 from dashboard.api.models import (
+    AssetDetail,
     Page,
     PortfolioCreate,
     PortfolioSummary,
     PositionSummary,
+    PricePointResponse,
     TransactionSummary,
 )
+from dashboard.analytics import AnalyticsEngine, AnalyticsRepository, analytics_report_payload
 
 
 class PortfolioApiService:
@@ -197,6 +200,14 @@ class PortfolioApiService:
         ]
         return Page(items=items, total=total, limit=limit, offset=offset)
 
+    def analytics(self, portfolio_id: int, benchmark_index_id: str | None = None):
+        self.get_portfolio(portfolio_id)
+        report = AnalyticsEngine(AnalyticsRepository(self.conn)).portfolio_report(
+            portfolio_id=portfolio_id,
+            benchmark_index_id=benchmark_index_id,
+        )
+        return analytics_report_payload(report)
+
     @staticmethod
     def _portfolio_summary(row) -> PortfolioSummary:
         market_value = float(row[6])
@@ -212,6 +223,93 @@ class PortfolioApiService:
             book_cost=book_cost,
             unrealized_gain=market_value - book_cost if market_value else None,
         )
+
+
+class AssetApiService:
+    def __init__(self, conn) -> None:
+        self.conn = conn
+
+    def get_asset(self, asset_id: str) -> AssetDetail:
+        asset_id = asset_id.upper().strip()
+        row = self.conn.execute(
+            """
+            SELECT
+                a.asset_id,
+                COALESCE(a.symbol, a.asset_id),
+                a.exchange_code,
+                a.asset_type,
+                a.asset_subtype,
+                a.ccy,
+                a.name,
+                a.description,
+                a.sector,
+                a.industry,
+                a.country,
+                a.region,
+                a.size,
+                a.mkt_cap,
+                a.shares_outstanding,
+                a.market_beta,
+                (
+                    SELECT COALESCE(q.adj_close, q.close)
+                    FROM asset_quote_daily q
+                    WHERE q.asset_id = a.asset_id
+                    ORDER BY q.date DESC
+                    LIMIT 1
+                )
+            FROM asset a
+            WHERE a.asset_id = ?
+            """,
+            [asset_id],
+        ).fetchone()
+        if row is None:
+            raise LookupError(f"Asset not found: {asset_id}")
+        return AssetDetail(
+            asset_id=row[0],
+            symbol=row[1],
+            exchange_code=row[2],
+            asset_type=row[3],
+            asset_subtype=row[4],
+            currency=row[5],
+            name=row[6],
+            description=row[7],
+            sector=row[8],
+            industry=row[9],
+            country=row[10],
+            region=row[11],
+            size=row[12],
+            market_cap=_float_or_none(row[13]),
+            shares_outstanding=_float_or_none(row[14]),
+            market_beta=_float_or_none(row[15]),
+            latest_price=_float_or_none(row[16]),
+        )
+
+    def price_history(self, asset_id: str, limit: int) -> list[PricePointResponse]:
+        self.get_asset(asset_id)
+        rows = self.conn.execute(
+            """
+            SELECT date, COALESCE(adj_close, close)
+            FROM (
+                SELECT date, adj_close, close
+                FROM asset_quote_daily
+                WHERE asset_id = ?
+                  AND COALESCE(adj_close, close) IS NOT NULL
+                ORDER BY date DESC
+                LIMIT ?
+            )
+            ORDER BY date
+            """,
+            [asset_id.upper().strip(), limit],
+        ).fetchall()
+        return [PricePointResponse(date=row[0], close=float(row[1])) for row in rows]
+
+    def analytics(self, asset_id: str, benchmark_index_id: str | None = None):
+        asset = self.get_asset(asset_id)
+        report = AnalyticsEngine(AnalyticsRepository(self.conn)).asset_report(
+            asset_id=asset.asset_id,
+            benchmark_index_id=benchmark_index_id,
+        )
+        return analytics_report_payload(report)
 
 
 def _float_or_none(value) -> float | None:

@@ -6,13 +6,15 @@ from fastapi import APIRouter, Depends, Query, Request, status
 
 from dashboard.api.dependencies import get_connection
 from dashboard.api.models import (
+    AssetDetail,
     Page,
     PortfolioCreate,
     PortfolioSummary,
     PositionSummary,
+    PricePointResponse,
     TransactionSummary,
 )
-from dashboard.api.services import PortfolioApiService
+from dashboard.api.services import AssetApiService, PortfolioApiService
 
 router = APIRouter(prefix="/api/v1")
 
@@ -47,3 +49,35 @@ def portfolio_transactions(
     conn=Depends(get_connection),
 ):
     return PortfolioApiService(conn).list_transactions(portfolio_id, limit, offset)
+
+
+@router.get("/portfolios/{portfolio_id}/analytics")
+def portfolio_analytics(
+    portfolio_id: int,
+    benchmark_index_id: str | None = None,
+    conn=Depends(get_connection),
+):
+    return PortfolioApiService(conn).analytics(portfolio_id, benchmark_index_id)
+
+
+@router.get("/assets/{asset_id}", response_model=AssetDetail)
+def asset_detail(asset_id: str, conn=Depends(get_connection)):
+    return AssetApiService(conn).get_asset(asset_id)
+
+
+@router.get("/assets/{asset_id}/prices", response_model=list[PricePointResponse])
+def asset_prices(
+    asset_id: str,
+    limit: int = Query(default=365, ge=1, le=5000),
+    conn=Depends(get_connection),
+):
+    return AssetApiService(conn).price_history(asset_id, limit)
+
+
+@router.get("/assets/{asset_id}/analytics")
+def asset_analytics(
+    asset_id: str,
+    benchmark_index_id: str | None = None,
+    conn=Depends(get_connection),
+):
+    return AssetApiService(conn).analytics(asset_id, benchmark_index_id)
