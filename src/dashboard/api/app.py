@@ -1,11 +1,14 @@
 """FastAPI application factory and web entry point."""
 
+import os
 from pathlib import Path
 from threading import Lock
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from dashboard.api.dependencies import get_connection
 from dashboard.api.models import ErrorResponse, HealthResponse
@@ -14,9 +17,13 @@ from dashboard.db.db_conn import DB, init_db
 
 API_VERSION = "phase5.api.v1"
 DEFAULT_DB_PATH = Path("data/persistent_db.db")
+DEFAULT_WEB_DIST = Path(__file__).resolve().parents[3] / "web" / "dist"
 
 
-def create_app(db_path: str | Path = DEFAULT_DB_PATH) -> FastAPI:
+def create_app(
+    db_path: str | Path = DEFAULT_DB_PATH,
+    web_dist: str | Path = DEFAULT_WEB_DIST,
+) -> FastAPI:
     """Create an API application backed by the requested DuckDB file."""
     resolved_db_path = Path(db_path)
     db = DB(resolved_db_path)
@@ -31,6 +38,14 @@ def create_app(db_path: str | Path = DEFAULT_DB_PATH) -> FastAPI:
     )
     app.state.db_path = resolved_db_path
     app.state.write_lock = Lock()
+    app.state.web_dist = Path(web_dist)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[os.getenv("DASHBOARD_WEB_DEV_ORIGIN", "http://127.0.0.1:5173")],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     @app.exception_handler(ValueError)
     async def value_error_handler(_request: Request, exc: ValueError) -> JSONResponse:
@@ -61,6 +76,7 @@ def create_app(db_path: str | Path = DEFAULT_DB_PATH) -> FastAPI:
         return HealthResponse(status="ok", api_version=API_VERSION, database="connected")
 
     app.include_router(router)
+    _mount_web_application(app)
     return app
 
 
@@ -80,6 +96,34 @@ def _error_response(
             }
         },
     )
+
+
+def _mount_web_application(app: FastAPI) -> None:
+    web_dist: Path = app.state.web_dist
+    assets = web_dist / "assets"
+    if assets.is_dir():
+        app.mount("/assets", StaticFiles(directory=assets), name="web-assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def web_application(full_path: str):
+        if full_path.startswith("api/"):
+            return _error_response(404, "not_found", "API route not found.")
+        index = web_dist / "index.html"
+        if index.is_file():
+            requested = web_dist / full_path
+            if full_path and requested.is_file() and web_dist in requested.resolve().parents:
+                return FileResponse(requested)
+            return FileResponse(index)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": {
+                    "code": "web_not_built",
+                    "message": "Build the React application in web/ before using the browser interface.",
+                    "details": {},
+                }
+            },
+        )
 
 
 app = create_app()

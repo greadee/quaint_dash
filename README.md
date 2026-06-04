@@ -43,6 +43,7 @@ dashboard           # or python -m dashboard
 #### Dashboard Commands: [Dashboard Commands](docs/usage/cmds/dashboard_cmds.md)
 #### Portfolio Commands: [Portfolio Commands](docs/usage/cmds/portfolio_cmds.md)
 #### Broker Commands: [Broker Commands](docs/usage/cmds/broker_cmds.md)
+#### Web Application: [Phase 5 Web Application](docs/usage/web_app.md)
 <br>
 
 ## Records 
@@ -125,6 +126,21 @@ dashboard           # or python -m dashboard
 ```
 
 #### Architectural Decision Records: [Main Decisions](docs/adr/adr_ph4.md)
+---
+<br>
+
+### Phase 5: API-First Web Application
+
+```
+- Versioned FastAPI backend over existing portfolio, analytics, broker, and ingestion services
+- Request-scoped DuckDB connections with serialized web writes
+- React and TypeScript browser dashboard focused on portfolio analysis
+- Asset detail, broker account, and ingestion operations pages
+- Stable Phase 3 analytics payload reuse and redacted broker responses
+- Local-first runtime designed for future hosted, mobile, and desktop clients
+```
+
+#### Architectural Decision Records: [Main Decisions](docs/adr/adr_ph5.md)
 ---
 <br>
 
