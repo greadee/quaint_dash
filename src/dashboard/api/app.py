@@ -1,6 +1,7 @@
 """FastAPI application factory and web entry point."""
 
 from pathlib import Path
+from threading import Lock
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -8,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from dashboard.api.dependencies import get_connection
 from dashboard.api.models import ErrorResponse, HealthResponse
+from dashboard.api.routes import router
 from dashboard.db.db_conn import DB, init_db
 
 API_VERSION = "phase5.api.v1"
@@ -28,10 +30,19 @@ def create_app(db_path: str | Path = DEFAULT_DB_PATH) -> FastAPI:
         openapi_url="/api/openapi.json",
     )
     app.state.db_path = resolved_db_path
+    app.state.write_lock = Lock()
 
     @app.exception_handler(ValueError)
     async def value_error_handler(_request: Request, exc: ValueError) -> JSONResponse:
         return _error_response(400, "invalid_request", str(exc))
+
+    @app.exception_handler(LookupError)
+    async def lookup_error_handler(_request: Request, exc: LookupError) -> JSONResponse:
+        return _error_response(404, "not_found", str(exc))
+
+    @app.exception_handler(FileExistsError)
+    async def file_exists_error_handler(_request: Request, exc: FileExistsError) -> JSONResponse:
+        return _error_response(409, "conflict", str(exc))
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(
@@ -49,6 +60,7 @@ def create_app(db_path: str | Path = DEFAULT_DB_PATH) -> FastAPI:
         conn.execute("SELECT 1").fetchone()
         return HealthResponse(status="ok", api_version=API_VERSION, database="connected")
 
+    app.include_router(router)
     return app
 
 
