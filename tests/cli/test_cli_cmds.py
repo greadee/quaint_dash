@@ -1,13 +1,15 @@
 """root/tests/
 This test suite works on two databases (dashes), one empty and one populated.
-    
+
     Uses pytest fixtures to pass dashboard view (db) instances, and portfolio view (open port) instances.
     Uses pytest parameterization to send collections of commands, and comparison strings for assertion.
         - commands are sent to the cli via monkeypatch, and the output of the cli is captured via sysout and asserted against the comparison string.
     Avoid booting the cli for every test by calling _cli_iter which uses the command line's handling logic/function.
 """
+
 import pytest
 import json
+import shutil
 from dashboard.db.db_conn import DB, init_db
 from dashboard.models.storage import DashboardManager
 from dashboard.models.cli_view import DashboardView, PortfolioView
@@ -39,38 +41,48 @@ def _send_input(monkeypatch, inputs):
 
 
 #####################################################################
-#          DashboardView: empty dash setup / assertions                 
+#          DashboardView: empty dash setup / assertions
 #####################################################################
 
-@pytest.fixture
-def empty_dash(tmp_path) -> DashboardView:
-    """
-    Fresh DB, schema initialized, no portfolios/txns.
-    """
-    db_path = tmp_path / "test_empty.db"
+
+@pytest.fixture(scope="module")
+def empty_dash_template(tmp_path_factory):
+    """Build the empty production schema once for this CLI test module."""
+    db_path = tmp_path_factory.mktemp("cli_templates") / "empty.db"
     db = DB(db_path)
     init_db(db)
-    manager = DashboardManager(db)
-    return DashboardView(manager)
+    db.conn.close()
+    return db_path
+
+
+@pytest.fixture
+def empty_dash(empty_dash_template, tmp_path) -> DashboardView:
+    db_path = tmp_path / "test_empty.db"
+    shutil.copyfile(empty_dash_template, db_path)
+    db = DB(db_path)
+    view = DashboardView(DashboardManager(db))
+    yield view
+    view.access.conn.close()
 
 
 # set parameters for test_help_empty_dash
-@pytest.mark.parametrize("cmd, expected_substrings", [
-    ("help", ["=== Dashboard ===", "Commands:"]),
-    ("help list", ["usage: list"]),
-    ("help create", ["usage: create"]),
-    ("help open", ["usage: open"]),
-    ("help import", ["usage: import"]),
-    ("help analytics", ["usage: analytics"]),
-    ("help quit", ["exit the program"]),
-    ("help nope", ["No such command"]),
-    ("nope", ["Unknown command: nope"]),
-    ("list", ["[list]"]),   # missing required args 
-    ("create", ["[create]"]),  
-    ("import", ["[import]"]),   
-    ]
+@pytest.mark.parametrize(
+    "cmd, expected_substrings",
+    [
+        ("help", ["=== Dashboard ===", "Commands:"]),
+        ("help list", ["usage: list"]),
+        ("help create", ["usage: create"]),
+        ("help open", ["usage: open"]),
+        ("help import", ["usage: import"]),
+        ("help analytics", ["usage: analytics"]),
+        ("help quit", ["exit the program"]),
+        ("help nope", ["No such command"]),
+        ("nope", ["Unknown command: nope"]),
+        ("list", ["[list]"]),  # missing required args
+        ("create", ["[create]"]),
+        ("import", ["[import]"]),
+    ],
 )
-
 def test_help_empty_dash(empty_dash, capsys, cmd, expected_substrings):
     """
     Test the help command on all of the valid, and some invalid arguments.
@@ -83,21 +95,22 @@ def test_help_empty_dash(empty_dash, capsys, cmd, expected_substrings):
 
 
 # set parameters for test_list_empty_dash
-@pytest.mark.parametrize("cmd, expected_error_fragment", [
-    ("list port", "No portfolios found"),
-    ("list port -n 1", "No portfolios found"),
-    ("list txn", "No transactions found"),
-    ("list txn -n 1", "No transactions found"),
-    ("list txn --txn-type buy", "No transactions found"),
-    ("list txn --asset-id AAPL", "No transactions found"),
-    ("list txn --day 01-01-2026", "No transactions found"),  # parses, but empty
-    ("list pos", "No positions found"),
-    ("list pos --asset-id AAPL", "No positions found"),
-    # ("list pos --asset-type equity", "No positions found"), # asset type / subtype 
-    # ("list pos --asset-subtype etf", "No positions found"),
-    ]
+@pytest.mark.parametrize(
+    "cmd, expected_error_fragment",
+    [
+        ("list port", "No portfolios found"),
+        ("list port -n 1", "No portfolios found"),
+        ("list txn", "No transactions found"),
+        ("list txn -n 1", "No transactions found"),
+        ("list txn --txn-type buy", "No transactions found"),
+        ("list txn --asset-id AAPL", "No transactions found"),
+        ("list txn --day 01-01-2026", "No transactions found"),  # parses, but empty
+        ("list pos", "No positions found"),
+        ("list pos --asset-id AAPL", "No positions found"),
+        # ("list pos --asset-type equity", "No positions found"), # asset type / subtype
+        # ("list pos --asset-subtype etf", "No positions found"),
+    ],
 )
-
 def test_list_empty_dash(empty_dash, capsys, cmd, expected_error_fragment):
     """
     Tests the list command, including all flags.
@@ -130,7 +143,7 @@ def test_import_bad_filename(empty_dash, capsys):
 
 def test_quit_exit(empty_dash, capsys):
     """
-    Test both 'exit' and 'quit' commands send a SystemExit exception, and print a goodbye string. 
+    Test both 'exit' and 'quit' commands send a SystemExit exception, and print a goodbye string.
         - Inside of empty DashboardView
     """
     with pytest.raises(SystemExit):
@@ -145,29 +158,25 @@ def test_quit_exit(empty_dash, capsys):
 
 
 #####################################################################
-#        DashboardView: populated dash setup / assertions                 
+#        DashboardView: populated dash setup / assertions
 #####################################################################
 
 
-@pytest.fixture
-def popl_dash(tmp_path) -> DashboardView:
-    """
-    Populate db with 2 portfolios, Alpha and Beta each having: 
-    several txns across different days/types/assets via TxnImporterManual.
-    """
-    # not used elsewhere
+def _populate_dashboard(manager):
     from dashboard.services.txn_importer import TxnImporterManual
-    from dashboard.services.txn_importer import tTestTxn 
+    from dashboard.services.txn_importer import tTestTxn
 
-    db_path = tmp_path / "test_popl.db"
-    db = DB(db_path)
-    init_db(db)
-    manager = DashboardManager(db)
-
-    def _add_manual(portfolio_name: str, time_stamp: str, txn_type: str, asset_id=None, qty=None, price=None, ccy="CAD", cash_amt=None, fee_amt=None):
-        """
-        Helper for ensuring transaction input shape is maintained when adding a transaction to the test db.
-        """
+    def _add_manual(
+        portfolio_name,
+        time_stamp,
+        txn_type,
+        asset_id=None,
+        qty=None,
+        price=None,
+        ccy="CAD",
+        cash_amt=None,
+        fee_amt=None,
+    ):
         p_id, created = manager.check_new_portfolio_id(portfolio_name)
         txn = tTestTxn(
             portfolio_id=p_id,
@@ -182,33 +191,97 @@ def popl_dash(tmp_path) -> DashboardView:
             fee_amt=fee_amt,
         )
         importer = TxnImporterManual(manager, txn)
-       
         if hasattr(importer, "create_portfolio"):
             importer.create_portfolio = created
         importer.run()
 
-    _add_manual("Alpha", "2026-01-01 10:00:00", "contribution", asset_id=None, qty=None, price=None, cash_amt="1000", fee_amt="0")
-    _add_manual("Alpha", "2026-01-02 10:00:00", "buy", asset_id="AAPL", qty="2", price="100", cash_amt=None, fee_amt="1")
-    _add_manual("Alpha", "2026-01-02 12:00:00", "buy", asset_id="MSFT", qty="1", price="200", cash_amt=None, fee_amt="1")
+    _add_manual(
+        "Alpha",
+        "2026-01-01 10:00:00",
+        "contribution",
+        asset_id=None,
+        qty=None,
+        price=None,
+        cash_amt="1000",
+        fee_amt="0",
+    )
+    _add_manual(
+        "Alpha",
+        "2026-01-02 10:00:00",
+        "buy",
+        asset_id="AAPL",
+        qty="2",
+        price="100",
+        cash_amt=None,
+        fee_amt="1",
+    )
+    _add_manual(
+        "Alpha",
+        "2026-01-02 12:00:00",
+        "buy",
+        asset_id="MSFT",
+        qty="1",
+        price="200",
+        cash_amt=None,
+        fee_amt="1",
+    )
 
-    _add_manual("Beta", "2026-01-03 09:00:00", "contribution", asset_id=None, qty=None, price=None, cash_amt="500", fee_amt="0")
-    _add_manual("Beta", "2026-01-03 10:00:00", "buy", asset_id="AAPL", qty="1", price="110", cash_amt=None, fee_amt="1")
+    _add_manual(
+        "Beta",
+        "2026-01-03 09:00:00",
+        "contribution",
+        asset_id=None,
+        qty=None,
+        price=None,
+        cash_amt="500",
+        fee_amt="0",
+    )
+    _add_manual(
+        "Beta",
+        "2026-01-03 10:00:00",
+        "buy",
+        asset_id="AAPL",
+        qty="1",
+        price="110",
+        cash_amt=None,
+        fee_amt="1",
+    )
 
-    return DashboardView(manager)
+
+@pytest.fixture(scope="module")
+def populated_dash_template(tmp_path_factory):
+    """Build the expensive populated CLI database once, then clone it per test."""
+    db_path = tmp_path_factory.mktemp("cli_templates") / "populated.db"
+    db = DB(db_path)
+    init_db(db)
+    _populate_dashboard(DashboardManager(db))
+    db.conn.close()
+    return db_path
+
+
+@pytest.fixture
+def popl_dash(populated_dash_template, tmp_path) -> DashboardView:
+    db_path = tmp_path / "test_popl.db"
+    shutil.copyfile(populated_dash_template, db_path)
+    db = DB(db_path)
+    view = DashboardView(DashboardManager(db))
+    yield view
+    view.access.conn.close()
 
 
 # set parameters for test_list_popl_dash
-@pytest.mark.parametrize("cmd, must_contain", [
-    ("list port", "PORTFOLIO"),   # header from formatter
-    ("list port -n 1", "PORTFOLIO"),
-    ("list txn", "TRANSACTION"),    # header from formatter
-    ("list txn -n 1", "TRANSACTION"),
-    ("list txn --txn-type buy", "buy"),
-    ("list txn --asset-id AAPL", "AAPL"),
-    ("list txn --day 01-02-2026", "TRANSACTION"), # manager expects MM-DD-YYYY or MM/DD/YYYY `
-    ]
+@pytest.mark.parametrize(
+    "cmd, must_contain",
+    [
+        ("list port", "PORTFOLIO"),  # header from formatter
+        ("list port -n 1", "PORTFOLIO"),
+        ("list txn", "TRANSACTION"),  # header from formatter
+        ("list txn -n 1", "TRANSACTION"),
+        ("list txn --txn-type buy", "buy"),
+        ("list txn --asset-id AAPL", "AAPL"),
+        ("list txn --day 01-02-2026", "TRANSACTION"),  # manager expects MM-DD-YYYY or MM/DD/YYYY `
+    ],
 )
-
 def test_list_popl_dash(popl_dash, capsys, cmd, must_contain):
     """
     Tests the list function on good inputs for each possible argument.
@@ -319,7 +392,7 @@ def test_analytics_portfolio_command(popl_dash, capsys):
 
 
 #####################################################################
-#        PortfolioView: populated dash setup / assertions                 
+#        PortfolioView: populated dash setup / assertions
 #####################################################################
 
 
@@ -365,18 +438,19 @@ def test_back_returns_DashboardView(popl_port_view, capsys):
 
 
 # set parameters for test_help_in_port
-@pytest.mark.parametrize("cmd, expected_substrings", [
-    ("help", ["=== Portfolio ===", "Commands:"]),
-    ("help list", ["usage: list"]),
-    ("help add-transaction", ["interactively enter"]),
-    ("help back", ["return to dashboard"]),
-    ("help quit", ["exit the program"]),
-    ("help nope", ["No such command"]),
-    ("nope", ["Unknown command: nope"]),
-    ("list", ["[list]"]),
-    ]
+@pytest.mark.parametrize(
+    "cmd, expected_substrings",
+    [
+        ("help", ["=== Portfolio ===", "Commands:"]),
+        ("help list", ["usage: list"]),
+        ("help add-transaction", ["interactively enter"]),
+        ("help back", ["return to dashboard"]),
+        ("help quit", ["exit the program"]),
+        ("help nope", ["No such command"]),
+        ("nope", ["Unknown command: nope"]),
+        ("list", ["[list]"]),
+    ],
 )
-
 def test_help_in_port(popl_port_view, capsys, cmd, expected_substrings):
     """
     Test the help command on all of the valid, and some invalid arguments.
@@ -389,15 +463,16 @@ def test_help_in_port(popl_port_view, capsys, cmd, expected_substrings):
 
 
 # set parameters for test_list_in_port
-@pytest.mark.parametrize("cmd, must_contain", [
-    ("list txn", "TRANSACTION"),
-    ("list txn -n 1", "TRANSACTION"),
-    ("list txn --txn-type buy", "buy"),
-    ("list txn --asset-id AAPL", "AAPL"),
-    ("list txn --day 01-02-2026", "TRANSACTION"),
-    ]
+@pytest.mark.parametrize(
+    "cmd, must_contain",
+    [
+        ("list txn", "TRANSACTION"),
+        ("list txn -n 1", "TRANSACTION"),
+        ("list txn --txn-type buy", "buy"),
+        ("list txn --asset-id AAPL", "AAPL"),
+        ("list txn --day 01-02-2026", "TRANSACTION"),
+    ],
 )
-
 def test_list_in_port(popl_port_view, capsys, cmd, must_contain):
     """
     Tests the list function on good inputs for each possible argument does not throw an error.
@@ -415,12 +490,12 @@ def test_bad_date_filter_in_port(popl_port_view, capsys):
     """
     _cli_iter(popl_port_view, "list txn --day 2026-01-02")  # wrong format
     out = capsys.readouterr().out
-    assert "Date 2026-01-02 invalid" in out 
+    assert "Date 2026-01-02 invalid" in out
 
 
 def test_quit_exit_in_port(popl_port_view, capsys):
     """
-    Test both 'exit' and 'quit' commands send a SystemExit exception, and print a goodbye string. 
+    Test both 'exit' and 'quit' commands send a SystemExit exception, and print a goodbye string.
         - Inside of populated PortfolioView
     """
     with pytest.raises(SystemExit):
@@ -455,17 +530,16 @@ def test_bad_field_add_txn(monkeypatch, popl_port_view, capsys):
     """
     bad_inputs = [
         "2026-01-05 10:00:00",  # time_stamp
-        "buy",                  # txn_type
-        "AAPL",                 # asset_id
-        "not-a-number",         # qty (invalid)
-        "100",                  # price
-        "CAD",                  # ccy
-        "lambda",               # cash_amt
-        "blambda",              # fee_amt
+        "buy",  # txn_type
+        "AAPL",  # asset_id
+        "not-a-number",  # qty (invalid)
+        "100",  # price
+        "CAD",  # ccy
+        "lambda",  # cash_amt
+        "blambda",  # fee_amt
     ]
     _send_input(monkeypatch, bad_inputs)
     _cli_iter(popl_port_view, "add-transaction")
     out = capsys.readouterr().out
     assert "Enter transaction fields" in out
-    assert out.strip() != "" # something, anything printed
-
+    assert out.strip() != ""  # something, anything printed
