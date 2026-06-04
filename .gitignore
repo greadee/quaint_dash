@@ -18,6 +18,8 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+web/dist/
+web/node_modules/
 develop-eggs/
 dist/
 downloads/
