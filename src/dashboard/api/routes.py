@@ -18,6 +18,7 @@ from dashboard.api.models import (
     BrokerUserCreate,
     BrokerUserResponse,
     IngestionJobResponse,
+    IngestionRetryFailedRequest,
     IngestionRunRequest,
     IngestionScheduleRequest,
     Page,
@@ -187,3 +188,17 @@ def ingestion_run(payload: IngestionRunRequest, request: Request, conn=Depends(g
             max_jobs=payload.max_jobs,
         )
     return ActionResult(result={"completed_jobs": count})
+
+
+@router.post("/ingestion/retry-failed", response_model=ActionResult)
+def ingestion_retry_failed(
+    payload: IngestionRetryFailedRequest,
+    request: Request,
+    conn=Depends(get_connection),
+):
+    with request.app.state.write_lock:
+        count = CommandApiService(conn).retry_failed_ingestion_jobs(
+            domain=payload.domain,
+            max_jobs=payload.max_jobs,
+        )
+    return ActionResult(result={"retried_jobs": count})

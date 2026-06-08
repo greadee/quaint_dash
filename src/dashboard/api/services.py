@@ -384,6 +384,33 @@ class CommandApiService(BrokerCommands, IngestionCommands):
             for row in rows
         ]
 
+    def retry_failed_ingestion_jobs(self, domain: str | None, max_jobs: int) -> int:
+        where = ["status = 'failed'"]
+        params: list[object] = []
+        if domain:
+            where.append("domain = ?")
+            params.append(domain)
+        params.append(max_jobs)
+        rows = self.conn.execute(
+            f"""
+            UPDATE ingestion_job
+            SET
+                status = 'pending',
+                error_message = NULL,
+                updated_at = now()
+            WHERE job_id IN (
+                SELECT job_id
+                FROM ingestion_job
+                WHERE {" AND ".join(where)}
+                ORDER BY updated_at ASC, job_id ASC
+                LIMIT ?
+            )
+            RETURNING job_id
+            """,
+            params,
+        ).fetchall()
+        return len(rows)
+
     @staticmethod
     def action_result(value) -> dict:
         if hasattr(value, "__dataclass_fields__"):

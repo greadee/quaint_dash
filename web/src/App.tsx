@@ -184,15 +184,16 @@ function OperationsPage() {
   const jobs = useQuery({ queryKey: ["jobs", status, domain], queryFn: () => api.ingestionJobs(status, domain) });
   const schedule = useMutation({ mutationFn: api.scheduleIngestion, onSuccess: () => client.invalidateQueries({ queryKey: ["jobs"] }) });
   const run = useMutation({ mutationFn: api.runIngestion, onSuccess: () => client.invalidateQueries({ queryKey: ["jobs"] }) });
-  const isBusy = schedule.isPending || run.isPending;
-  return <div className="page"><div className="page-title"><div><p className="eyebrow">Data health</p><h1>Operations</h1></div><div className="actions"><button onClick={() => jobs.refetch()} disabled={jobs.isFetching}><RefreshCw size={17}/>Refresh</button><button onClick={() => window.confirm("Schedule due ingestion jobs now?") && schedule.mutate()} disabled={isBusy}>Schedule due</button><button className="primary" onClick={() => window.confirm("Run one pending ingestion job now?") && run.mutate()} disabled={isBusy}><RefreshCw size={17}/>Run next job</button></div></div>
+  const retry = useMutation({ mutationFn: () => api.retryFailedIngestion(domain), onSuccess: () => client.invalidateQueries({ queryKey: ["jobs"] }) });
+  const isBusy = schedule.isPending || run.isPending || retry.isPending;
+  return <div className="page"><div className="page-title"><div><p className="eyebrow">Data health</p><h1>Operations</h1></div><div className="actions"><button onClick={() => jobs.refetch()} disabled={jobs.isFetching}><RefreshCw size={17}/>Refresh</button><button onClick={() => window.confirm("Schedule due ingestion jobs now?") && schedule.mutate()} disabled={isBusy}>Schedule due</button><button onClick={() => window.confirm("Move failed jobs back to pending?") && retry.mutate()} disabled={isBusy}>Retry failed</button><button className="primary" onClick={() => window.confirm("Run one pending ingestion job now?") && run.mutate()} disabled={isBusy}><RefreshCw size={17}/>Run next job</button></div></div>
     <section className="card"><div className="card-heading"><h2>Ingestion jobs</h2><span>{jobs.data?.length ?? 0} shown</span></div>
       <div className="filter-row">
         <label>Status<select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">Any</option><option value="pending">Pending</option><option value="running">Running</option><option value="done">Done</option><option value="failed">Failed</option></select></label>
         <label>Domain<select value={domain} onChange={(event) => setDomain(event.target.value)}><option value="">Any</option><option value="market">Market</option><option value="corporate">Corporate</option><option value="sentiment">Sentiment</option></select></label>
       </div>
       {jobs.error ? <ErrorPanel error={jobs.error} /> : jobs.isLoading ? <Loading compact /> : (
-        <div className="table-wrap"><table><thead><tr><th>Asset</th><th>Dataset</th><th>Domain</th><th>Status</th><th>Attempts</th><th>Error</th></tr></thead><tbody>{jobs.data?.map((job) => <tr key={job.job_id}><td>{job.asset_id ?? "Global"}</td><td>{job.dataset}</td><td>{job.domain}</td><td><span className={`pill ${job.status}`}>{job.status}</span></td><td>{job.attempt_count}</td><td className="job-error">{job.error_message ?? "-"}</td></tr>)}</tbody></table></div>
+        <div className="table-wrap"><table><thead><tr><th>Asset</th><th>Dataset</th><th>Domain</th><th>Status</th><th>Attempts</th><th>Error</th></tr></thead><tbody>{jobs.data?.map((job) => <tr key={job.job_id}><td>{job.asset_id ?? "Global"}</td><td>{job.dataset}</td><td>{job.domain}</td><td><span className={`pill ${job.status}`}>{job.status}</span></td><td>{job.attempt_count}</td><td className="job-error" title={job.error_message ?? ""}>{job.error_message ?? "-"}</td></tr>)}</tbody></table></div>
       )}
       {!jobs.isLoading && !jobs.data?.length ? <EmptyRow text="No ingestion jobs match the current filters." /> : null}
     </section>

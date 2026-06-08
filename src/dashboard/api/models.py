@@ -186,3 +186,8 @@ class IngestionScheduleRequest(BaseModel):
 class IngestionRunRequest(BaseModel):
     domain: str = "all"
     max_jobs: int = Field(default=1, ge=1, le=25)
+
+
+class IngestionRetryFailedRequest(BaseModel):
+    domain: str | None = None
+    max_jobs: int = Field(default=25, ge=1, le=100)

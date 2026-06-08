@@ -108,4 +108,9 @@ export const api = {
     request("/ingestion/schedule", { method: "POST", body: JSON.stringify({ pipeline: "all" }) }),
   runIngestion: () =>
     request("/ingestion/run", { method: "POST", body: JSON.stringify({ domain: "all", max_jobs: 1 }) }),
+  retryFailedIngestion: (domain?: string) =>
+    request("/ingestion/retry-failed", {
+      method: "POST",
+      body: JSON.stringify({ domain: domain || null, max_jobs: 25 }),
+    }),
 };

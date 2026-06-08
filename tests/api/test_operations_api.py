@@ -70,3 +70,35 @@ def test_ingestion_job_list_and_bounded_empty_run(tmp_path):
     assert jobs.json()[0]["dataset"] == "daily_prices"
     assert invalid.status_code == 422
     assert invalid.json()["error"]["code"] == "validation_error"
+
+
+def test_retry_failed_ingestion_jobs_requeues_bounded_failures(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        "INSERT INTO asset(asset_id, symbol, asset_type, ccy) VALUES ('AAPL', 'AAPL', 'stock', 'USD')"
+    )
+    db.conn.execute(
+        """
+        INSERT INTO ingestion_job(
+            job_id, asset_id, domain, job_type, dataset, status, priority, error_message
+        )
+        VALUES
+            (1, 'AAPL', 'market', 'refresh', 'dividends', 'failed', 10, 'old failure'),
+            (2, 'AAPL', 'market', 'refresh', 'splits', 'failed', 10, 'old failure')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        retry = client.post(
+            "/api/v1/ingestion/retry-failed",
+            json={"domain": "market", "max_jobs": 1},
+        )
+        jobs = client.get("/api/v1/ingestion/jobs?domain=market")
+
+    assert retry.status_code == 200
+    assert retry.json()["result"] == {"retried_jobs": 1}
+    statuses = {row["job_id"]: row["status"] for row in jobs.json()}
+    assert statuses == {1: "pending", 2: "failed"}
