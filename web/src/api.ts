@@ -66,6 +66,58 @@ export type OverviewUpdates = {
   price_movers: PriceMover[];
   news: NewsItem[];
 };
+export type ComparisonReturns = {
+  return_1d: number | null;
+  return_5d: number | null;
+  return_21d: number | null;
+  return_252d: number | null;
+};
+export type ComparisonFundamentals = {
+  revenue: number | null;
+  net_income: number | null;
+  eps: number | null;
+  pe_ratio: number | null;
+  price_to_sales: number | null;
+};
+export type ValuationContext = {
+  historical_pe_average: number | null;
+  historical_pe_discount: number | null;
+  sector_pe_average: number | null;
+  sector_pe_premium: number | null;
+  industry_pe_average: number | null;
+  industry_pe_premium: number | null;
+};
+export type ComparisonAsset = {
+  asset_id: string;
+  symbol: string;
+  name: string | null;
+  sector: string | null;
+  industry: string | null;
+  country: string | null;
+  currency: string;
+  latest_price: number | null;
+  market_cap: number | null;
+  market_beta: number | null;
+  returns: ComparisonReturns;
+  fundamentals: ComparisonFundamentals;
+  valuation: ValuationContext;
+};
+export type BenchmarkComparison = {
+  index_id: string;
+  name: string;
+  category: string;
+  currency: string;
+  return_1d: number | null;
+  return_21d: number | null;
+  return_252d: number | null;
+  volatility_252d: number | null;
+};
+export type ComparisonResponse = {
+  left: ComparisonAsset;
+  right: ComparisonAsset | null;
+  benchmark: BenchmarkComparison | null;
+  insights: string[];
+};
 export type Transaction = {
   transaction_id: number;
   portfolio_id: number;
@@ -121,6 +173,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   overviewUpdates: () => request<OverviewUpdates>("/overview/updates"),
+  comparison: (left: string, right?: string, benchmarkIndexId?: string) => {
+    const params = new URLSearchParams({ left });
+    if (right) params.set("right", right);
+    if (benchmarkIndexId) params.set("benchmark_index_id", benchmarkIndexId);
+    return request<ComparisonResponse>(`/comparison?${params.toString()}`);
+  },
   portfolios: () => request<Portfolio[]>("/portfolios"),
   aggregatePortfolio: () => request<Portfolio>("/portfolios/aggregate/overview"),
   positions: (id: number) => request<Position[]>(`/portfolios/${id}/positions`),

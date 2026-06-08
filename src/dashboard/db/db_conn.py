@@ -30,3 +30,6 @@ def init_db(db: DB):
     # include its tables before the worker or CLI attempts to query them.
     streaming_schema = schema_path.parent / "migrations" / "live_price_streaming.sql"
     db.conn.execute(streaming_schema.read_text(encoding="utf-8"))
+
+    benchmark_schema = schema_path.parent / "migrations" / "benchmark_indices.sql"
+    db.conn.execute(benchmark_schema.read_text(encoding="utf-8"))

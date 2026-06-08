@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   ArrowUpRight,
+  BarChart3,
   Building2,
   ChartNoAxesCombined,
   CheckCircle2,
@@ -21,7 +22,7 @@ import {
 } from "lucide-react";
 import { Link, NavLink, Route, Routes, useParams } from "react-router-dom";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { api, type Position } from "./api";
+import { api, type ComparisonAsset, type Position } from "./api";
 
 const money = (value: number | null | undefined, currency = "CAD") =>
   value == null
@@ -56,6 +57,7 @@ export default function App() {
         <nav>
           <NavLink to="/" end><LayoutDashboard />Overview</NavLink>
           <NavLink to="/portfolios"><WalletCards />Portfolios</NavLink>
+          <NavLink to="/compare"><BarChart3 />Compare</NavLink>
           <NavLink to="/brokers"><Building2 />Brokers</NavLink>
           <NavLink to="/operations"><Database />Operations</NavLink>
         </nav>
@@ -70,6 +72,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<OverviewPage />} />
           <Route path="/portfolios" element={<PortfoliosPage />} />
+          <Route path="/compare" element={<ComparePage />} />
           <Route path="/assets/:assetId" element={<AssetPage />} />
           <Route path="/brokers" element={<BrokersPage />} />
           <Route path="/operations" element={<OperationsPage />} />
@@ -254,6 +257,93 @@ function PortfoliosPage() {
     </div>
   );
 }
+
+function ComparePage() {
+  const [left, setLeft] = useState("NVDA");
+  const [right, setRight] = useState("MSFT");
+  const [benchmark, setBenchmark] = useState("SP500");
+  const [submitted, setSubmitted] = useState({ left: "", right: "", benchmark: "" });
+  const comparison = useQuery({
+    queryKey: ["comparison", submitted],
+    queryFn: () => api.comparison(submitted.left, submitted.right || undefined, submitted.benchmark || undefined),
+    enabled: Boolean(submitted.left.trim()),
+  });
+  const data = comparison.data;
+  return <div className="page">
+    <div className="page-title">
+      <div><p className="eyebrow">Company and benchmark analysis</p><h1>Compare</h1><p className="page-subtitle">Compare two companies, then add benchmark, sector, industry, and historical valuation context from local data.</p></div>
+    </div>
+    <section className="card compare-control">
+      <form onSubmit={(event) => { event.preventDefault(); setSubmitted({ left: left.trim().toUpperCase(), right: right.trim().toUpperCase(), benchmark: benchmark.trim().toUpperCase() }); }}>
+        <label>Left ticker<input value={left} onChange={(event) => setLeft(event.target.value)} placeholder="NVDA" /></label>
+        <label>Right ticker<input value={right} onChange={(event) => setRight(event.target.value)} placeholder="MSFT" /></label>
+        <label>Benchmark<input value={benchmark} onChange={(event) => setBenchmark(event.target.value)} placeholder="SP500" /></label>
+        <button className="primary" disabled={!left.trim() || comparison.isFetching}><BarChart3 size={17}/>Compare</button>
+      </form>
+    </section>
+    {!submitted.left ? <section className="card"><EmptyRow text="Enter a ticker pair, then compare companies, sector context, industry context, and optional benchmark metrics." /></section> : comparison.error ? <ErrorPanel error={comparison.error} /> : comparison.isLoading ? <Loading /> : data ? <>
+      <section className="compare-grid">
+        <CompareAssetCard asset={data.left} label="Left" />
+        {data.right ? <CompareAssetCard asset={data.right} label="Right" /> : <section className="card"><EmptyRow text="Add a right ticker to compare two companies side by side." /></section>}
+      </section>
+      <section className="card">
+        <div className="card-heading"><div><p className="eyebrow">Valuation context</p><h2>{data.left.symbol} relative view</h2></div><span>local fundamentals</span></div>
+        <div className="comparison-table">
+          <ComparisonRow label="Current P/E" left={ratio(data.left.fundamentals.pe_ratio)} right={data.right ? ratio(data.right.fundamentals.pe_ratio) : "No peer"} />
+          <ComparisonRow label="Historical P/E avg" left={ratio(data.left.valuation.historical_pe_average)} right={data.right ? ratio(data.right.valuation.historical_pe_average) : "No peer"} />
+          <ComparisonRow label="Vs own history" left={gapLabel(data.left.valuation.historical_pe_discount, "history")} right={data.right ? gapLabel(data.right.valuation.historical_pe_discount, "history") : "No peer"} />
+          <ComparisonRow label="Vs sector" left={gapLabel(data.left.valuation.sector_pe_premium, "sector")} right={data.right ? gapLabel(data.right.valuation.sector_pe_premium, "sector") : "No peer"} />
+          <ComparisonRow label="Vs industry" left={gapLabel(data.left.valuation.industry_pe_premium, "industry")} right={data.right ? gapLabel(data.right.valuation.industry_pe_premium, "industry") : "No peer"} />
+        </div>
+      </section>
+      <section className="compare-grid">
+        <section className="card">
+          <div className="card-heading"><div><p className="eyebrow">Insights</p><h2>Plain English readout</h2></div><span>{data.insights.length} notes</span></div>
+          {data.insights.length ? <div className="insight-list">{data.insights.map((item) => <p key={item}>{item}</p>)}</div> : <EmptyRow text="Not enough comparison data yet. Add price history and income statements for richer insights." />}
+        </section>
+        <section className="card">
+          <div className="card-heading"><div><p className="eyebrow">Benchmark</p><h2>{data.benchmark?.name ?? "Optional benchmark"}</h2></div><span>{data.benchmark?.index_id ?? "none"}</span></div>
+          {data.benchmark ? <div className="comparison-table">
+            <ComparisonRow label="1 day" left={percent(data.left.returns.return_1d)} right={percent(data.benchmark.return_1d)} />
+            <ComparisonRow label="21 days" left={percent(data.left.returns.return_21d)} right={percent(data.benchmark.return_21d)} />
+            <ComparisonRow label="252 days" left={percent(data.left.returns.return_252d)} right={percent(data.benchmark.return_252d)} />
+            <ComparisonRow label="Benchmark vol" left="-" right={percent(data.benchmark.volatility_252d)} />
+          </div> : <EmptyRow text="Add a benchmark id like SP500 once benchmark metrics are seeded." />}
+        </section>
+      </section>
+    </> : null}
+  </div>;
+}
+
+function CompareAssetCard({ asset, label }: { asset: ComparisonAsset; label: string }) {
+  return <section className="card compare-card">
+    <div className="card-heading"><div><p className="eyebrow">{label}</p><h2>{asset.symbol}</h2></div><span>{asset.sector ?? "Unclassified"}</span></div>
+    <div className="compare-summary">
+      <strong>{asset.name ?? asset.asset_id}</strong>
+      <span>{[asset.industry, asset.country, asset.currency].filter(Boolean).join(" - ")}</span>
+    </div>
+    <div className="comparison-table">
+      <ComparisonRow label="Latest price" left={money(asset.latest_price, asset.currency)} />
+      <ComparisonRow label="Market cap" left={money(asset.market_cap, asset.currency)} />
+      <ComparisonRow label="Beta" left={number(asset.market_beta)} />
+      <ComparisonRow label="Revenue" left={money(asset.fundamentals.revenue, asset.currency)} />
+      <ComparisonRow label="Net income" left={money(asset.fundamentals.net_income, asset.currency)} />
+      <ComparisonRow label="EPS" left={ratio(asset.fundamentals.eps)} />
+      <ComparisonRow label="P/E" left={ratio(asset.fundamentals.pe_ratio)} />
+      <ComparisonRow label="1 day return" left={percent(asset.returns.return_1d)} />
+    </div>
+  </section>;
+}
+
+function ComparisonRow({ label, left, right }: { label: string; left: string; right?: string }) {
+  return <div className="comparison-row"><span>{label}</span><strong>{left}</strong>{right != null ? <b>{right}</b> : null}</div>;
+}
+const ratio = (value: number | null | undefined) => value == null ? "Unavailable" : value.toFixed(2);
+const gapLabel = (value: number | null | undefined, label: string) => {
+  if (value == null) return "Unavailable";
+  const direction = value >= 0 ? "above" : "below";
+  return `${percent(Math.abs(value))} ${direction} ${label}`;
+};
 
 type TrancheDimension = "sector" | "country" | "industry" | "asset_type" | "currency";
 const trancheLabels: Record<TrancheDimension, string> = {

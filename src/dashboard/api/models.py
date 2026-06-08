@@ -136,6 +136,64 @@ class OverviewUpdatesResponse(BaseModel):
     news: list[NewsItemResponse]
 
 
+class ComparisonReturns(BaseModel):
+    return_1d: float | None = None
+    return_5d: float | None = None
+    return_21d: float | None = None
+    return_252d: float | None = None
+
+
+class ComparisonFundamentals(BaseModel):
+    revenue: float | None = None
+    net_income: float | None = None
+    eps: float | None = None
+    pe_ratio: float | None = None
+    price_to_sales: float | None = None
+
+
+class ValuationContext(BaseModel):
+    historical_pe_average: float | None = None
+    historical_pe_discount: float | None = None
+    sector_pe_average: float | None = None
+    sector_pe_premium: float | None = None
+    industry_pe_average: float | None = None
+    industry_pe_premium: float | None = None
+
+
+class ComparisonAssetProfile(BaseModel):
+    asset_id: str
+    symbol: str
+    name: str | None
+    sector: str | None
+    industry: str | None
+    country: str | None
+    currency: str
+    latest_price: float | None
+    market_cap: float | None
+    market_beta: float | None
+    returns: ComparisonReturns
+    fundamentals: ComparisonFundamentals
+    valuation: ValuationContext
+
+
+class BenchmarkComparisonProfile(BaseModel):
+    index_id: str
+    name: str
+    category: str
+    currency: str
+    return_1d: float | None = None
+    return_21d: float | None = None
+    return_252d: float | None = None
+    volatility_252d: float | None = None
+
+
+class ComparisonResponse(BaseModel):
+    left: ComparisonAssetProfile
+    right: ComparisonAssetProfile | None = None
+    benchmark: BenchmarkComparisonProfile | None = None
+    insights: list[str] = Field(default_factory=list)
+
+
 class BrokerUserCreate(BaseModel):
     user_key: str = Field(min_length=1, max_length=100)
 

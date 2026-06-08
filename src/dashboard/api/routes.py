@@ -18,6 +18,7 @@ from dashboard.api.models import (
     BrokerSyncRequest,
     BrokerUserCreate,
     BrokerUserResponse,
+    ComparisonResponse,
     IngestionJobResponse,
     IngestionRetryFailedRequest,
     IngestionRunRequest,
@@ -30,7 +31,7 @@ from dashboard.api.models import (
     PricePointResponse,
     TransactionSummary,
 )
-from dashboard.api.services import AssetApiService, CommandApiService, PortfolioApiService
+from dashboard.api.services import AssetApiService, CommandApiService, ComparisonApiService, PortfolioApiService
 
 router = APIRouter(prefix="/api/v1")
 
@@ -43,6 +44,16 @@ def list_portfolios(conn=Depends(get_connection)):
 @router.get("/overview/updates", response_model=OverviewUpdatesResponse)
 def overview_updates(conn=Depends(get_connection)):
     return PortfolioApiService(conn).overview_updates()
+
+
+@router.get("/comparison", response_model=ComparisonResponse)
+def comparison(
+    left: str = Query(min_length=1, max_length=32),
+    right: str | None = Query(default=None, min_length=1, max_length=32),
+    benchmark_index_id: str | None = Query(default=None, min_length=1, max_length=64),
+    conn=Depends(get_connection),
+):
+    return ComparisonApiService(conn).compare(left, right, benchmark_index_id)
 
 
 @router.get("/portfolios/aggregate/overview", response_model=PortfolioSummary)

@@ -1,12 +1,19 @@
 """Application-facing read and write services for the HTTP API."""
 
 from dataclasses import asdict
+import json
+from typing import Any
 
 from dashboard.api.models import (
     AssetDetail,
     BrokerAccountResponse,
     BrokerConnectionResponse,
     BrokerUserResponse,
+    BenchmarkComparisonProfile,
+    ComparisonAssetProfile,
+    ComparisonFundamentals,
+    ComparisonResponse,
+    ComparisonReturns,
     IngestionJobResponse,
     NewsItemResponse,
     OverviewUpdatesResponse,
@@ -17,6 +24,7 @@ from dashboard.api.models import (
     PricePointResponse,
     PriceMoverResponse,
     TransactionSummary,
+    ValuationContext,
 )
 from dashboard.analytics import AnalyticsEngine, AnalyticsRepository, analytics_report_payload
 from dashboard.brokers.repository import BrokerSyncRepository
@@ -503,6 +511,225 @@ class AssetApiService:
         return analytics_report_payload(report)
 
 
+class ComparisonApiService:
+    def __init__(self, conn) -> None:
+        self.conn = conn
+
+    def compare(
+        self,
+        left_asset_id: str,
+        right_asset_id: str | None = None,
+        benchmark_index_id: str | None = None,
+    ) -> ComparisonResponse:
+        left = self.asset_profile(left_asset_id)
+        right = self.asset_profile(right_asset_id) if right_asset_id else None
+        benchmark = self.benchmark_profile(benchmark_index_id) if benchmark_index_id else None
+        return ComparisonResponse(
+            left=left,
+            right=right,
+            benchmark=benchmark,
+            insights=self._insights(left, right, benchmark),
+        )
+
+    def asset_profile(self, asset_id: str) -> ComparisonAssetProfile:
+        asset = AssetApiService(self.conn).get_asset(asset_id)
+        prices = self._prices(asset.asset_id)
+        latest_price = prices[0][1] if prices else asset.latest_price
+        statements = self._income_statements(asset.asset_id)
+        latest_statement = statements[0] if statements else {}
+        eps = _first_number(latest_statement, "eps", "epsdiluted", "dilutedEPS", "eps_actual")
+        revenue = _first_number(latest_statement, "revenue", "totalRevenue", "revenue_actual")
+        net_income = _first_number(latest_statement, "netIncome", "net_income", "netIncomeCommonStockholders")
+        pe_ratio = latest_price / eps if latest_price is not None and eps and eps > 0 else None
+        price_to_sales = (
+            asset.market_cap / revenue
+            if asset.market_cap is not None and revenue is not None and revenue > 0
+            else None
+        )
+        valuation = self._valuation_context(asset.asset_id, asset.sector, asset.industry, pe_ratio)
+        return ComparisonAssetProfile(
+            asset_id=asset.asset_id,
+            symbol=asset.symbol,
+            name=asset.name,
+            sector=asset.sector,
+            industry=asset.industry,
+            country=asset.country,
+            currency=asset.currency,
+            latest_price=latest_price,
+            market_cap=asset.market_cap,
+            market_beta=asset.market_beta,
+            returns=ComparisonReturns(
+                return_1d=_period_return(prices, 1),
+                return_5d=_period_return(prices, 5),
+                return_21d=_period_return(prices, 21),
+                return_252d=_period_return(prices, 252),
+            ),
+            fundamentals=ComparisonFundamentals(
+                revenue=revenue,
+                net_income=net_income,
+                eps=eps,
+                pe_ratio=pe_ratio,
+                price_to_sales=price_to_sales,
+            ),
+            valuation=valuation,
+        )
+
+    def benchmark_profile(self, index_id: str) -> BenchmarkComparisonProfile:
+        row = self.conn.execute(
+            """
+            SELECT
+                b.index_id,
+                b.index_name,
+                b.index_category,
+                b.currency,
+                m.return_1d,
+                m.return_21d,
+                m.return_252d,
+                m.volatility_252d_ann
+            FROM benchmark_index b
+            LEFT JOIN benchmark_index_daily_metric m ON m.index_id = b.index_id
+            WHERE UPPER(b.index_id) = UPPER(?)
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY b.index_id ORDER BY m.metric_date DESC NULLS LAST) = 1
+            """,
+            [index_id.strip()],
+        ).fetchone()
+        if row is None:
+            raise LookupError(f"Benchmark not found: {index_id}")
+        return BenchmarkComparisonProfile(
+            index_id=row[0],
+            name=row[1],
+            category=row[2],
+            currency=row[3],
+            return_1d=_float_or_none(row[4]),
+            return_21d=_float_or_none(row[5]),
+            return_252d=_float_or_none(row[6]),
+            volatility_252d=_float_or_none(row[7]),
+        )
+
+    def _prices(self, asset_id: str) -> list[tuple[Any, float]]:
+        rows = self.conn.execute(
+            """
+            SELECT date, COALESCE(adj_close, close)
+            FROM asset_quote_daily
+            WHERE asset_id = ?
+              AND COALESCE(adj_close, close) IS NOT NULL
+            ORDER BY date DESC
+            LIMIT 260
+            """,
+            [asset_id],
+        ).fetchall()
+        return [(row[0], float(row[1])) for row in rows]
+
+    def _income_statements(self, asset_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT period_end_date, data_json
+            FROM financial_statement
+            WHERE asset_id = ?
+              AND statement_type = 'income'
+            ORDER BY period_end_date DESC NULLS LAST, year DESC, quarter DESC
+            """,
+            [asset_id],
+        ).fetchall()
+        statements: list[dict[str, Any]] = []
+        for period_end, payload in rows:
+            data = _json_dict(payload)
+            if data:
+                data["_period_end_date"] = period_end
+                statements.append(data)
+        return statements
+
+    def _valuation_context(
+        self,
+        asset_id: str,
+        sector: str | None,
+        industry: str | None,
+        current_pe: float | None,
+    ) -> ValuationContext:
+        historical_average = self._historical_pe_average(asset_id)
+        sector_average = self._peer_pe_average(asset_id, "sector", sector)
+        industry_average = self._peer_pe_average(asset_id, "industry", industry)
+        return ValuationContext(
+            historical_pe_average=historical_average,
+            historical_pe_discount=_relative_gap(current_pe, historical_average),
+            sector_pe_average=sector_average,
+            sector_pe_premium=_relative_gap(current_pe, sector_average),
+            industry_pe_average=industry_average,
+            industry_pe_premium=_relative_gap(current_pe, industry_average),
+        )
+
+    def _historical_pe_average(self, asset_id: str) -> float | None:
+        values: list[float] = []
+        for statement in self._income_statements(asset_id):
+            eps = _first_number(statement, "eps", "epsdiluted", "dilutedEPS", "eps_actual")
+            period_end = statement.get("_period_end_date")
+            if eps is None or eps <= 0 or period_end is None:
+                continue
+            price_row = self.conn.execute(
+                """
+                SELECT COALESCE(adj_close, close)
+                FROM asset_quote_daily
+                WHERE asset_id = ?
+                  AND date <= ?
+                  AND COALESCE(adj_close, close) IS NOT NULL
+                ORDER BY date DESC
+                LIMIT 1
+                """,
+                [asset_id, period_end],
+            ).fetchone()
+            if price_row:
+                values.append(float(price_row[0]) / eps)
+        return sum(values) / len(values) if values else None
+
+    def _peer_pe_average(self, asset_id: str, field: str, value: str | None) -> float | None:
+        if not value:
+            return None
+        rows = self.conn.execute(
+            f"""
+            SELECT a.asset_id
+            FROM asset a
+            WHERE a.{field} = ?
+              AND a.asset_id <> ?
+            ORDER BY a.asset_id
+            """,
+            [value, asset_id],
+        ).fetchall()
+        ratios = [ratio for ratio in (self._current_pe(row[0]) for row in rows) if ratio is not None]
+        return sum(ratios) / len(ratios) if ratios else None
+
+    def _current_pe(self, asset_id: str) -> float | None:
+        prices = self._prices(asset_id)
+        latest_price = prices[0][1] if prices else None
+        statements = self._income_statements(asset_id)
+        eps = _first_number(statements[0], "eps", "epsdiluted", "dilutedEPS", "eps_actual") if statements else None
+        return latest_price / eps if latest_price is not None and eps and eps > 0 else None
+
+    def _insights(
+        self,
+        left: ComparisonAssetProfile,
+        right: ComparisonAssetProfile | None,
+        benchmark: BenchmarkComparisonProfile | None,
+    ) -> list[str]:
+        insights: list[str] = []
+        discount = left.valuation.historical_pe_discount
+        if discount is not None:
+            direction = "below" if discount < 0 else "above"
+            insights.append(f"{left.symbol} trades {abs(discount) * 100:.1f}% {direction} its historical P/E average.")
+        sector_gap = left.valuation.sector_pe_premium
+        if sector_gap is not None and left.sector:
+            direction = "above" if sector_gap > 0 else "below"
+            insights.append(f"{left.symbol} trades {abs(sector_gap) * 100:.1f}% {direction} the {left.sector} peer average.")
+        if right and left.returns.return_21d is not None and right.returns.return_21d is not None:
+            gap = left.returns.return_21d - right.returns.return_21d
+            direction = "outperformed" if gap >= 0 else "underperformed"
+            insights.append(f"{left.symbol} {direction} {right.symbol} by {abs(gap) * 100:.1f}% over 21 trading days.")
+        if benchmark and left.returns.return_252d is not None and benchmark.return_252d is not None:
+            gap = left.returns.return_252d - benchmark.return_252d
+            direction = "beat" if gap >= 0 else "lagged"
+            insights.append(f"{left.symbol} {direction} {benchmark.index_id} by {abs(gap) * 100:.1f}% over 252 trading days.")
+        return insights
+
+
 class CommandApiService(BrokerCommands, IngestionCommands):
     """Reuse command orchestration without coupling HTTP routes to the CLI manager."""
 
@@ -680,6 +907,47 @@ class CommandApiService(BrokerCommands, IngestionCommands):
 
 def _float_or_none(value) -> float | None:
     return float(value) if value is not None else None
+
+
+def _json_dict(value) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if value is None:
+        return {}
+    try:
+        decoded = json.loads(str(value))
+    except json.JSONDecodeError:
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def _first_number(values: dict[str, Any], *keys: str) -> float | None:
+    lower_values = {key.lower(): value for key, value in values.items()}
+    for key in keys:
+        value = values.get(key)
+        if value is None:
+            value = lower_values.get(key.lower())
+        try:
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _period_return(prices: list[tuple[Any, float]], periods: int) -> float | None:
+    if len(prices) <= periods:
+        return None
+    latest = prices[0][1]
+    previous = prices[periods][1]
+    if previous == 0:
+        return None
+    return latest / previous - 1
+
+
+def _relative_gap(value: float | None, comparison: float | None) -> float | None:
+    if value is None or comparison is None or comparison == 0:
+        return None
+    return value / comparison - 1
 
 
 def _currency_from_raw_account(raw_payload: dict) -> str | None:
