@@ -341,19 +341,70 @@ class CommandApiService(BrokerCommands, IngestionCommands):
         ]
 
     def broker_account_responses(self) -> list[BrokerAccountResponse]:
-        return [
-            BrokerAccountResponse(
-                provider=item.provider,
-                provider_account_id=item.provider_account_id,
-                provider_connection_id=item.provider_connection_id,
-                account_name=item.account_name,
-                account_type=item.account_type,
-                currency=item.currency,
-                balance=item.balance,
-                portfolio_id=item.portfolio_id,
+        position_values = self._broker_account_position_values()
+        responses: list[BrokerAccountResponse] = []
+        for item in self.broker_accounts():
+            if not _is_visible_broker_account(item.raw_payload):
+                continue
+            position_value, position_currency = position_values.get(
+                item.provider_account_id,
+                (None, None),
             )
-            for item in self.broker_accounts()
-        ]
+            currency = item.currency or _currency_from_raw_account(item.raw_payload) or position_currency
+            responses.append(
+                BrokerAccountResponse(
+                    provider=item.provider,
+                    provider_account_id=item.provider_account_id,
+                    provider_connection_id=item.provider_connection_id,
+                    account_name=item.account_name,
+                    account_type=item.account_type,
+                    currency=_valid_currency(currency),
+                    balance=self._account_display_balance(
+                        item.balance,
+                        position_value,
+                    ),
+                    portfolio_id=item.portfolio_id,
+                )
+            )
+        return responses
+
+    def _broker_account_position_values(self) -> dict[str, tuple[float | None, str | None]]:
+        rows = self.conn.execute(
+            """
+            WITH latest_positions AS (
+                SELECT
+                    provider,
+                    provider_account_id,
+                    provider_position_id,
+                    MAX(as_of_date) AS as_of_date
+                FROM broker_position_snapshot
+                GROUP BY provider, provider_account_id, provider_position_id
+            )
+            SELECT
+                p.provider_account_id,
+                SUM(p.market_value) FILTER (WHERE p.market_value IS NOT NULL) AS market_value,
+                MAX(p.currency) FILTER (WHERE p.currency IS NOT NULL) AS currency
+            FROM broker_position_snapshot p
+            JOIN latest_positions latest
+              ON latest.provider = p.provider
+             AND latest.provider_account_id = p.provider_account_id
+             AND latest.provider_position_id = p.provider_position_id
+             AND latest.as_of_date = p.as_of_date
+            WHERE p.provider = ?
+            GROUP BY p.provider_account_id
+            """,
+            [SNAPTRADE_PROVIDER],
+        ).fetchall()
+        return {row[0]: (_float_or_none(row[1]), row[2]) for row in rows}
+
+    @staticmethod
+    def _account_display_balance(
+        account_balance: float | None,
+        position_value: float | None,
+    ) -> float | None:
+        if position_value is not None and (account_balance is None or account_balance == 0):
+            return position_value
+        return account_balance
 
     def register_broker_user(self, user_key: str) -> BrokerUserResponse:
         user = self.broker_register_snaptrade_user(user_key)
@@ -448,3 +499,32 @@ class CommandApiService(BrokerCommands, IngestionCommands):
 
 def _float_or_none(value) -> float | None:
     return float(value) if value is not None else None
+
+
+def _currency_from_raw_account(raw_payload: dict) -> str | None:
+    balance = raw_payload.get("balance")
+    if not isinstance(balance, dict):
+        return None
+    total = balance.get("total")
+    if isinstance(total, dict):
+        currency = total.get("currency")
+        if currency:
+            return str(currency)
+    currency = balance.get("currency")
+    return str(currency) if currency else None
+
+
+def _is_visible_broker_account(raw_payload: dict) -> bool:
+    status = str(raw_payload.get("status", "")).strip().lower()
+    if status in {"archived", "closed", "disabled", "inactive"}:
+        return False
+    if raw_payload.get("closed") is True or raw_payload.get("disabled") is True:
+        return False
+    return True
+
+
+def _valid_currency(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().upper()
+    return text if len(text) == 3 and text.isalpha() else None

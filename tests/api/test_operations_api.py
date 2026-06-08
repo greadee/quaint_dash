@@ -1,7 +1,9 @@
+from datetime import date
+
 from fastapi.testclient import TestClient
 
 from dashboard.api.app import create_app
-from dashboard.brokers.models import BrokerAccount, BrokerConnection
+from dashboard.brokers.models import BrokerAccount, BrokerConnection, BrokerPosition
 from dashboard.brokers.repository import BrokerSyncRepository
 from dashboard.brokers.secrets import LocalSecretCipher
 from dashboard.db.db_conn import DB
@@ -44,6 +46,91 @@ def test_broker_lists_redacted_connections_and_accounts(tmp_path):
     assert "raw_payload" not in connections.text
     assert accounts.json()[0]["provider_account_id"] == "acct-1"
     assert "secret" not in accounts.text
+
+
+def test_broker_accounts_use_synced_positions_when_balance_is_unavailable(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    repo = BrokerSyncRepository(db.conn)
+    repo.upsert_account(
+        BrokerAccount(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_connection_id="conn-1",
+            account_name="TFSA",
+            account_type="registered",
+            currency=None,
+            balance=None,
+            raw_payload={"balance": {"total": {"amount": 0.0, "currency": "CAD"}}},
+        )
+    )
+    repo.upsert_position_snapshot(
+        BrokerPosition(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_position_id="pos-1",
+            symbol="AAPL",
+            description="Apple Inc.",
+            quantity=2,
+            market_value=500.0,
+            currency="CAD",
+            as_of_date=date(2026, 1, 5),
+        )
+    )
+    repo.upsert_position_snapshot(
+        BrokerPosition(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_position_id="pos-2",
+            symbol="MSFT",
+            description="Microsoft",
+            quantity=1,
+            market_value=250.0,
+            currency="CAD",
+            as_of_date=date(2026, 1, 5),
+        )
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        accounts = client.get("/api/v1/brokers/accounts")
+
+    assert accounts.status_code == 200
+    account = accounts.json()[0]
+    assert account["balance"] == 750.0
+    assert account["currency"] == "CAD"
+
+
+def test_broker_accounts_hide_closed_and_archived_provider_accounts(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    repo = BrokerSyncRepository(db.conn)
+    for account_id, status in [
+        ("acct-open", "open"),
+        ("acct-closed", "closed"),
+        ("acct-archived", "archived"),
+    ]:
+        repo.upsert_account(
+            BrokerAccount(
+                provider="snaptrade",
+                provider_account_id=account_id,
+                provider_connection_id="conn-1",
+                account_name=account_id,
+                account_type="registered",
+                currency="CAD",
+                balance=100.0,
+                raw_payload={"status": status},
+            )
+        )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        accounts = client.get("/api/v1/brokers/accounts")
+
+    assert accounts.status_code == 200
+    assert [account["provider_account_id"] for account in accounts.json()] == ["acct-open"]
 
 
 def test_can_save_existing_snaptrade_user_without_returning_secret(tmp_path, monkeypatch):

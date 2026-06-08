@@ -283,7 +283,7 @@ def test_snaptrade_provider_maps_connections_accounts_positions_and_transactions
                     "id": "acct-1",
                     "name": "TFSA",
                     "type": "registered",
-                    "balance": {"total": 1234.5, "currency": "CAD"},
+                    "balance": {"total": {"amount": 1234.5, "currency": "CAD"}},
                 }
             ],
             [
@@ -291,7 +291,7 @@ def test_snaptrade_provider_maps_connections_accounts_positions_and_transactions
                     "symbol": {"symbol": "AAPL", "description": "Apple Inc."},
                     "units": 2,
                     "price": 400,
-                    "currency": "USD",
+                    "currency": {"code": "USD", "name": "US Dollar"},
                     "last_updated": "2026-01-05T12:00:00Z",
                 }
             ],
@@ -327,7 +327,9 @@ def test_snaptrade_provider_maps_connections_accounts_positions_and_transactions
     assert connection.institution_name == "Wealthsimple"
     assert account.provider_account_id == "acct-1"
     assert account.balance == 1234.5
+    assert account.currency == "CAD"
     assert position.symbol == "AAPL"
+    assert position.currency == "USD"
     assert position.as_of_date == date(2026, 1, 5)
     assert transaction.provider_transaction_id == "act-1"
     assert transaction.trade_date == date(2026, 1, 4)

@@ -351,12 +351,14 @@ def _account_from_snaptrade(row: dict[str, Any], provider_connection_id: str) ->
     balance = _first_number(
         _number_value(row, "balance"),
         _nested_number(row, "balance", "total"),
+        _nested_number(_dict_value(row, "balance"), "total", "amount"),
         _nested_number(row, "total_value", "value"),
     )
     currency = (
-        _str_value(row, "currency")
-        or _nested_str(row, "balance", "currency")
-        or _nested_str(row, "total_value", "currency")
+        _currency_value(row.get("currency"))
+        or _nested_currency(row, "balance", "currency")
+        or _nested_currency(_dict_value(row, "balance"), "total", "currency")
+        or _nested_currency(row, "total_value", "currency")
     )
     return BrokerAccount(
         provider=SNAPTRADE_PROVIDER,
@@ -390,7 +392,7 @@ def _position_from_snaptrade(row: dict[str, Any], provider_account_id: str) -> B
         description=_str_value(row, "description") or _nested_str(row, "symbol", "description"),
         quantity=quantity,
         market_value=market_value,
-        currency=_str_value(row, "currency") or _nested_str(row, "symbol", "currency"),
+        currency=_currency_value(row.get("currency")) or _nested_currency(row, "symbol", "currency"),
         as_of_date=_date_value(row.get("as_of_date") or row.get("last_updated")),
         raw_payload=row,
     )
@@ -438,12 +440,29 @@ def _nested_str(row: dict[str, Any], parent: str, child: str) -> str | None:
     return _str_value(_dict_value(row, parent), child)
 
 
+def _currency_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return (
+            _str_value(value, "code")
+            or _str_value(value, "currency")
+            or _str_value(value, "symbol")
+            or _str_value(value, "name")
+        )
+    return str(value)
+
+
+def _nested_currency(row: dict[str, Any], parent: str, child: str) -> str | None:
+    return _currency_value(_dict_value(row, parent).get(child))
+
+
 def _number_value(row: dict[str, Any], key: str) -> float | None:
     value = row.get(key)
     if value is None:
         return None
     if isinstance(value, dict):
-        value = value.get("value")
+        value = value.get("value", value.get("amount"))
     try:
         return float(value)
     except (TypeError, ValueError):
