@@ -170,10 +170,75 @@ function AssetPage() {
 
 function BrokersPage() {
   const client = useQueryClient();
+  const [userKey, setUserKey] = useState("");
+  const [message, setMessage] = useState("");
+  const portfolios = useQuery({ queryKey: ["portfolios"], queryFn: api.portfolios });
+  const connections = useQuery({ queryKey: ["broker-connections"], queryFn: api.brokerConnections });
   const accounts = useQuery({ queryKey: ["broker-accounts"], queryFn: api.brokerAccounts });
-  const importer = useMutation({ mutationFn: api.importBrokerTransactions, onSuccess: () => client.invalidateQueries() });
-  return <div className="page"><div className="page-title"><div><p className="eyebrow">Read-only connections</p><h1>Broker accounts</h1></div><button className="primary" onClick={() => importer.mutate()}><RefreshCw size={17}/>Import transactions</button></div>
-    <section className="card"><div className="card-heading"><h2>Connected accounts</h2></div>{accounts.data?.length ? <div className="account-grid">{accounts.data.map((item) => <article className="account" key={item.provider_account_id}><Building2/><div><strong>{item.account_name ?? item.provider_account_id}</strong><span>{item.account_type ?? "Broker account"}</span></div><b>{money(item.balance, item.currency ?? "CAD")}</b></article>)}</div> : <EmptyRow text="No synced broker accounts." />}</section>
+  const refreshBroker = () => {
+    client.invalidateQueries({ queryKey: ["broker-accounts"] });
+    client.invalidateQueries({ queryKey: ["broker-connections"] });
+  };
+  const register = useMutation({
+    mutationFn: api.registerBrokerUser,
+    onSuccess: () => setMessage("Broker user registered. Open the portal next to connect accounts."),
+    onError: (error) => setMessage((error as Error).message),
+  });
+  const portal = useMutation({
+    mutationFn: api.brokerPortal,
+    onSuccess: (result) => {
+      setMessage("Portal URL created. Complete the read-only connection in the opened tab.");
+      window.open(result.url, "_blank", "noopener,noreferrer");
+    },
+    onError: (error) => setMessage((error as Error).message),
+  });
+  const sync = useMutation({
+    mutationFn: api.brokerSync,
+    onSuccess: () => {
+      setMessage("Broker sync finished.");
+      refreshBroker();
+    },
+    onError: (error) => setMessage((error as Error).message),
+  });
+  const mapper = useMutation({
+    mutationFn: ({ accountId, portfolioId }: { accountId: string; portfolioId: number }) =>
+      api.mapBrokerAccount(accountId, portfolioId),
+    onSuccess: () => {
+      setMessage("Account mapping saved.");
+      refreshBroker();
+    },
+    onError: (error) => setMessage((error as Error).message),
+  });
+  const importer = useMutation({
+    mutationFn: api.importBrokerTransactions,
+    onSuccess: (result) => {
+      setMessage(`Import finished: ${JSON.stringify(result)}`);
+      client.invalidateQueries({ queryKey: ["portfolios"] });
+      client.invalidateQueries({ queryKey: ["broker-accounts"] });
+    },
+    onError: (error) => setMessage((error as Error).message),
+  });
+  const isBusy = register.isPending || portal.isPending || sync.isPending || mapper.isPending || importer.isPending;
+  return <div className="page"><div className="page-title"><div><p className="eyebrow">Read-only connections</p><h1>Broker accounts</h1></div><button className="primary" onClick={() => importer.mutate()} disabled={isBusy || !accounts.data?.length}><RefreshCw size={17}/>Import transactions</button></div>
+    <section className="broker-grid">
+      <div className="card broker-control">
+        <div className="card-heading"><div><p className="eyebrow">SnapTrade lifecycle</p><h2>Connect or refresh</h2></div></div>
+        <div className="broker-form">
+          <label>Broker user key<input value={userKey} onChange={(event) => setUserKey(event.target.value)} placeholder="connor-local" /></label>
+          <div className="actions">
+            <button onClick={() => register.mutate(userKey)} disabled={isBusy || !userKey.trim()}>Register</button>
+            <button onClick={() => portal.mutate(userKey)} disabled={isBusy || !userKey.trim()}>Open portal</button>
+            <button className="primary" onClick={() => sync.mutate(userKey)} disabled={isBusy || !userKey.trim()}><RefreshCw size={17}/>Sync</button>
+          </div>
+          {message ? <p className="action-message">{message}</p> : <p className="action-message muted">Credentials stay with SnapTrade. This app only stores read-only sync state.</p>}
+        </div>
+      </div>
+      <div className="card">
+        <div className="card-heading"><div><p className="eyebrow">Provider state</p><h2>Connections</h2></div><span>{connections.data?.length ?? 0} linked</span></div>
+        {connections.isLoading ? <Loading compact /> : connections.data?.length ? <div className="mini-list">{connections.data.map((item) => <article key={item.provider_connection_id}><div><strong>{item.institution_name}</strong><span>{item.provider}</span></div><span>{item.provider_connection_id}</span><b><span className={`pill ${item.status}`}>{item.status}</span></b></article>)}</div> : <EmptyRow text="No broker connections synced yet." />}
+      </div>
+    </section>
+    <section className="card"><div className="card-heading"><h2>Connected accounts</h2><span>{accounts.data?.length ?? 0} account(s)</span></div>{accounts.isLoading ? <Loading compact /> : accounts.data?.length ? <div className="account-grid">{accounts.data.map((item) => <article className="account" key={item.provider_account_id}><Building2/><div><strong>{item.account_name ?? item.provider_account_id}</strong><span>{item.account_type ?? "Broker account"} - {item.provider_account_id}</span><label className="mapping-label">Portfolio<select value={item.portfolio_id ?? ""} onChange={(event) => { if (event.target.value) mapper.mutate({ accountId: item.provider_account_id, portfolioId: Number(event.target.value) }); }} disabled={isBusy || !portfolios.data?.length}><option value="">Unmapped</option>{portfolios.data?.map((portfolio) => <option key={portfolio.portfolio_id} value={portfolio.portfolio_id}>{portfolio.name}</option>)}</select></label></div><b>{money(item.balance, item.currency ?? "CAD")}</b></article>)}</div> : <EmptyRow text="No synced broker accounts." />}</section>
   </div>;
 }
 

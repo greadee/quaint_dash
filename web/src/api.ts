@@ -51,11 +51,19 @@ export type Transaction = {
 export type Page<T> = { items: T[]; total: number; limit: number; offset: number };
 export type BrokerAccount = {
   provider_account_id: string;
+  provider_connection_id: string;
   account_name: string | null;
   account_type: string | null;
   currency: string | null;
   balance: number | null;
   portfolio_id: number | null;
+};
+export type BrokerConnection = {
+  provider: string;
+  connection_id: number | null;
+  provider_connection_id: string;
+  institution_name: string;
+  status: string;
 };
 export type IngestionJob = {
   job_id: number;
@@ -90,7 +98,20 @@ export const api = {
   asset: (id: string) => request<Asset>(`/assets/${id}`),
   prices: (id: string) => request<PricePoint[]>(`/assets/${id}/prices?limit=365`),
   assetAnalytics: (id: string) => request<Record<string, unknown>>(`/assets/${id}/analytics`),
+  brokerConnections: () => request<BrokerConnection[]>("/brokers/connections"),
   brokerAccounts: () => request<BrokerAccount[]>("/brokers/accounts"),
+  registerBrokerUser: (userKey: string) =>
+    request("/brokers/snaptrade/users", { method: "POST", body: JSON.stringify({ user_key: userKey }) }),
+  brokerPortal: (userKey: string) =>
+    request<{ url: string }>("/brokers/snaptrade/portal", {
+      method: "POST",
+      body: JSON.stringify({ user_key: userKey }),
+    }),
+  brokerSync: (userKey: string) =>
+    request("/brokers/snaptrade/sync", {
+      method: "POST",
+      body: JSON.stringify({ user_key: userKey }),
+    }),
   mapBrokerAccount: (accountId: string, portfolioId: number) =>
     request(`/brokers/accounts/${accountId}/mapping`, {
       method: "POST",
