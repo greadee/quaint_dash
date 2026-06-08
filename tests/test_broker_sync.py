@@ -288,10 +288,10 @@ def test_snaptrade_provider_maps_connections_accounts_positions_and_transactions
             ],
             [
                 {
-                    "symbol": {"symbol": "AAPL", "description": "Apple Inc."},
+                    "symbol": {"SYMBOL": "AAPL", "DESCRIPTION": "Apple Inc."},
                     "units": 2,
                     "price": 400,
-                    "currency": {"code": "USD", "name": "US Dollar"},
+                    "currency": {"CODE": "USD", "NAME": "US Dollar"},
                     "last_updated": "2026-01-05T12:00:00Z",
                 }
             ],

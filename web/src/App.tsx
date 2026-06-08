@@ -245,7 +245,6 @@ function BrokersPage() {
       client.invalidateQueries({ queryKey: ["portfolios"] });
       client.invalidateQueries({ queryKey: ["portfolio-aggregate"] });
       client.invalidateQueries({ queryKey: ["positions"] });
-      client.invalidateQueries({ queryKey: ["transactions"] });
     },
     onError: (error) => setMessage((error as Error).message),
   });

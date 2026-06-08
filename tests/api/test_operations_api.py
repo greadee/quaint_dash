@@ -155,11 +155,11 @@ def test_mapping_broker_account_projects_positions_into_portfolio(tmp_path):
             provider="snaptrade",
             provider_account_id="acct-1",
             provider_position_id="pos-1",
-            symbol="AAPL",
-            description="Apple Inc.",
+            symbol="{'SYMBOL': 'AAPL', 'DESCRIPTION': 'Apple Inc.', 'CURRENCY': {'CODE': 'USD'}}",
+            description=None,
             quantity=3,
             market_value=450.0,
-            currency="USD",
+            currency="{'CODE': 'USD'}",
             as_of_date=date(2026, 1, 5),
         )
     )
@@ -172,6 +172,8 @@ def test_mapping_broker_account_projects_positions_into_portfolio(tmp_path):
     assert mapping.status_code == 200
     assert mapping.json()["result"]["upserted_positions"] == 1
     assert positions.json()[0]["asset_id"] == "AAPL"
+    assert positions.json()[0]["name"] == "Apple Inc."
+    assert positions.json()[0]["currency"] == "USD"
     assert positions.json()[0]["quantity"] == 3
     assert positions.json()[0]["book_cost"] == 450
 

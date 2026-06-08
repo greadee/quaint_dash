@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass
 from datetime import datetime, time
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -409,20 +411,23 @@ def _normalize_broker_position(row: tuple, portfolio_id: int) -> _NormalizedBrok
         market_value,
         currency,
     ) = row
+    symbol_payload = _symbol_payload(raw_symbol)
     asset_id = _normalize_asset_id(raw_asset_id or raw_symbol)
     qty = _float_or_none(quantity)
     if asset_id is None or qty is None or qty == 0:
         return None
+    currency = _normalize_currency(currency) or _normalize_currency(_payload_value(symbol_payload, "currency"))
     return _NormalizedBrokerPosition(
         provider=str(provider),
         provider_account_id=str(provider_account_id),
         provider_position_id=str(provider_position_id),
         portfolio_id=portfolio_id,
         asset_id=asset_id,
-        description=str(description) if description else None,
+        description=str(description or _payload_value(symbol_payload, "description") or "")
+        or None,
         quantity=qty,
         book_cost=_float_or_none(market_value) or 0.0,
-        currency=_normalize_currency(currency),
+        currency=currency,
     )
 
 
@@ -497,15 +502,59 @@ def _normalize_type(value) -> str:
 def _normalize_asset_id(value) -> str | None:
     if value is None:
         return None
+    payload = _symbol_payload(value)
+    if payload:
+        symbol = _payload_value(payload, "symbol") or _payload_value(payload, "ticker")
+        symbol = symbol or _payload_value(payload, "raw_symbol")
+        if symbol:
+            return str(symbol).strip().upper()
     text = str(value).strip().upper()
+    if text.startswith("{"):
+        return None
     return text or None
 
 
 def _normalize_currency(value) -> str | None:
+    if isinstance(value, dict):
+        value = _payload_value(value, "code") or _payload_value(value, "currency")
     if value is None:
         return None
     text = str(value).strip().upper()
     return text if len(text) == 3 and text.isalpha() else None
+
+
+def _symbol_payload(value) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if value is None:
+        return {}
+    text = str(value).strip()
+    if not text.startswith("{"):
+        return {}
+    normalized = (
+        text.replace(": TRUE", ": True")
+        .replace(": FALSE", ": False")
+        .replace(": NONE", ": None")
+    )
+    try:
+        payload = ast.literal_eval(normalized)
+    except (SyntaxError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _payload_value(payload: dict[str, Any], key: str) -> Any:
+    if key in payload:
+        value = payload[key]
+    elif key.upper() in payload:
+        value = payload[key.upper()]
+    elif key.lower() in payload:
+        value = payload[key.lower()]
+    else:
+        return None
+    if isinstance(value, dict):
+        return _payload_value(value, "code") or _payload_value(value, "symbol")
+    return value
 
 
 def _normalize_quantity(txn_type: str, value) -> float | None:

@@ -418,19 +418,31 @@ def _transaction_from_snaptrade(row: dict[str, Any], provider_account_id: str) -
 
 
 def _symbol_from_row(row: dict[str, Any]) -> str | None:
-    symbol = row.get("symbol")
+    symbol = _value(row, "symbol")
     if isinstance(symbol, dict):
         return _str_value(symbol, "symbol") or _str_value(symbol, "ticker") or _str_value(symbol, "raw_symbol")
     return _str_value(row, "symbol") or _str_value(row, "ticker")
 
 
+def _value(row: dict[str, Any], key: str) -> Any:
+    if key in row:
+        return row[key]
+    upper = key.upper()
+    if upper in row:
+        return row[upper]
+    lower = key.lower()
+    if lower in row:
+        return row[lower]
+    return None
+
+
 def _dict_value(row: dict[str, Any], key: str) -> dict[str, Any]:
-    value = row.get(key)
+    value = _value(row, key)
     return value if isinstance(value, dict) else {}
 
 
 def _str_value(row: dict[str, Any], key: str) -> str | None:
-    value = row.get(key)
+    value = _value(row, key)
     if value is None:
         return None
     return str(value)
@@ -454,11 +466,11 @@ def _currency_value(value: Any) -> str | None:
 
 
 def _nested_currency(row: dict[str, Any], parent: str, child: str) -> str | None:
-    return _currency_value(_dict_value(row, parent).get(child))
+    return _currency_value(_value(_dict_value(row, parent), child))
 
 
 def _number_value(row: dict[str, Any], key: str) -> float | None:
-    value = row.get(key)
+    value = _value(row, key)
     if value is None:
         return None
     if isinstance(value, dict):
