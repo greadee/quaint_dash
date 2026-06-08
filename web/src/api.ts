@@ -35,6 +35,20 @@ export type Asset = {
 };
 
 export type PricePoint = { date: string; close: number };
+export type Transaction = {
+  transaction_id: number;
+  portfolio_id: number;
+  timestamp: string;
+  transaction_type: string;
+  asset_id: string | null;
+  quantity: number | null;
+  price: number | null;
+  currency: string | null;
+  cash_amount: number | null;
+  fee_amount: number | null;
+  batch_id: number;
+};
+export type Page<T> = { items: T[]; total: number; limit: number; offset: number };
 export type BrokerAccount = {
   provider_account_id: string;
   account_name: string | null;
@@ -69,6 +83,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   portfolios: () => request<Portfolio[]>("/portfolios"),
   positions: (id: number) => request<Position[]>(`/portfolios/${id}/positions`),
+  transactions: (id: number) => request<Page<Transaction>>(`/portfolios/${id}/transactions?limit=8`),
   portfolioAnalytics: (id: number) => request<Record<string, unknown>>(`/portfolios/${id}/analytics`),
   createPortfolio: (name: string) =>
     request<Portfolio>("/portfolios", { method: "POST", body: JSON.stringify({ name }) }),

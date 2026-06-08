@@ -24,6 +24,8 @@ const money = (value: number | null | undefined, currency = "CAD") =>
     : new Intl.NumberFormat("en-CA", { style: "currency", currency, maximumFractionDigits: 0 }).format(value);
 const percent = (value: number | null | undefined) =>
   value == null ? "Unavailable" : `${(value * 100).toFixed(1)}%`;
+const number = (value: number | null | undefined, digits = 2) =>
+  value == null ? "Unavailable" : value.toFixed(digits);
 
 export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -67,6 +69,16 @@ function PortfolioOverview() {
     queryFn: () => api.positions(selected!.portfolio_id),
     enabled: Boolean(selected),
   });
+  const transactions = useQuery({
+    queryKey: ["transactions", selected?.portfolio_id],
+    queryFn: () => api.transactions(selected!.portfolio_id),
+    enabled: Boolean(selected),
+  });
+  const analytics = useQuery({
+    queryKey: ["portfolio-analytics", selected?.portfolio_id],
+    queryFn: () => api.portfolioAnalytics(selected!.portfolio_id),
+    enabled: Boolean(selected),
+  });
   const create = useMutation({
     mutationFn: api.createPortfolio,
     onSuccess: (item) => {
@@ -108,6 +120,23 @@ function PortfolioOverview() {
         <Metric icon={<WalletCards />} label="Book cost" value={money(selected.book_cost, selected.base_ccy)} />
         <Metric icon={<Activity />} label="Active holdings" value={String(selected.position_count)} />
       </section>
+      <section className="insight-grid">
+        <AnalyticsPanel payload={analytics.data} isLoading={analytics.isLoading} />
+        <section className="card">
+          <div className="card-heading"><div><p className="eyebrow">Recent ledger activity</p><h2>Transactions</h2></div><span>{transactions.data?.total ?? 0} total</span></div>
+          {transactions.isLoading ? <Loading compact /> : transactions.data?.items.length ? (
+            <div className="mini-list">
+              {transactions.data.items.map((item) => (
+                <article key={item.transaction_id}>
+                  <div><strong>{item.transaction_type}</strong><span>{new Date(item.timestamp).toLocaleDateString()}</span></div>
+                  <span>{item.asset_id ?? item.currency ?? "cash"}</span>
+                  <b>{item.cash_amount != null ? money(item.cash_amount, item.currency ?? selected.base_ccy) : number(item.quantity, 4)}</b>
+                </article>
+              ))}
+            </div>
+          ) : <EmptyRow text="No transactions recorded yet." />}
+        </section>
+      </section>
       <section className="card holdings-card">
         <div className="card-heading"><div><p className="eyebrow">Composition</p><h2>Holdings</h2></div><span>{positions.data?.length ?? 0} positions</span></div>
         {positions.isLoading ? <Loading compact /> : positions.data?.length ? (
@@ -135,7 +164,7 @@ function AssetPage() {
     <section className="card chart-card"><div className="card-heading"><div><p className="eyebrow">Last 365 observations</p><h2>Price history</h2></div></div>
       <div className="chart"><ResponsiveContainer width="100%" height="100%"><AreaChart data={prices.data}><defs><linearGradient id="price" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#5da78b" stopOpacity={0.4}/><stop offset="100%" stopColor="#5da78b" stopOpacity={0}/></linearGradient></defs><XAxis dataKey="date" hide/><YAxis hide domain={["dataMin", "dataMax"]}/><Tooltip/><Area type="monotone" dataKey="close" stroke="#5da78b" fill="url(#price)" strokeWidth={2}/></AreaChart></ResponsiveContainer></div>
     </section>
-    <section className="detail-grid"><div className="card"><p className="eyebrow">Classification</p><h2>{asset.data?.industry ?? "Not classified"}</h2><p>{asset.data?.country ?? "Country unavailable"} · {asset.data?.currency}</p></div><div className="card"><p className="eyebrow">Business profile</p><p>{asset.data?.description ?? "No company description has been ingested yet."}</p></div></section>
+    <section className="detail-grid"><div className="card"><p className="eyebrow">Classification</p><h2>{asset.data?.industry ?? "Not classified"}</h2><p>{asset.data?.country ?? "Country unavailable"} - {asset.data?.currency}</p></div><div className="card"><p className="eyebrow">Business profile</p><p>{asset.data?.description ?? "No company description has been ingested yet."}</p></div></section>
   </div>;
 }
 
@@ -160,6 +189,28 @@ function OperationsPage() {
 
 function Metric({ icon, label, value, detail, positive }: { icon: React.ReactNode; label: string; value: string; detail?: string; positive?: boolean }) {
   return <article className="metric card"><div className="metric-icon">{icon}</div><p>{label}</p><strong>{value}</strong>{detail && <span className={positive ? "positive" : "negative"}>{detail}</span>}</article>;
+}
+function AnalyticsPanel({ payload, isLoading }: { payload?: Record<string, unknown>; isLoading: boolean }) {
+  const report = payload?.report as Record<string, unknown> | undefined;
+  const performance = report?.performance as Record<string, number | null> | undefined;
+  const risk = report?.risk as Record<string, number | null> | undefined;
+  const valuation = report?.valuation as Record<string, number | null> | undefined;
+  const missing = report?.missing_inputs as string[] | undefined;
+  return <section className="card">
+    <div className="card-heading"><div><p className="eyebrow">Phase 3 analytics</p><h2>Portfolio signals</h2></div><span>{payload?.schema_version as string ?? "loading"}</span></div>
+    {isLoading ? <Loading compact /> : (
+      <div className="signal-grid">
+        <Signal label="Modified Dietz" value={percent(performance?.modified_dietz_return)} />
+        <Signal label="Volatility" value={percent(risk?.annualized_volatility)} />
+        <Signal label="Sharpe" value={number(risk?.sharpe_ratio)} />
+        <Signal label="Expected CAGR" value={percent(valuation?.weighted_expected_cagr)} />
+        {missing?.length ? <p className="missing-inputs">Missing inputs: {missing.slice(0, 3).join(", ")}</p> : <p className="missing-inputs good">Analytics inputs look complete for this report.</p>}
+      </div>
+    )}
+  </section>;
+}
+function Signal({ label, value }: { label: string; value: string }) {
+  return <div className="signal"><span>{label}</span><strong>{value}</strong></div>;
 }
 function Loading({ compact = false }: { compact?: boolean }) { return <div className={compact ? "loading compact" : "loading"}><RefreshCw />Loading dashboard data</div>; }
 function ErrorPanel({ error }: { error: Error }) { return <div className="error-panel"><strong>Unable to load data</strong><span>{error.message}</span></div>; }
