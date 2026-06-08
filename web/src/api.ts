@@ -98,7 +98,12 @@ export const api = {
     }),
   importBrokerTransactions: () =>
     request("/brokers/import-transactions", { method: "POST", body: JSON.stringify({}) }),
-  ingestionJobs: () => request<IngestionJob[]>("/ingestion/jobs?limit=100"),
+  ingestionJobs: (status?: string, domain?: string) => {
+    const params = new URLSearchParams({ limit: "100" });
+    if (status) params.set("status", status);
+    if (domain) params.set("domain", domain);
+    return request<IngestionJob[]>(`/ingestion/jobs?${params.toString()}`);
+  },
   scheduleIngestion: () =>
     request("/ingestion/schedule", { method: "POST", body: JSON.stringify({ pipeline: "all" }) }),
   runIngestion: () =>
