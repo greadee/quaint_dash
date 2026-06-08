@@ -171,7 +171,10 @@ function AssetPage() {
 function BrokersPage() {
   const client = useQueryClient();
   const [userKey, setUserKey] = useState("");
+  const [providerUserId, setProviderUserId] = useState("");
+  const [userSecret, setUserSecret] = useState("");
   const [message, setMessage] = useState("");
+  const [portalUrl, setPortalUrl] = useState("");
   const portfolios = useQuery({ queryKey: ["portfolios"], queryFn: api.portfolios });
   const connections = useQuery({ queryKey: ["broker-connections"], queryFn: api.brokerConnections });
   const accounts = useQuery({ queryKey: ["broker-accounts"], queryFn: api.brokerAccounts });
@@ -184,10 +187,19 @@ function BrokersPage() {
     onSuccess: () => setMessage("Broker user registered. Open the portal next to connect accounts."),
     onError: (error) => setMessage((error as Error).message),
   });
+  const saveExisting = useMutation({
+    mutationFn: () => api.saveExistingBrokerUser(userKey, providerUserId, userSecret),
+    onSuccess: () => {
+      setUserSecret("");
+      setMessage("Existing SnapTrade user saved locally. You can now open portal or sync.");
+    },
+    onError: (error) => setMessage((error as Error).message),
+  });
   const portal = useMutation({
     mutationFn: api.brokerPortal,
     onSuccess: (result) => {
-      setMessage("Portal URL created. Complete the read-only connection in the opened tab.");
+      setPortalUrl(result.url);
+      setMessage("Portal URL created. Use the link below if the new tab did not open.");
       window.open(result.url, "_blank", "noopener,noreferrer");
     },
     onError: (error) => setMessage((error as Error).message),
@@ -218,7 +230,7 @@ function BrokersPage() {
     },
     onError: (error) => setMessage((error as Error).message),
   });
-  const isBusy = register.isPending || portal.isPending || sync.isPending || mapper.isPending || importer.isPending;
+  const isBusy = register.isPending || saveExisting.isPending || portal.isPending || sync.isPending || mapper.isPending || importer.isPending;
   return <div className="page"><div className="page-title"><div><p className="eyebrow">Read-only connections</p><h1>Broker accounts</h1></div><button className="primary" onClick={() => importer.mutate()} disabled={isBusy || !accounts.data?.length}><RefreshCw size={17}/>Import transactions</button></div>
     <section className="broker-grid">
       <div className="card broker-control">
@@ -230,7 +242,14 @@ function BrokersPage() {
             <button onClick={() => portal.mutate(userKey)} disabled={isBusy || !userKey.trim()}>Open portal</button>
             <button className="primary" onClick={() => sync.mutate(userKey)} disabled={isBusy || !userKey.trim()}><RefreshCw size={17}/>Sync</button>
           </div>
+          <div className="existing-user-box">
+            <p className="eyebrow">Already registered in SnapTrade?</p>
+            <label>SnapTrade user ID<input value={providerUserId} onChange={(event) => setProviderUserId(event.target.value)} placeholder="Existing SnapTrade userId" /></label>
+            <label>User secret<input type="password" value={userSecret} onChange={(event) => setUserSecret(event.target.value)} placeholder="Existing SnapTrade userSecret" /></label>
+            <button onClick={() => saveExisting.mutate()} disabled={isBusy || !userKey.trim() || !providerUserId.trim() || !userSecret.trim()}>Save existing user</button>
+          </div>
           {message ? <p className="action-message">{message}</p> : <p className="action-message muted">Credentials stay with SnapTrade. This app only stores read-only sync state.</p>}
+          {portalUrl ? <a className="portal-link" href={portalUrl} target="_blank" rel="noreferrer">Open SnapTrade portal</a> : null}
         </div>
       </div>
       <div className="card">

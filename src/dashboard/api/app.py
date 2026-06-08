@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from dashboard.api.dependencies import get_connection
 from dashboard.api.models import ErrorResponse, HealthResponse
 from dashboard.api.routes import router
+from dashboard.brokers.snaptrade import SnapTradeError
 from dashboard.db.db_conn import DB, init_db
 
 API_VERSION = "phase5.api.v1"
@@ -58,6 +59,10 @@ def create_app(
     @app.exception_handler(FileExistsError)
     async def file_exists_error_handler(_request: Request, exc: FileExistsError) -> JSONResponse:
         return _error_response(409, "conflict", str(exc))
+
+    @app.exception_handler(SnapTradeError)
+    async def snaptrade_error_handler(_request: Request, exc: SnapTradeError) -> JSONResponse:
+        return _error_response(400, "snaptrade_error", str(exc))
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(

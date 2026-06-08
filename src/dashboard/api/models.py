@@ -106,6 +106,12 @@ class BrokerUserCreate(BaseModel):
     user_key: str = Field(min_length=1, max_length=100)
 
 
+class BrokerExistingUserCreate(BaseModel):
+    user_key: str = Field(min_length=1, max_length=100)
+    provider_user_id: str = Field(min_length=1, max_length=100)
+    user_secret: str = Field(min_length=1)
+
+
 class BrokerUserResponse(BaseModel):
     provider: str
     user_key: str

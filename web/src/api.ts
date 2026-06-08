@@ -102,6 +102,15 @@ export const api = {
   brokerAccounts: () => request<BrokerAccount[]>("/brokers/accounts"),
   registerBrokerUser: (userKey: string) =>
     request("/brokers/snaptrade/users", { method: "POST", body: JSON.stringify({ user_key: userKey }) }),
+  saveExistingBrokerUser: (userKey: string, providerUserId: string, userSecret: string) =>
+    request("/brokers/snaptrade/existing-user", {
+      method: "POST",
+      body: JSON.stringify({
+        user_key: userKey,
+        provider_user_id: providerUserId,
+        user_secret: userSecret,
+      }),
+    }),
   brokerPortal: (userKey: string) =>
     request<{ url: string }>("/brokers/snaptrade/portal", {
       method: "POST",

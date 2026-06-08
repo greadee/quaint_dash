@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from dashboard.api.app import create_app
 from dashboard.brokers.models import BrokerAccount, BrokerConnection
 from dashboard.brokers.repository import BrokerSyncRepository
+from dashboard.brokers.secrets import LocalSecretCipher
 from dashboard.db.db_conn import DB
 
 
@@ -43,6 +44,40 @@ def test_broker_lists_redacted_connections_and_accounts(tmp_path):
     assert "raw_payload" not in connections.text
     assert accounts.json()[0]["provider_account_id"] == "acct-1"
     assert "secret" not in accounts.text
+
+
+def test_can_save_existing_snaptrade_user_without_returning_secret(tmp_path, monkeypatch):
+    monkeypatch.setenv("QUAINT_BROKER_SECRET_KEY", "local-test-secret")
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/brokers/snaptrade/existing-user",
+            json={
+                "user_key": "local-user",
+                "provider_user_id": "snaptrade-user",
+                "user_secret": "snaptrade-secret",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "provider": "snaptrade",
+        "user_key": "local-user",
+        "provider_user_id": "snaptrade-user",
+        "status": "active",
+    }
+    assert "snaptrade-secret" not in response.text
+
+    db = DB(db_path)
+    stored = BrokerSyncRepository(db.conn).get_broker_user(
+        "snaptrade",
+        "local-user",
+        LocalSecretCipher("local-test-secret"),
+    )
+    assert stored is not None
+    assert stored.user_secret == "snaptrade-secret"
 
 
 def test_ingestion_job_list_and_bounded_empty_run(tmp_path):

@@ -17,6 +17,8 @@ from dashboard.api.models import (
 )
 from dashboard.analytics import AnalyticsEngine, AnalyticsRepository, analytics_report_payload
 from dashboard.brokers.repository import BrokerSyncRepository
+from dashboard.brokers.models import BrokerUser
+from dashboard.brokers.snaptrade import SNAPTRADE_PROVIDER
 from dashboard.models.commands import BrokerCommands, IngestionCommands
 
 
@@ -355,6 +357,30 @@ class CommandApiService(BrokerCommands, IngestionCommands):
 
     def register_broker_user(self, user_key: str) -> BrokerUserResponse:
         user = self.broker_register_snaptrade_user(user_key)
+        return BrokerUserResponse(
+            provider=user.provider,
+            user_key=user.user_key,
+            provider_user_id=user.provider_user_id,
+            status=user.status,
+        )
+
+    def save_existing_broker_user(
+        self,
+        user_key: str,
+        provider_user_id: str,
+        user_secret: str,
+    ) -> BrokerUserResponse:
+        user = BrokerUser(
+            provider=SNAPTRADE_PROVIDER,
+            user_key=user_key.strip(),
+            provider_user_id=provider_user_id.strip(),
+            user_secret=user_secret.strip(),
+            status="active",
+        )
+        if not user.user_key or not user.provider_user_id or not user.user_secret:
+            raise ValueError("User key, provider user ID, and user secret are required.")
+        repo, cipher = self._broker_repo_and_cipher()
+        repo.upsert_broker_user(user, cipher)
         return BrokerUserResponse(
             provider=user.provider,
             user_key=user.user_key,

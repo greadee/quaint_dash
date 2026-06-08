@@ -11,6 +11,7 @@ from dashboard.api.models import (
     BrokerAccountMappingRequest,
     BrokerAccountResponse,
     BrokerConnectionResponse,
+    BrokerExistingUserCreate,
     BrokerImportRequest,
     BrokerPortalRequest,
     BrokerPortalResponse,
@@ -111,6 +112,20 @@ def broker_accounts(conn=Depends(get_connection)):
 def register_broker_user(payload: BrokerUserCreate, request: Request, conn=Depends(get_connection)):
     with request.app.state.write_lock:
         return CommandApiService(conn).register_broker_user(payload.user_key)
+
+
+@router.post("/brokers/snaptrade/existing-user", response_model=BrokerUserResponse)
+def save_existing_broker_user(
+    payload: BrokerExistingUserCreate,
+    request: Request,
+    conn=Depends(get_connection),
+):
+    with request.app.state.write_lock:
+        return CommandApiService(conn).save_existing_broker_user(
+            payload.user_key,
+            payload.provider_user_id,
+            payload.user_secret,
+        )
 
 
 @router.post("/brokers/snaptrade/portal", response_model=BrokerPortalResponse)
