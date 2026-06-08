@@ -5,12 +5,16 @@ import {
   ArrowUpRight,
   Building2,
   ChartNoAxesCombined,
+  CheckCircle2,
   CircleDollarSign,
   Database,
+  ExternalLink,
+  KeyRound,
   LayoutDashboard,
   Menu,
   Plus,
   RefreshCw,
+  ShieldCheck,
   Trash2,
   WalletCards,
   X,
@@ -27,6 +31,20 @@ const percent = (value: number | null | undefined) =>
   value == null ? "Unavailable" : `${(value * 100).toFixed(1)}%`;
 const number = (value: number | null | undefined, digits = 2) =>
   value == null ? "Unavailable" : value.toFixed(digits);
+const friendlyBrokerError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  const lower = message.toLowerCase();
+  if (lower.includes("personal keys") && lower.includes("one user")) {
+    return "This SnapTrade app already has a test user. Open Advanced and save the existing SnapTrade user ID and secret, then open the portal.";
+  }
+  if (lower.includes("no snaptrade user found")) {
+    return "Create a profile first, or use Advanced if you already have SnapTrade user credentials.";
+  }
+  if (lower.includes("payment required")) {
+    return "SnapTrade rejected the request for this app. Check the SnapTrade app status and keys, then try again.";
+  }
+  return message;
+};
 
 export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -194,7 +212,7 @@ function AssetPage() {
 
 function BrokersPage() {
   const client = useQueryClient();
-  const [userKey, setUserKey] = useState("");
+  const [userKey, setUserKey] = useState("default");
   const [providerUserId, setProviderUserId] = useState("");
   const [userSecret, setUserSecret] = useState("");
   const [message, setMessage] = useState("");
@@ -209,7 +227,7 @@ function BrokersPage() {
   const register = useMutation({
     mutationFn: api.registerBrokerUser,
     onSuccess: () => setMessage("Broker user registered. Open the portal next to connect accounts."),
-    onError: (error) => setMessage((error as Error).message),
+    onError: (error) => setMessage(friendlyBrokerError(error)),
   });
   const saveExisting = useMutation({
     mutationFn: () => api.saveExistingBrokerUser(userKey, providerUserId, userSecret),
@@ -217,7 +235,7 @@ function BrokersPage() {
       setUserSecret("");
       setMessage("Existing SnapTrade user saved locally. You can now open portal or sync.");
     },
-    onError: (error) => setMessage((error as Error).message),
+    onError: (error) => setMessage(friendlyBrokerError(error)),
   });
   const portal = useMutation({
     mutationFn: api.brokerPortal,
@@ -226,7 +244,7 @@ function BrokersPage() {
       setMessage("Portal URL created. Use the link below if the new tab did not open.");
       window.open(result.url, "_blank", "noopener,noreferrer");
     },
-    onError: (error) => setMessage((error as Error).message),
+    onError: (error) => setMessage(friendlyBrokerError(error)),
   });
   const sync = useMutation({
     mutationFn: api.brokerSync,
@@ -234,7 +252,7 @@ function BrokersPage() {
       setMessage("Broker sync finished.");
       refreshBroker();
     },
-    onError: (error) => setMessage((error as Error).message),
+    onError: (error) => setMessage(friendlyBrokerError(error)),
   });
   const mapper = useMutation({
     mutationFn: ({ accountId, portfolioId }: { accountId: string; portfolioId: number }) =>
@@ -246,7 +264,7 @@ function BrokersPage() {
       client.invalidateQueries({ queryKey: ["portfolio-aggregate"] });
       client.invalidateQueries({ queryKey: ["positions"] });
     },
-    onError: (error) => setMessage((error as Error).message),
+    onError: (error) => setMessage(friendlyBrokerError(error)),
   });
   const importer = useMutation({
     mutationFn: api.importBrokerTransactions,
@@ -255,37 +273,84 @@ function BrokersPage() {
       client.invalidateQueries({ queryKey: ["portfolios"] });
       client.invalidateQueries({ queryKey: ["broker-accounts"] });
     },
-    onError: (error) => setMessage((error as Error).message),
+    onError: (error) => setMessage(friendlyBrokerError(error)),
   });
   const isBusy = register.isPending || saveExisting.isPending || portal.isPending || sync.isPending || mapper.isPending || importer.isPending;
-  return <div className="page"><div className="page-title"><div><p className="eyebrow">Read-only connections</p><h1>Broker accounts</h1></div><button className="primary" onClick={() => importer.mutate()} disabled={isBusy || !accounts.data?.length}><RefreshCw size={17}/>Import transactions</button></div>
-    <section className="broker-grid">
-      <div className="card broker-control">
-        <div className="card-heading"><div><p className="eyebrow">SnapTrade lifecycle</p><h2>Connect or refresh</h2></div></div>
-        <div className="broker-form">
-          <label>Broker user key<input value={userKey} onChange={(event) => setUserKey(event.target.value)} placeholder="connor-local" /></label>
-          <div className="actions">
-            <button onClick={() => register.mutate(userKey)} disabled={isBusy || !userKey.trim()}>Register</button>
-            <button onClick={() => portal.mutate(userKey)} disabled={isBusy || !userKey.trim()}>Open portal</button>
-            <button className="primary" onClick={() => sync.mutate(userKey)} disabled={isBusy || !userKey.trim()}><RefreshCw size={17}/>Sync</button>
-          </div>
-          <div className="existing-user-box">
-            <p className="eyebrow">Already registered in SnapTrade?</p>
-            <label>SnapTrade user ID<input value={providerUserId} onChange={(event) => setProviderUserId(event.target.value)} placeholder="Existing SnapTrade userId" /></label>
-            <label>User secret<input type="password" value={userSecret} onChange={(event) => setUserSecret(event.target.value)} placeholder="Existing SnapTrade userSecret" /></label>
-            <button onClick={() => saveExisting.mutate()} disabled={isBusy || !userKey.trim() || !providerUserId.trim() || !userSecret.trim()}>Save existing user</button>
-          </div>
-          {message ? <p className="action-message">{message}</p> : <p className="action-message muted">Credentials stay with SnapTrade. This app only stores read-only sync state.</p>}
-          {portalUrl ? <a className="portal-link" href={portalUrl} target="_blank" rel="noreferrer">Open SnapTrade portal</a> : null}
+  const accountCount = accounts.data?.length ?? 0;
+  const mappedCount = accounts.data?.filter((account) => account.portfolio_id != null).length ?? 0;
+  const connectionCount = connections.data?.length ?? 0;
+  const userKeyReady = Boolean(userKey.trim());
+  const nextStep = !connectionCount ? "Create a secure broker link" : !accountCount ? "Sync linked accounts" : mappedCount < accountCount ? "Map accounts to portfolios" : "Review imported portfolios";
+
+  return <div className="page"><div className="page-title"><div><p className="eyebrow">Broker setup</p><h1>Connect your accounts</h1><p className="page-subtitle">Use a read-only broker connection to pull balances, holdings, and activity into local portfolios.</p></div><div className="actions"><button onClick={() => sync.mutate(userKey)} disabled={isBusy || !userKeyReady}><RefreshCw size={17}/>Sync accounts</button><button className="primary" onClick={() => importer.mutate()} disabled={isBusy || !accountCount}><RefreshCw size={17}/>Import activity</button></div></div>
+    <section className="card broker-setup-card">
+      <div className="setup-intro">
+        <div><p className="eyebrow">Recommended flow</p><h2>{nextStep}</h2></div>
+        <span>{mappedCount}/{accountCount || 0} accounts mapped</span>
+      </div>
+      <div className="setup-steps">
+        <SetupStep
+          done={connectionCount > 0}
+          icon={<KeyRound />}
+          title="1. Create your secure link"
+          text="Pick a local nickname, then open the broker portal. The portal handles login; Quaint Dash only receives read-only sync data."
+        />
+        <SetupStep
+          done={accountCount > 0}
+          icon={<RefreshCw />}
+          title="2. Sync accounts"
+          text="After the portal is connected, sync once to pull account names, balances, holdings, and recent activity."
+        />
+        <SetupStep
+          done={accountCount > 0 && mappedCount === accountCount}
+          icon={<WalletCards />}
+          title="3. Choose portfolios"
+          text="Send each broker account to a local portfolio. Mapping updates holdings immediately and can be changed later."
+        />
+      </div>
+      <div className="quick-connect">
+        <label>Connection nickname<input value={userKey} onChange={(event) => setUserKey(event.target.value)} placeholder="default" /></label>
+        <div className="actions">
+          <button onClick={() => register.mutate(userKey)} disabled={isBusy || !userKeyReady}>Create profile</button>
+          <button className="primary" onClick={() => portal.mutate(userKey)} disabled={isBusy || !userKeyReady}><ExternalLink size={17}/>Open broker portal</button>
+          <button onClick={() => sync.mutate(userKey)} disabled={isBusy || !userKeyReady}><RefreshCw size={17}/>Sync after linking</button>
         </div>
       </div>
+      {message ? <p className="action-message">{message}</p> : <p className="action-message muted"><ShieldCheck size={16}/>Read-only connection. No trading permissions are requested or stored.</p>}
+      {portalUrl ? <a className="portal-link" href={portalUrl} target="_blank" rel="noreferrer">Portal did not open? Click here to continue linking.</a> : null}
+      <details className="advanced-broker">
+        <summary>Advanced: I already have SnapTrade user credentials</summary>
+        <div className="advanced-grid">
+          <label>SnapTrade user ID<input value={providerUserId} onChange={(event) => setProviderUserId(event.target.value)} placeholder="Existing SnapTrade userId" /></label>
+          <label>User secret<input type="password" value={userSecret} onChange={(event) => setUserSecret(event.target.value)} placeholder="Existing SnapTrade userSecret" /></label>
+          <button onClick={() => saveExisting.mutate()} disabled={isBusy || !userKeyReady || !providerUserId.trim() || !userSecret.trim()}>Save existing user</button>
+        </div>
+      </details>
+    </section>
+    <section className="broker-grid">
       <div className="card">
-        <div className="card-heading"><div><p className="eyebrow">Provider state</p><h2>Connections</h2></div><span>{connections.data?.length ?? 0} linked</span></div>
+        <div className="card-heading"><div><p className="eyebrow">Linked institutions</p><h2>Connections</h2></div><span>{connectionCount} linked</span></div>
         {connections.isLoading ? <Loading compact /> : connections.data?.length ? <div className="mini-list">{connections.data.map((item) => <article key={item.provider_connection_id}><div><strong>{item.institution_name}</strong><span>{item.provider}</span></div><span>{item.provider_connection_id}</span><b><span className={`pill ${item.status}`}>{item.status}</span></b></article>)}</div> : <EmptyRow text="No broker connections synced yet." />}
       </div>
+      <div className="card">
+        <div className="card-heading"><div><p className="eyebrow">What happens next</p><h2>Portfolio import</h2></div><span>read-only</span></div>
+        <div className="broker-help">
+          <p><strong>Mapping</strong> sends current holdings into the selected local portfolio.</p>
+          <p><strong>Import activity</strong> adds broker transactions when available, without duplicating ones already imported.</p>
+          <p><strong>All portfolios</strong> on the overview combines every mapped portfolio into one view.</p>
+        </div>
+      </div>
     </section>
-    <section className="card"><div className="card-heading"><h2>Connected accounts</h2><span>{accounts.data?.length ?? 0} account(s)</span></div>{accounts.isLoading ? <Loading compact /> : accounts.data?.length ? <div className="account-grid">{accounts.data.map((item) => <article className="account" key={item.provider_account_id}><Building2/><div><strong>{item.account_name ?? item.provider_account_id}</strong><span>{item.account_type ?? "Broker account"} - {item.provider_account_id}</span><label className="mapping-label">Portfolio<select value={item.portfolio_id ?? ""} onChange={(event) => { if (event.target.value) mapper.mutate({ accountId: item.provider_account_id, portfolioId: Number(event.target.value) }); }} disabled={isBusy || !portfolios.data?.length}><option value="">Unmapped</option>{portfolios.data?.map((portfolio) => <option key={portfolio.portfolio_id} value={portfolio.portfolio_id}>{portfolio.name}</option>)}</select></label></div><b>{money(item.balance, item.currency ?? "CAD")}</b></article>)}</div> : <EmptyRow text="No synced broker accounts." />}</section>
+    <section className="card"><div className="card-heading"><div><p className="eyebrow">Step 3</p><h2>Choose where each account goes</h2></div><span>{accountCount} account(s)</span></div>{accounts.isLoading ? <Loading compact /> : accounts.data?.length ? <div className="account-grid">{accounts.data.map((item) => <article className="account" key={item.provider_account_id}><Building2/><div><strong>{item.account_name ?? item.provider_account_id}</strong><span>{item.account_type ?? "Broker account"}</span><span className="muted-id">{item.provider_account_id}</span><label className="mapping-label">Local portfolio<select value={item.portfolio_id ?? ""} onChange={(event) => { if (event.target.value) mapper.mutate({ accountId: item.provider_account_id, portfolioId: Number(event.target.value) }); }} disabled={isBusy || !portfolios.data?.length}><option value="">Choose portfolio</option>{portfolios.data?.map((portfolio) => <option key={portfolio.portfolio_id} value={portfolio.portfolio_id}>{portfolio.name}</option>)}</select><em>Mapping updates holdings right away.</em></label></div><div className="account-value"><b>{money(item.balance, item.currency ?? "CAD")}</b><span className={item.portfolio_id ? "pill done" : "pill"}>{item.portfolio_id ? "mapped" : "needs map"}</span></div></article>)}</div> : <EmptyRow text="No synced broker accounts yet. Open the portal, connect a brokerage, then sync accounts." />}</section>
   </div>;
+}
+
+function SetupStep({ done, icon, title, text }: { done: boolean; icon: React.ReactNode; title: string; text: string }) {
+  return <article className={done ? "setup-step done" : "setup-step"}>
+    <div>{done ? <CheckCircle2 /> : icon}</div>
+    <strong>{title}</strong>
+    <p>{text}</p>
+  </article>;
 }
 
 function OperationsPage() {
