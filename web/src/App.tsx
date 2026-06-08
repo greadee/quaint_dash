@@ -11,6 +11,7 @@ import {
   Menu,
   Plus,
   RefreshCw,
+  Trash2,
   WalletCards,
   X,
 } from "lucide-react";
@@ -61,23 +62,30 @@ export default function App() {
 function PortfolioOverview() {
   const client = useQueryClient();
   const portfolios = useQuery({ queryKey: ["portfolios"], queryFn: api.portfolios });
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedId, setSelectedId] = useState<number | "all" | null>(null);
   const [newName, setNewName] = useState("");
-  const selected = portfolios.data?.find((item) => item.portfolio_id === selectedId) ?? portfolios.data?.[0];
+  const isAggregate = selectedId === "all";
+  const aggregate = useQuery({
+    queryKey: ["portfolio-aggregate"],
+    queryFn: api.aggregatePortfolio,
+    enabled: isAggregate && Boolean(portfolios.data?.length),
+  });
+  const selectedPortfolio = portfolios.data?.find((item) => item.portfolio_id === selectedId) ?? portfolios.data?.[0];
+  const selected = isAggregate ? aggregate.data : selectedPortfolio;
   const positions = useQuery({
-    queryKey: ["positions", selected?.portfolio_id],
-    queryFn: () => api.positions(selected!.portfolio_id),
+    queryKey: ["positions", isAggregate ? "all" : selected?.portfolio_id],
+    queryFn: () => isAggregate ? api.aggregatePositions() : api.positions(selected!.portfolio_id),
     enabled: Boolean(selected),
   });
   const transactions = useQuery({
-    queryKey: ["transactions", selected?.portfolio_id],
-    queryFn: () => api.transactions(selected!.portfolio_id),
+    queryKey: ["transactions", isAggregate ? "all" : selected?.portfolio_id],
+    queryFn: () => isAggregate ? api.aggregateTransactions() : api.transactions(selected!.portfolio_id),
     enabled: Boolean(selected),
   });
   const analytics = useQuery({
     queryKey: ["portfolio-analytics", selected?.portfolio_id],
     queryFn: () => api.portfolioAnalytics(selected!.portfolio_id),
-    enabled: Boolean(selected),
+    enabled: Boolean(selected) && !isAggregate,
   });
   const create = useMutation({
     mutationFn: api.createPortfolio,
@@ -85,6 +93,17 @@ function PortfolioOverview() {
       setNewName("");
       setSelectedId(item.portfolio_id);
       client.invalidateQueries({ queryKey: ["portfolios"] });
+    },
+  });
+  const deletePortfolio = useMutation({
+    mutationFn: api.deletePortfolio,
+    onSuccess: () => {
+      setSelectedId(null);
+      client.invalidateQueries({ queryKey: ["portfolios"] });
+      client.invalidateQueries({ queryKey: ["portfolio-aggregate"] });
+      client.invalidateQueries({ queryKey: ["positions"] });
+      client.invalidateQueries({ queryKey: ["transactions"] });
+      client.invalidateQueries({ queryKey: ["broker-accounts"] });
     },
   });
 
@@ -103,6 +122,7 @@ function PortfolioOverview() {
       </section>
     );
   }
+  if (!selected) return <Loading />;
 
   const gain = selected.unrealized_gain ?? 0;
   const gainRate = selected.book_cost ? gain / selected.book_cost : null;
@@ -110,9 +130,13 @@ function PortfolioOverview() {
     <div className="page">
       <div className="page-title">
         <div><p className="eyebrow">Portfolio overview</p><h1>{selected.name}</h1></div>
-        <select value={selected.portfolio_id} onChange={(event) => setSelectedId(Number(event.target.value))}>
-          {portfolios.data?.map((item) => <option key={item.portfolio_id} value={item.portfolio_id}>{item.name}</option>)}
-        </select>
+        <div className="overview-actions">
+          <select value={isAggregate ? "all" : selected.portfolio_id} onChange={(event) => setSelectedId(event.target.value === "all" ? "all" : Number(event.target.value))}>
+            <option value="all">All portfolios</option>
+            {portfolios.data?.map((item) => <option key={item.portfolio_id} value={item.portfolio_id}>{item.name}</option>)}
+          </select>
+          {!isAggregate ? <button className="danger" disabled={deletePortfolio.isPending} onClick={() => window.confirm(`Delete ${selected.name} from the overview? This removes its local transactions, mappings, and positions.`) && deletePortfolio.mutate(selected.portfolio_id)}><Trash2 size={16}/>Delete</button> : null}
+        </div>
       </div>
       <section className="metric-grid">
         <Metric icon={<CircleDollarSign />} label="Market value" value={money(selected.market_value, selected.base_ccy)} />
@@ -121,7 +145,7 @@ function PortfolioOverview() {
         <Metric icon={<Activity />} label="Active holdings" value={String(selected.position_count)} />
       </section>
       <section className="insight-grid">
-        <AnalyticsPanel payload={analytics.data} isLoading={analytics.isLoading} />
+        {isAggregate ? <AggregatePanel /> : <AnalyticsPanel payload={analytics.data} isLoading={analytics.isLoading} />}
         <section className="card">
           <div className="card-heading"><div><p className="eyebrow">Recent ledger activity</p><h2>Transactions</h2></div><span>{transactions.data?.total ?? 0} total</span></div>
           {transactions.isLoading ? <Loading compact /> : transactions.data?.items.length ? (
@@ -216,8 +240,12 @@ function BrokersPage() {
     mutationFn: ({ accountId, portfolioId }: { accountId: string; portfolioId: number }) =>
       api.mapBrokerAccount(accountId, portfolioId),
     onSuccess: () => {
-      setMessage("Account mapping saved.");
+      setMessage("Account mapping saved and portfolio holdings updated.");
       refreshBroker();
+      client.invalidateQueries({ queryKey: ["portfolios"] });
+      client.invalidateQueries({ queryKey: ["portfolio-aggregate"] });
+      client.invalidateQueries({ queryKey: ["positions"] });
+      client.invalidateQueries({ queryKey: ["transactions"] });
     },
     onError: (error) => setMessage((error as Error).message),
   });
@@ -308,6 +336,15 @@ function AnalyticsPanel({ payload, isLoading }: { payload?: Record<string, unkno
 }
 function Signal({ label, value }: { label: string; value: string }) {
   return <div className="signal"><span>{label}</span><strong>{value}</strong></div>;
+}
+function AggregatePanel() {
+  return <section className="card">
+    <div className="card-heading"><div><p className="eyebrow">Combined view</p><h2>All portfolios</h2></div><span>aggregate</span></div>
+    <div className="aggregate-note">
+      <strong>Portfolio totals are rolled up across every active local portfolio.</strong>
+      <span>Analytics are still calculated per portfolio for now, so the combined view focuses on value, holdings, and recent ledger activity.</span>
+    </div>
+  </section>;
 }
 function Loading({ compact = false }: { compact?: boolean }) { return <div className={compact ? "loading compact" : "loading"}><RefreshCw />Loading dashboard data</div>; }
 function ErrorPanel({ error }: { error: Error }) { return <div className="error-panel"><strong>Unable to load data</strong><span>{error.message}</span></div>; }

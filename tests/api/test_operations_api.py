@@ -133,6 +133,49 @@ def test_broker_accounts_hide_closed_and_archived_provider_accounts(tmp_path):
     assert [account["provider_account_id"] for account in accounts.json()] == ["acct-open"]
 
 
+def test_mapping_broker_account_projects_positions_into_portfolio(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Broker')")
+    repo = BrokerSyncRepository(db.conn)
+    repo.upsert_account(
+        BrokerAccount(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_connection_id="conn-1",
+            account_name="TFSA",
+            account_type="registered",
+            currency="CAD",
+            balance=None,
+        )
+    )
+    repo.upsert_position_snapshot(
+        BrokerPosition(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_position_id="pos-1",
+            symbol="AAPL",
+            description="Apple Inc.",
+            quantity=3,
+            market_value=450.0,
+            currency="USD",
+            as_of_date=date(2026, 1, 5),
+        )
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        mapping = client.post("/api/v1/brokers/accounts/acct-1/mapping", json={"portfolio_id": 1})
+        positions = client.get("/api/v1/portfolios/1/positions")
+
+    assert mapping.status_code == 200
+    assert mapping.json()["result"]["upserted_positions"] == 1
+    assert positions.json()[0]["asset_id"] == "AAPL"
+    assert positions.json()[0]["quantity"] == 3
+    assert positions.json()[0]["book_cost"] == 450
+
+
 def test_can_save_existing_snaptrade_user_without_returning_secret(tmp_path, monkeypatch):
     monkeypatch.setenv("QUAINT_BROKER_SECRET_KEY", "local-test-secret")
     db_path = tmp_path / "api.db"

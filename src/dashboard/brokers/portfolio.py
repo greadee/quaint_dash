@@ -14,6 +14,15 @@ class BrokerPortfolioImportResult:
     batch_id: int | None
 
 
+@dataclass(frozen=True, slots=True)
+class BrokerPortfolioProjectionResult:
+    provider: str
+    provider_account_id: str
+    portfolio_id: int
+    upserted_positions: int
+    skipped_positions: int
+
+
 class BrokerPortfolioIntegrationService:
     def __init__(self, conn) -> None:
         self.conn = conn
@@ -60,6 +69,77 @@ class BrokerPortfolioIntegrationService:
             skipped_transactions=skipped,
             batch_id=batch_id if imported else None,
         )
+
+    def project_account_positions(
+        self,
+        provider_account_id: str,
+        portfolio_id: int,
+        provider: str = "snaptrade",
+    ) -> BrokerPortfolioProjectionResult:
+        rows = self._latest_position_rows(provider, provider_account_id)
+        self.conn.execute(
+            """
+            DELETE FROM broker_portfolio_position_map
+            WHERE provider = ?
+              AND provider_account_id = ?
+            """,
+            [provider, provider_account_id],
+        )
+
+        upserted = 0
+        skipped = 0
+        for row in rows:
+            normalized = _normalize_broker_position(row, portfolio_id)
+            if normalized is None:
+                skipped += 1
+                continue
+            self._ensure_position_asset(normalized)
+            self._insert_position_mapping(normalized)
+            upserted += 1
+
+        self._refresh_positions()
+        return BrokerPortfolioProjectionResult(
+            provider=provider,
+            provider_account_id=provider_account_id,
+            portfolio_id=portfolio_id,
+            upserted_positions=upserted,
+            skipped_positions=skipped,
+        )
+
+    def _latest_position_rows(self, provider: str, provider_account_id: str) -> list[tuple]:
+        return self.conn.execute(
+            """
+            WITH latest_positions AS (
+                SELECT
+                    provider,
+                    provider_account_id,
+                    provider_position_id,
+                    MAX(as_of_date) AS as_of_date
+                FROM broker_position_snapshot
+                WHERE provider = ?
+                  AND provider_account_id = ?
+                GROUP BY provider, provider_account_id, provider_position_id
+            )
+            SELECT
+                p.provider,
+                p.provider_account_id,
+                p.provider_position_id,
+                p.asset_id,
+                p.symbol,
+                p.description,
+                p.quantity,
+                p.market_value,
+                p.currency
+            FROM broker_position_snapshot p
+            JOIN latest_positions latest
+              ON latest.provider = p.provider
+             AND latest.provider_account_id = p.provider_account_id
+             AND latest.provider_position_id = p.provider_position_id
+             AND latest.as_of_date = p.as_of_date
+            ORDER BY p.provider_position_id
+            """,
+            [provider, provider_account_id],
+        ).fetchall()
 
     def _pending_rows(self, provider: str, portfolio_id: int | None) -> list[tuple]:
         where = [
@@ -130,6 +210,32 @@ class BrokerPortfolioIntegrationService:
             [txn.asset_id],
         )
 
+    def _ensure_position_asset(self, position: "_NormalizedBrokerPosition") -> None:
+        self.conn.execute(
+            """
+            INSERT INTO asset(asset_id, symbol, asset_type, ccy, name, track, created_at, updated_at)
+            VALUES (?, ?, 'stock', ?, ?, TRUE, now(), now())
+            ON CONFLICT(asset_id) DO UPDATE SET
+                symbol = COALESCE(asset.symbol, excluded.symbol),
+                name = COALESCE(asset.name, excluded.name),
+                updated_at = now()
+            """,
+            [
+                position.asset_id,
+                position.asset_id,
+                position.currency or "CAD",
+                position.description,
+            ],
+        )
+        self.conn.execute(
+            """
+            INSERT INTO asset_metadata_sync(asset_id, source, sync_status, next_retry_at)
+            VALUES (?, 'fmp', 'pending', now())
+            ON CONFLICT(asset_id) DO NOTHING
+            """,
+            [position.asset_id],
+        )
+
     def _insert_txn(self, txn: "_NormalizedBrokerTxn", batch_id: int) -> int:
         row = self.conn.execute(
             """
@@ -185,10 +291,76 @@ class BrokerPortfolioIntegrationService:
             ],
         )
 
-    def _refresh_positions(self) -> None:
-        from dashboard.db import queries as qry
+    def _insert_position_mapping(self, position: "_NormalizedBrokerPosition") -> None:
+        self.conn.execute(
+            """
+            INSERT INTO broker_portfolio_position_map (
+                provider,
+                provider_account_id,
+                provider_position_id,
+                portfolio_id,
+                asset_id,
+                quantity,
+                book_cost,
+                currency,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, now())
+            ON CONFLICT(provider, provider_account_id, provider_position_id)
+            DO UPDATE SET
+                portfolio_id = excluded.portfolio_id,
+                asset_id = excluded.asset_id,
+                quantity = excluded.quantity,
+                book_cost = excluded.book_cost,
+                currency = excluded.currency,
+                updated_at = excluded.updated_at
+            """,
+            [
+                position.provider,
+                position.provider_account_id,
+                position.provider_position_id,
+                position.portfolio_id,
+                position.asset_id,
+                position.quantity,
+                position.book_cost,
+                position.currency,
+            ],
+        )
 
-        self.conn.execute(qry.UPDATE_POSITIONS)
+    def _refresh_positions(self) -> None:
+        self.conn.execute("DELETE FROM position")
+        self.conn.execute(
+            """
+            INSERT INTO position (portfolio_id, asset_id, qty, book_cost, created_at, updated_at)
+            SELECT
+                portfolio_id,
+                asset_id,
+                SUM(quantity) AS qty,
+                SUM(book_cost) AS book_cost,
+                now() AS created_at,
+                now() AS updated_at
+            FROM (
+                SELECT
+                    portfolio_id,
+                    asset_id,
+                    SUM(qty) AS quantity,
+                    SUM(price * qty) AS book_cost
+                FROM txn
+                WHERE txn_type IN ('buy', 'sell')
+                  AND asset_id IS NOT NULL
+                GROUP BY portfolio_id, asset_id
+                UNION ALL
+                SELECT
+                    portfolio_id,
+                    asset_id,
+                    quantity,
+                    book_cost
+                FROM broker_portfolio_position_map
+            ) holdings
+            GROUP BY portfolio_id, asset_id
+            HAVING SUM(quantity) <> 0
+            """
+        )
         try:
             from dashboard.ingestion.ticker_universe import TickerUniverseRepository
 
@@ -210,6 +382,48 @@ class _NormalizedBrokerTxn:
     price: float | None
     ccy: str | None
     cash_amt: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class _NormalizedBrokerPosition:
+    provider: str
+    provider_account_id: str
+    provider_position_id: str
+    portfolio_id: int
+    asset_id: str
+    description: str | None
+    quantity: float
+    book_cost: float
+    currency: str | None
+
+
+def _normalize_broker_position(row: tuple, portfolio_id: int) -> _NormalizedBrokerPosition | None:
+    (
+        provider,
+        provider_account_id,
+        provider_position_id,
+        raw_asset_id,
+        raw_symbol,
+        description,
+        quantity,
+        market_value,
+        currency,
+    ) = row
+    asset_id = _normalize_asset_id(raw_asset_id or raw_symbol)
+    qty = _float_or_none(quantity)
+    if asset_id is None or qty is None or qty == 0:
+        return None
+    return _NormalizedBrokerPosition(
+        provider=str(provider),
+        provider_account_id=str(provider_account_id),
+        provider_position_id=str(provider_position_id),
+        portfolio_id=portfolio_id,
+        asset_id=asset_id,
+        description=str(description) if description else None,
+        quantity=qty,
+        book_cost=_float_or_none(market_value) or 0.0,
+        currency=_normalize_currency(currency),
+    )
 
 
 def _normalize_broker_transaction(row: tuple) -> _NormalizedBrokerTxn | None:
@@ -285,6 +499,13 @@ def _normalize_asset_id(value) -> str | None:
         return None
     text = str(value).strip().upper()
     return text or None
+
+
+def _normalize_currency(value) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().upper()
+    return text if len(text) == 3 and text.isalpha() else None
 
 
 def _normalize_quantity(txn_type: str, value) -> float | None:

@@ -39,6 +39,25 @@ def list_portfolios(conn=Depends(get_connection)):
     return PortfolioApiService(conn).list_portfolios()
 
 
+@router.get("/portfolios/aggregate/overview", response_model=PortfolioSummary)
+def aggregate_portfolio_overview(conn=Depends(get_connection)):
+    return PortfolioApiService(conn).aggregate_portfolio()
+
+
+@router.get("/portfolios/aggregate/positions", response_model=list[PositionSummary])
+def aggregate_portfolio_positions(conn=Depends(get_connection)):
+    return PortfolioApiService(conn).list_positions()
+
+
+@router.get("/portfolios/aggregate/transactions", response_model=Page[TransactionSummary])
+def aggregate_portfolio_transactions(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    conn=Depends(get_connection),
+):
+    return PortfolioApiService(conn).list_transactions(None, limit, offset)
+
+
 @router.post("/portfolios", response_model=PortfolioSummary, status_code=status.HTTP_201_CREATED)
 def create_portfolio(payload: PortfolioCreate, request: Request, conn=Depends(get_connection)):
     lock: Lock = request.app.state.write_lock
@@ -73,6 +92,13 @@ def portfolio_analytics(
     conn=Depends(get_connection),
 ):
     return PortfolioApiService(conn).analytics(portfolio_id, benchmark_index_id)
+
+
+@router.delete("/portfolios/{portfolio_id}", response_model=ActionResult)
+def delete_portfolio(portfolio_id: int, request: Request, conn=Depends(get_connection)):
+    with request.app.state.write_lock:
+        result = PortfolioApiService(conn).delete_portfolio(portfolio_id)
+    return ActionResult(result=result)
 
 
 @router.get("/assets/{asset_id}", response_model=AssetDetail)
@@ -153,8 +179,8 @@ def broker_account_mapping(
     conn=Depends(get_connection),
 ):
     with request.app.state.write_lock:
-        CommandApiService(conn).broker_map_account(account_id, payload.portfolio_id)
-    return ActionResult(result={"account_id": account_id, "portfolio_id": payload.portfolio_id})
+        result = CommandApiService(conn).broker_map_account(account_id, payload.portfolio_id)
+    return ActionResult(result=CommandApiService.action_result(result))
 
 
 @router.post("/brokers/import-transactions", response_model=ActionResult)

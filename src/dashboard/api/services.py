@@ -22,19 +22,38 @@ from dashboard.brokers.snaptrade import SNAPTRADE_PROVIDER
 from dashboard.models.commands import BrokerCommands, IngestionCommands
 
 
+_HOLDINGS_SQL = """
+SELECT portfolio_id, asset_id, SUM(quantity) AS quantity, SUM(book_cost) AS book_cost
+FROM (
+    SELECT
+        portfolio_id,
+        asset_id,
+        SUM(qty) AS quantity,
+        SUM(qty * price) AS book_cost
+    FROM txn
+    WHERE asset_id IS NOT NULL
+      AND txn_type IN ('buy', 'sell')
+    GROUP BY portfolio_id, asset_id
+    UNION ALL
+    SELECT
+        portfolio_id,
+        asset_id,
+        quantity,
+        book_cost
+    FROM broker_portfolio_position_map
+) holdings
+GROUP BY portfolio_id, asset_id
+"""
+
+
 class PortfolioApiService:
     def __init__(self, conn) -> None:
         self.conn = conn
 
     def list_portfolios(self) -> list[PortfolioSummary]:
         rows = self.conn.execute(
-            """
-            WITH holdings AS (
-                SELECT portfolio_id, asset_id, SUM(qty) AS quantity, SUM(qty * price) AS book_cost
-                FROM txn
-                WHERE asset_id IS NOT NULL AND txn_type IN ('buy', 'sell')
-                GROUP BY portfolio_id, asset_id
-            ),
+            f"""
+            WITH holdings AS ({_HOLDINGS_SQL}),
             latest_prices AS (
                 SELECT asset_id, COALESCE(adj_close, close) AS price
                 FROM asset_quote_daily
@@ -46,7 +65,7 @@ class PortfolioApiService:
                     COUNT(*) FILTER (WHERE h.quantity <> 0) AS position_count,
                     COALESCE(SUM(h.book_cost) FILTER (WHERE h.quantity <> 0), 0) AS book_cost,
                     COALESCE(
-                        SUM(h.quantity * lp.price) FILTER (WHERE h.quantity <> 0 AND lp.price IS NOT NULL),
+                        SUM(COALESCE(h.quantity * lp.price, h.book_cost)) FILTER (WHERE h.quantity <> 0),
                         0
                     ) AS market_value
                 FROM holdings h
@@ -68,6 +87,24 @@ class PortfolioApiService:
             """
         ).fetchall()
         return [self._portfolio_summary(row) for row in rows]
+
+    def aggregate_portfolio(self) -> PortfolioSummary:
+        portfolios = self.list_portfolios()
+        if not portfolios:
+            raise LookupError("No portfolios found.")
+        market_value = sum(item.market_value for item in portfolios)
+        book_cost = sum(item.book_cost for item in portfolios)
+        return PortfolioSummary(
+            portfolio_id=0,
+            name="All portfolios",
+            base_ccy="CAD",
+            created_at=min(item.created_at for item in portfolios),
+            updated_at=max(item.updated_at for item in portfolios),
+            position_count=sum(item.position_count for item in portfolios),
+            market_value=market_value,
+            book_cost=book_cost,
+            unrealized_gain=market_value - book_cost if market_value else None,
+        )
 
     def get_portfolio(self, portfolio_id: int) -> PortfolioSummary:
         for portfolio in self.list_portfolios():
@@ -95,18 +132,34 @@ class PortfolioApiService:
         ).fetchone()
         return self.get_portfolio(int(row[0]))
 
-    def list_positions(self, portfolio_id: int) -> list[PositionSummary]:
+    def delete_portfolio(self, portfolio_id: int) -> dict[str, int]:
         self.get_portfolio(portfolio_id)
+        self.conn.execute("UPDATE broker_account SET portfolio_id = NULL WHERE portfolio_id = ?", [portfolio_id])
+        self.conn.execute("DELETE FROM broker_portfolio_position_map WHERE portfolio_id = ?", [portfolio_id])
+        self.conn.execute("DELETE FROM broker_portfolio_txn_map WHERE portfolio_id = ?", [portfolio_id])
+        self.conn.execute("DELETE FROM position WHERE portfolio_id = ?", [portfolio_id])
+        self.conn.execute("DELETE FROM portfolio_ticker WHERE portfolio_id = ?", [portfolio_id])
+        self.conn.execute("DELETE FROM txn WHERE portfolio_id = ?", [portfolio_id])
+        self.conn.execute("DELETE FROM portfolio WHERE portfolio_id = ?", [portfolio_id])
+        return {"portfolio_id": portfolio_id}
+
+    def list_positions(self, portfolio_id: int | None = None) -> list[PositionSummary]:
+        if portfolio_id is not None:
+            self.get_portfolio(portfolio_id)
+            where = "WHERE portfolio_id = ?"
+            params: list[object] = [portfolio_id]
+        else:
+            where = ""
+            params = []
         rows = self.conn.execute(
-            """
-            WITH holdings AS (
-                SELECT asset_id, SUM(qty) AS quantity, SUM(qty * price) AS book_cost
-                FROM txn
-                WHERE portfolio_id = ?
-                  AND asset_id IS NOT NULL
-                  AND txn_type IN ('buy', 'sell')
+            f"""
+            WITH portfolio_holdings AS ({_HOLDINGS_SQL}),
+            holdings AS (
+                SELECT asset_id, SUM(quantity) AS quantity, SUM(book_cost) AS book_cost
+                FROM portfolio_holdings
+                {where}
                 GROUP BY asset_id
-                HAVING SUM(qty) <> 0
+                HAVING SUM(quantity) <> 0
             ),
             latest_prices AS (
                 SELECT asset_id, COALESCE(adj_close, close) AS price
@@ -121,7 +174,7 @@ class PortfolioApiService:
                     a.asset_type,
                     a.ccy,
                     lp.price,
-                    h.quantity * lp.price AS market_value
+                    COALESCE(h.quantity * lp.price, h.book_cost) AS market_value
                 FROM holdings h
                 JOIN asset a ON a.asset_id = h.asset_id
                 LEFT JOIN latest_prices lp ON lp.asset_id = h.asset_id
@@ -136,15 +189,15 @@ class PortfolioApiService:
                 book_cost,
                 price,
                 market_value,
-                CASE WHEN price IS NULL THEN NULL ELSE market_value - book_cost END,
+                market_value - book_cost,
                 CASE
-                    WHEN price IS NULL OR SUM(market_value) OVER () = 0 THEN NULL
+                    WHEN SUM(market_value) OVER () = 0 THEN NULL
                     ELSE market_value / SUM(market_value) OVER ()
                 END
             FROM valued
             ORDER BY market_value DESC NULLS LAST, asset_id
             """,
-            [portfolio_id],
+            params,
         ).fetchall()
         return [
             PositionSummary(
@@ -163,16 +216,21 @@ class PortfolioApiService:
             for row in rows
         ]
 
-    def list_transactions(self, portfolio_id: int, limit: int, offset: int) -> Page[TransactionSummary]:
-        self.get_portfolio(portfolio_id)
+    def list_transactions(self, portfolio_id: int | None, limit: int, offset: int) -> Page[TransactionSummary]:
+        where = ""
+        params: list[object] = []
+        if portfolio_id is not None:
+            self.get_portfolio(portfolio_id)
+            where = "WHERE portfolio_id = ?"
+            params.append(portfolio_id)
         total = int(
             self.conn.execute(
-                "SELECT COUNT(*) FROM txn WHERE portfolio_id = ?",
-                [portfolio_id],
+                f"SELECT COUNT(*) FROM txn {where}",
+                params,
             ).fetchone()[0]
         )
         rows = self.conn.execute(
-            """
+            f"""
             SELECT
                 txn_id,
                 portfolio_id,
@@ -186,11 +244,11 @@ class PortfolioApiService:
                 fee_amt,
                 batch_id
             FROM txn
-            WHERE portfolio_id = ?
+            {where}
             ORDER BY time_stamp DESC, txn_id DESC
             LIMIT ? OFFSET ?
             """,
-            [portfolio_id, limit, offset],
+            [*params, limit, offset],
         ).fetchall()
         items = [
             TransactionSummary(

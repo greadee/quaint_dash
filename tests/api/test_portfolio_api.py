@@ -62,3 +62,46 @@ def test_portfolio_overview_positions_and_transactions(tmp_path):
     assert transactions.json()["total"] == 1
     assert transactions.json()["items"][0]["transaction_type"] == "buy"
     assert missing.status_code == 404
+
+
+def test_portfolio_aggregate_and_delete(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        """
+        INSERT INTO portfolio(portfolio_id, portfolio_name)
+        VALUES (1, 'Main'), (2, 'Sandbox')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy)
+        VALUES ('AAPL', 'AAPL', 'stock', 'USD'), ('MSFT', 'MSFT', 'stock', 'USD')
+        """
+    )
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO txn(
+            portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id
+        )
+        VALUES
+            (1, '2026-01-02 10:00:00', 'buy', 'AAPL', 2, 100, 'USD', 0, 1),
+            (2, '2026-01-02 10:00:00', 'buy', 'MSFT', 1, 300, 'USD', 0, 1)
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        aggregate = client.get("/api/v1/portfolios/aggregate/overview")
+        delete = client.delete("/api/v1/portfolios/2")
+        listed = client.get("/api/v1/portfolios")
+        missing = client.get("/api/v1/portfolios/2/overview")
+
+    assert aggregate.status_code == 200
+    assert aggregate.json()["name"] == "All portfolios"
+    assert aggregate.json()["book_cost"] == 500
+    assert delete.status_code == 200
+    assert [item["portfolio_id"] for item in listed.json()] == [1]
+    assert missing.status_code == 404

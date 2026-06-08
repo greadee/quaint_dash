@@ -272,6 +272,22 @@ CREATE TABLE IF NOT EXISTS broker_portfolio_txn_map (
     FOREIGN KEY (portfolio_id) REFERENCES portfolio(portfolio_id)
 );
 
+CREATE TABLE IF NOT EXISTS broker_portfolio_position_map (
+    provider TEXT NOT NULL,
+    provider_account_id TEXT NOT NULL,
+    provider_position_id TEXT NOT NULL,
+    portfolio_id BIGINT NOT NULL,
+    asset_id TEXT NOT NULL,
+    quantity DOUBLE PRECISION NOT NULL,
+    book_cost DOUBLE PRECISION NOT NULL,
+    currency TEXT,
+    imported_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (provider, provider_account_id, provider_position_id),
+    FOREIGN KEY (portfolio_id) REFERENCES portfolio(portfolio_id)
+);
+
 CREATE TABLE IF NOT EXISTS broker_sync_run (
     sync_run_id BIGINT PRIMARY KEY DEFAULT nextval('seq_broker_sync_run_id'),
     provider TEXT NOT NULL,

@@ -90,11 +90,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   portfolios: () => request<Portfolio[]>("/portfolios"),
+  aggregatePortfolio: () => request<Portfolio>("/portfolios/aggregate/overview"),
   positions: (id: number) => request<Position[]>(`/portfolios/${id}/positions`),
+  aggregatePositions: () => request<Position[]>("/portfolios/aggregate/positions"),
   transactions: (id: number) => request<Page<Transaction>>(`/portfolios/${id}/transactions?limit=8`),
+  aggregateTransactions: () => request<Page<Transaction>>("/portfolios/aggregate/transactions?limit=8"),
   portfolioAnalytics: (id: number) => request<Record<string, unknown>>(`/portfolios/${id}/analytics`),
   createPortfolio: (name: string) =>
     request<Portfolio>("/portfolios", { method: "POST", body: JSON.stringify({ name }) }),
+  deletePortfolio: (id: number) => request(`/portfolios/${id}`, { method: "DELETE" }),
   asset: (id: string) => request<Asset>(`/assets/${id}`),
   prices: (id: string) => request<PricePoint[]>(`/assets/${id}/prices?limit=365`),
   assetAnalytics: (id: string) => request<Record<string, unknown>>(`/assets/${id}/analytics`),

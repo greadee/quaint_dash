@@ -186,7 +186,9 @@ class BrokerCommands:
         provider_account_id: str,
         portfolio_id: int,
         provider: str = "snaptrade",
-    ) -> None:
+    ):
+        from dashboard.brokers.portfolio import BrokerPortfolioIntegrationService
+
         if not self.conn.execute(
             "SELECT 1 FROM portfolio WHERE portfolio_id = ?",
             [portfolio_id],
@@ -196,6 +198,11 @@ class BrokerCommands:
             provider,
             provider_account_id.strip(),
             portfolio_id,
+        )
+        return BrokerPortfolioIntegrationService(self.conn).project_account_positions(
+            provider_account_id=provider_account_id.strip(),
+            portfolio_id=portfolio_id,
+            provider=provider,
         )
 
     def broker_import_transactions(
