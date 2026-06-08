@@ -54,6 +54,9 @@ class PositionSummary(BaseModel):
     symbol: str
     name: str | None
     asset_type: str | None
+    sector: str | None = None
+    industry: str | None = None
+    country: str | None = None
     currency: str
     quantity: float
     book_cost: float
@@ -100,6 +103,37 @@ class AssetDetail(BaseModel):
 class PricePointResponse(BaseModel):
     date: date
     close: float
+
+
+class PriceMoverResponse(BaseModel):
+    asset_id: str
+    symbol: str
+    name: str | None
+    latest_price: float | None
+    previous_price: float | None
+    change: float | None
+    change_percent: float | None
+    market_value: float | None
+    weight: float | None
+
+
+class NewsItemResponse(BaseModel):
+    title: str
+    provider: str | None
+    published_at: datetime | None
+    url: str | None
+    asset_id: str | None
+    symbol: str | None
+    sentiment: str | None
+
+
+class OverviewUpdatesResponse(BaseModel):
+    total_market_value: float
+    position_count: int
+    mover_count: int
+    news_count: int
+    price_movers: list[PriceMoverResponse]
+    news: list[NewsItemResponse]
 
 
 class BrokerUserCreate(BaseModel):

@@ -13,6 +13,9 @@ export type Position = {
   symbol: string;
   name: string | null;
   asset_type: string | null;
+  sector: string | null;
+  industry: string | null;
+  country: string | null;
   currency: string;
   quantity: number;
   book_cost: number;
@@ -35,6 +38,34 @@ export type Asset = {
 };
 
 export type PricePoint = { date: string; close: number };
+export type PriceMover = {
+  asset_id: string;
+  symbol: string;
+  name: string | null;
+  latest_price: number | null;
+  previous_price: number | null;
+  change: number | null;
+  change_percent: number | null;
+  market_value: number | null;
+  weight: number | null;
+};
+export type NewsItem = {
+  title: string;
+  provider: string | null;
+  published_at: string | null;
+  url: string | null;
+  asset_id: string | null;
+  symbol: string | null;
+  sentiment: string | null;
+};
+export type OverviewUpdates = {
+  total_market_value: number;
+  position_count: number;
+  mover_count: number;
+  news_count: number;
+  price_movers: PriceMover[];
+  news: NewsItem[];
+};
 export type Transaction = {
   transaction_id: number;
   portfolio_id: number;
@@ -89,6 +120,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  overviewUpdates: () => request<OverviewUpdates>("/overview/updates"),
   portfolios: () => request<Portfolio[]>("/portfolios"),
   aggregatePortfolio: () => request<Portfolio>("/portfolios/aggregate/overview"),
   positions: (id: number) => request<Position[]>(`/portfolios/${id}/positions`),

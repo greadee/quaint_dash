@@ -8,11 +8,14 @@ from dashboard.api.models import (
     BrokerConnectionResponse,
     BrokerUserResponse,
     IngestionJobResponse,
+    NewsItemResponse,
+    OverviewUpdatesResponse,
     Page,
     PortfolioCreate,
     PortfolioSummary,
     PositionSummary,
     PricePointResponse,
+    PriceMoverResponse,
     TransactionSummary,
 )
 from dashboard.analytics import AnalyticsEngine, AnalyticsRepository, analytics_report_payload
@@ -168,13 +171,16 @@ class PortfolioApiService:
             ),
             valued AS (
                 SELECT
-                    h.*,
-                    a.symbol,
-                    a.name,
-                    a.asset_type,
-                    a.ccy,
-                    lp.price,
-                    COALESCE(h.quantity * lp.price, h.book_cost) AS market_value
+                h.*,
+                a.symbol,
+                a.name,
+                a.asset_type,
+                a.sector,
+                a.industry,
+                a.country,
+                a.ccy,
+                lp.price,
+                COALESCE(h.quantity * lp.price, h.book_cost) AS market_value
                 FROM holdings h
                 JOIN asset a ON a.asset_id = h.asset_id
                 LEFT JOIN latest_prices lp ON lp.asset_id = h.asset_id
@@ -184,6 +190,9 @@ class PortfolioApiService:
                 COALESCE(symbol, asset_id),
                 name,
                 asset_type,
+                sector,
+                industry,
+                country,
                 ccy,
                 quantity,
                 book_cost,
@@ -205,13 +214,16 @@ class PortfolioApiService:
                 symbol=row[1],
                 name=row[2],
                 asset_type=row[3],
-                currency=row[4],
-                quantity=float(row[5]),
-                book_cost=float(row[6]),
-                latest_price=_float_or_none(row[7]),
-                market_value=_float_or_none(row[8]),
-                unrealized_gain=_float_or_none(row[9]),
-                weight=_float_or_none(row[10]),
+                sector=row[4],
+                industry=row[5],
+                country=row[6],
+                currency=row[7],
+                quantity=float(row[8]),
+                book_cost=float(row[9]),
+                latest_price=_float_or_none(row[10]),
+                market_value=_float_or_none(row[11]),
+                unrealized_gain=_float_or_none(row[12]),
+                weight=_float_or_none(row[13]),
             )
             for row in rows
         ]
@@ -275,6 +287,117 @@ class PortfolioApiService:
             benchmark_index_id=benchmark_index_id,
         )
         return analytics_report_payload(report)
+
+    def overview_updates(self) -> OverviewUpdatesResponse:
+        portfolios = self.list_portfolios()
+        total_market_value = sum(item.market_value for item in portfolios)
+        position_count = sum(item.position_count for item in portfolios)
+        mover_rows = self.conn.execute(
+            f"""
+            WITH portfolio_holdings AS ({_HOLDINGS_SQL}),
+            holdings AS (
+                SELECT asset_id, SUM(quantity) AS quantity, SUM(book_cost) AS book_cost
+                FROM portfolio_holdings
+                GROUP BY asset_id
+                HAVING SUM(quantity) <> 0
+            ),
+            ranked_prices AS (
+                SELECT
+                    asset_id,
+                    date,
+                    COALESCE(adj_close, close) AS price,
+                    ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY date DESC) AS price_rank
+                FROM asset_quote_daily
+                WHERE COALESCE(adj_close, close) IS NOT NULL
+            ),
+            latest AS (
+                SELECT asset_id, price
+                FROM ranked_prices
+                WHERE price_rank = 1
+            ),
+            previous AS (
+                SELECT asset_id, price
+                FROM ranked_prices
+                WHERE price_rank = 2
+            ),
+            valued AS (
+                SELECT
+                    h.asset_id,
+                    COALESCE(a.symbol, h.asset_id) AS symbol,
+                    a.name,
+                    l.price AS latest_price,
+                    p.price AS previous_price,
+                    l.price - p.price AS price_change,
+                    CASE WHEN p.price IS NULL OR p.price = 0 THEN NULL ELSE (l.price - p.price) / p.price END AS change_percent,
+                    COALESCE(h.quantity * l.price, h.book_cost) AS market_value
+                FROM holdings h
+                JOIN asset a ON a.asset_id = h.asset_id
+                JOIN latest l ON l.asset_id = h.asset_id
+                JOIN previous p ON p.asset_id = h.asset_id
+            )
+            SELECT
+                asset_id,
+                symbol,
+                name,
+                latest_price,
+                previous_price,
+                price_change,
+                change_percent,
+                market_value
+            FROM valued
+            ORDER BY ABS(COALESCE(change_percent, 0)) DESC, market_value DESC NULLS LAST
+            LIMIT 8
+            """
+        ).fetchall()
+        news_rows = self.conn.execute(
+            """
+            SELECT
+                a.title,
+                a.provider,
+                a.published_at,
+                a.url,
+                m.asset_id,
+                COALESCE(asset.symbol, m.ticker),
+                NULL AS sentiment
+            FROM news_article a
+            LEFT JOIN news_article_asset_mention m ON m.article_id = a.article_id
+            LEFT JOIN asset ON asset.asset_id = m.asset_id
+            ORDER BY a.published_at DESC NULLS LAST, a.article_id DESC
+            LIMIT 8
+            """
+        ).fetchall()
+        return OverviewUpdatesResponse(
+            total_market_value=total_market_value,
+            position_count=position_count,
+            mover_count=len(mover_rows),
+            news_count=len(news_rows),
+            price_movers=[
+                PriceMoverResponse(
+                    asset_id=row[0],
+                    symbol=row[1],
+                    name=row[2],
+                    latest_price=_float_or_none(row[3]),
+                    previous_price=_float_or_none(row[4]),
+                    change=_float_or_none(row[5]),
+                    change_percent=_float_or_none(row[6]),
+                    market_value=_float_or_none(row[7]),
+                    weight=(float(row[7]) / total_market_value) if total_market_value else None,
+                )
+                for row in mover_rows
+            ],
+            news=[
+                NewsItemResponse(
+                    title=row[0],
+                    provider=row[1],
+                    published_at=row[2],
+                    url=row[3],
+                    asset_id=row[4],
+                    symbol=row[5],
+                    sentiment=row[6],
+                )
+                for row in news_rows
+            ],
+        )
 
     @staticmethod
     def _portfolio_summary(row) -> PortfolioSummary:

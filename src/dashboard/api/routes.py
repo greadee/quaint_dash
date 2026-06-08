@@ -22,6 +22,7 @@ from dashboard.api.models import (
     IngestionRetryFailedRequest,
     IngestionRunRequest,
     IngestionScheduleRequest,
+    OverviewUpdatesResponse,
     Page,
     PortfolioCreate,
     PortfolioSummary,
@@ -37,6 +38,11 @@ router = APIRouter(prefix="/api/v1")
 @router.get("/portfolios", response_model=list[PortfolioSummary])
 def list_portfolios(conn=Depends(get_connection)):
     return PortfolioApiService(conn).list_portfolios()
+
+
+@router.get("/overview/updates", response_model=OverviewUpdatesResponse)
+def overview_updates(conn=Depends(get_connection)):
+    return PortfolioApiService(conn).overview_updates()
 
 
 @router.get("/portfolios/aggregate/overview", response_model=PortfolioSummary)

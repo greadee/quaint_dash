@@ -27,8 +27,8 @@ def test_portfolio_overview_positions_and_transactions(tmp_path):
     db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
     db.conn.execute(
         """
-        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name)
-        VALUES ('AAPL', 'AAPL', 'stock', 'USD', 'Apple Inc.')
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name, sector, industry, country)
+        VALUES ('AAPL', 'AAPL', 'stock', 'USD', 'Apple Inc.', 'Technology', 'Consumer Electronics', 'US')
         """
     )
     db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
@@ -59,6 +59,9 @@ def test_portfolio_overview_positions_and_transactions(tmp_path):
     assert overview.json()["unrealized_gain"] == 50
     assert positions.json()[0]["weight"] == 1
     assert positions.json()[0]["name"] == "Apple Inc."
+    assert positions.json()[0]["sector"] == "Technology"
+    assert positions.json()[0]["industry"] == "Consumer Electronics"
+    assert positions.json()[0]["country"] == "US"
     assert transactions.json()["total"] == 1
     assert transactions.json()["items"][0]["transaction_type"] == "buy"
     assert missing.status_code == 404
@@ -105,3 +108,55 @@ def test_portfolio_aggregate_and_delete(tmp_path):
     assert delete.status_code == 200
     assert [item["portfolio_id"] for item in listed.json()] == [1]
     assert missing.status_code == 404
+
+
+def test_overview_updates_include_movers_and_news(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name)
+        VALUES ('AAPL', 'AAPL', 'stock', 'USD', 'Apple Inc.')
+        """
+    )
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO txn(portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id)
+        VALUES (1, '2026-01-02 10:00:00', 'buy', 'AAPL', 2, 100, 'USD', 0, 1)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+        VALUES
+            ('AAPL', '2026-01-02', 100, 100, 'test'),
+            ('AAPL', '2026-01-03', 125, 125, 'test')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO news_article(article_id, source_name, provider, title, url, published_at, content_hash)
+        VALUES (1, 'Test Wire', 'test-news', 'Apple updates guidance', 'https://example.test/aapl', '2026-01-03 12:00:00', 'hash-aapl')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO news_article_asset_mention(article_id, asset_id, ticker)
+        VALUES (1, 'AAPL', 'AAPL')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/overview/updates")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_market_value"] == 250
+    assert payload["price_movers"][0]["symbol"] == "AAPL"
+    assert payload["price_movers"][0]["change_percent"] == 0.25
+    assert payload["news"][0]["title"] == "Apple updates guidance"
+    assert payload["news"][0]["symbol"] == "AAPL"

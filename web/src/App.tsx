@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { Link, NavLink, Route, Routes, useParams } from "react-router-dom";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { api } from "./api";
+import { api, type Position } from "./api";
 
 const money = (value: number | null | undefined, currency = "CAD") =>
   value == null
@@ -55,6 +55,7 @@ export default function App() {
         <button className="mobile-close" onClick={() => setMenuOpen(false)}><X /></button>
         <nav>
           <NavLink to="/" end><LayoutDashboard />Overview</NavLink>
+          <NavLink to="/portfolios"><WalletCards />Portfolios</NavLink>
           <NavLink to="/brokers"><Building2 />Brokers</NavLink>
           <NavLink to="/operations"><Database />Operations</NavLink>
         </nav>
@@ -67,7 +68,8 @@ export default function App() {
           <div className="avatar">CP</div>
         </header>
         <Routes>
-          <Route path="/" element={<PortfolioOverview />} />
+          <Route path="/" element={<OverviewPage />} />
+          <Route path="/portfolios" element={<PortfoliosPage />} />
           <Route path="/assets/:assetId" element={<AssetPage />} />
           <Route path="/brokers" element={<BrokersPage />} />
           <Route path="/operations" element={<OperationsPage />} />
@@ -77,10 +79,60 @@ export default function App() {
   );
 }
 
-function PortfolioOverview() {
+function OverviewPage() {
+  const updates = useQuery({ queryKey: ["overview-updates"], queryFn: api.overviewUpdates });
+  const portfolios = useQuery({ queryKey: ["portfolios"], queryFn: api.portfolios });
+  const brokers = useQuery({ queryKey: ["broker-accounts"], queryFn: api.brokerAccounts });
+  const jobs = useQuery({ queryKey: ["jobs", "failed", ""], queryFn: () => api.ingestionJobs("failed") });
+  const portfolioCount = portfolios.data?.length ?? 0;
+  const mappedAccounts = brokers.data?.filter((account) => account.portfolio_id != null).length ?? 0;
+  const failedJobs = jobs.data?.length ?? 0;
+  const topMover = updates.data?.price_movers[0];
+
+  return <div className="page">
+    <div className="page-title">
+      <div><p className="eyebrow">Today at a glance</p><h1>Overview</h1><p className="page-subtitle">The landing page is now for updates, attention items, and fresh market context. Portfolio organization lives in its own workspace.</p></div>
+      <div className="actions"><Link className="button-link" to="/portfolios"><WalletCards size={17}/>Open portfolios</Link><Link className="button-link primary" to="/brokers"><Building2 size={17}/>Broker setup</Link></div>
+    </div>
+    <section className="metric-grid">
+      <Metric icon={<CircleDollarSign />} label="Total market value" value={money(updates.data?.total_market_value)} />
+      <Metric icon={<Activity />} label="Active holdings" value={String(updates.data?.position_count ?? 0)} />
+      <Metric icon={<WalletCards />} label="Portfolios" value={String(portfolioCount)} />
+      <Metric icon={<Database />} label="Attention items" value={String(failedJobs)} detail={failedJobs ? "failed jobs" : "data healthy"} positive={!failedJobs} />
+    </section>
+    <section className="update-grid">
+      <section className="card">
+        <div className="card-heading"><div><p className="eyebrow">Price movers</p><h2>Holdings moving most</h2></div><span>{updates.data?.mover_count ?? 0} tracked</span></div>
+        {updates.isLoading ? <Loading compact /> : updates.data?.price_movers.length ? <div className="mover-list">{updates.data.price_movers.map((item) => <Link to={`/assets/${item.asset_id}`} className="mover-row" key={item.asset_id}><div><strong>{item.symbol}</strong><span>{item.name ?? "Held asset"}</span></div><b className={(item.change_percent ?? 0) >= 0 ? "positive" : "negative"}>{percent(item.change_percent)}</b><span>{money(item.market_value)}</span></Link>)}</div> : <EmptyRow text="No price movers yet. Add price history for held assets to light this up." />}
+      </section>
+      <section className="card">
+        <div className="card-heading"><div><p className="eyebrow">Market notes</p><h2>News affecting holdings</h2></div><span>{updates.data?.news_count ?? 0} items</span></div>
+        {updates.isLoading ? <Loading compact /> : updates.data?.news.length ? <div className="news-list">{updates.data.news.map((item, index) => <a href={item.url ?? undefined} target="_blank" rel="noreferrer" className="news-row" key={`${item.title}-${index}`}><div><strong>{item.title}</strong><span>{[item.symbol, item.provider, item.published_at ? new Date(item.published_at).toLocaleDateString() : null].filter(Boolean).join(" - ")}</span></div></a>)}</div> : <EmptyRow text="No local news found yet. Run sentiment/news ingestion to populate this panel." />}
+      </section>
+    </section>
+    <section className="update-grid slim">
+      <section className="card">
+        <div className="card-heading"><div><p className="eyebrow">Next best action</p><h2>{mappedAccounts ? "Review imported portfolios" : "Connect a broker account"}</h2></div><span>{mappedAccounts} mapped</span></div>
+        <div className="broker-help">
+          <p>{mappedAccounts ? "Your broker accounts are mapped. Use Portfolios to review exposure by sector, geography, industry, and currency." : "Connect a broker, sync accounts, and map them to local portfolios so the dashboard can organize everything automatically."}</p>
+          <Link className="portal-link" to={mappedAccounts ? "/portfolios" : "/brokers"}>{mappedAccounts ? "Open portfolio workspace" : "Start broker setup"}</Link>
+        </div>
+      </section>
+      <section className="card">
+        <div className="card-heading"><div><p className="eyebrow">Largest move</p><h2>{topMover?.symbol ?? "Waiting for prices"}</h2></div><span>{topMover ? percent(topMover.change_percent) : "no data"}</span></div>
+        <div className="broker-help">
+          <p>{topMover ? `${topMover.name ?? topMover.asset_id} moved ${money(topMover.change)} since the prior close and represents ${percent(topMover.weight)} of tracked holdings.` : "Once held assets have at least two prices, this card will show what changed most."}</p>
+        </div>
+      </section>
+    </section>
+  </div>;
+}
+
+function PortfoliosPage() {
   const client = useQueryClient();
   const portfolios = useQuery({ queryKey: ["portfolios"], queryFn: api.portfolios });
   const [selectedId, setSelectedId] = useState<number | "all" | null>(null);
+  const [groupBy, setGroupBy] = useState<TrancheDimension>("sector");
   const [newName, setNewName] = useState("");
   const isAggregate = selectedId === "all";
   const aggregate = useQuery({
@@ -144,10 +196,11 @@ function PortfolioOverview() {
 
   const gain = selected.unrealized_gain ?? 0;
   const gainRate = selected.book_cost ? gain / selected.book_cost : null;
+  const tranches = groupPositions(positions.data ?? [], groupBy);
   return (
     <div className="page">
       <div className="page-title">
-        <div><p className="eyebrow">Portfolio overview</p><h1>{selected.name}</h1></div>
+        <div><p className="eyebrow">Portfolio workspace</p><h1>{selected.name}</h1><p className="page-subtitle">Organize one portfolio or all holdings into intuitive tranches by sector, geography, industry, asset type, or currency.</p></div>
         <div className="overview-actions">
           <select value={isAggregate ? "all" : selected.portfolio_id} onChange={(event) => setSelectedId(event.target.value === "all" ? "all" : Number(event.target.value))}>
             <option value="all">All portfolios</option>
@@ -179,6 +232,13 @@ function PortfolioOverview() {
           ) : <EmptyRow text="No transactions recorded yet." />}
         </section>
       </section>
+      <section className="card tranche-card">
+        <div className="card-heading">
+          <div><p className="eyebrow">Tranches</p><h2>Organize holdings by exposure</h2></div>
+          <label className="tranche-selector">Group by<select value={groupBy} onChange={(event) => setGroupBy(event.target.value as TrancheDimension)}><option value="sector">Sector</option><option value="country">Geography</option><option value="industry">Industry</option><option value="asset_type">Asset type</option><option value="currency">Currency</option></select></label>
+        </div>
+        {positions.isLoading ? <Loading compact /> : tranches.length ? <div className="tranche-grid">{tranches.map((group) => <article className="tranche" key={group.label}><div><strong>{group.label}</strong><span>{group.count} holding{group.count === 1 ? "" : "s"}</span></div><b>{money(group.marketValue, selected.base_ccy)}</b><div className="bar"><span style={{ width: `${Math.max(group.weight * 100, 2)}%` }} /></div><em>{percent(group.weight)} of selected scope</em></article>)}</div> : <EmptyRow text="No tranche data yet. Add holdings with sector, industry, country, or currency metadata." />}
+      </section>
       <section className="card holdings-card">
         <div className="card-heading"><div><p className="eyebrow">Composition</p><h2>Holdings</h2></div><span>{positions.data?.length ?? 0} positions</span></div>
         {positions.isLoading ? <Loading compact /> : positions.data?.length ? (
@@ -193,6 +253,30 @@ function PortfolioOverview() {
       </section>
     </div>
   );
+}
+
+type TrancheDimension = "sector" | "country" | "industry" | "asset_type" | "currency";
+const trancheLabels: Record<TrancheDimension, string> = {
+  sector: "Unclassified sector",
+  country: "Unclassified geography",
+  industry: "Unclassified industry",
+  asset_type: "Unclassified type",
+  currency: "Unknown currency",
+};
+function groupPositions(positions: Position[], dimension: TrancheDimension) {
+  const total = positions.reduce((sum, item) => sum + (item.market_value ?? 0), 0);
+  const grouped = new Map<string, { label: string; marketValue: number; count: number }>();
+  positions.forEach((item) => {
+    const raw = dimension === "asset_type" ? item.asset_type : item[dimension];
+    const label = raw?.trim() || trancheLabels[dimension];
+    const current = grouped.get(label) ?? { label, marketValue: 0, count: 0 };
+    current.marketValue += item.market_value ?? 0;
+    current.count += 1;
+    grouped.set(label, current);
+  });
+  return Array.from(grouped.values())
+    .map((item) => ({ ...item, weight: total ? item.marketValue / total : 0 }))
+    .sort((a, b) => b.marketValue - a.marketValue);
 }
 
 function AssetPage() {
