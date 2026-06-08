@@ -20,6 +20,10 @@ __pycache__/
 build/
 web/dist/
 web/node_modules/
+web/vite.config.js
+web/vite.config.d.ts
+web/*.tsbuildinfo
+web/.tmp/
 develop-eggs/
 dist/
 downloads/

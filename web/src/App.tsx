@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { Link, NavLink, Route, Routes, useParams } from "react-router-dom";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { api, Portfolio } from "./api";
+import { api } from "./api";
 
 const money = (value: number | null | undefined, currency = "CAD") =>
   value == null
