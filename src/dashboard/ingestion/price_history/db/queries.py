@@ -182,7 +182,7 @@ INSERT INTO dividend_event (
     source,
     as_of_ts
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, now())
 ON CONFLICT (asset_id, ex_date)
 DO UPDATE SET
     payment_date = excluded.payment_date,
@@ -191,7 +191,7 @@ DO UPDATE SET
     dividend_per_share = excluded.dividend_per_share,
     currency = excluded.currency,
     source = excluded.source,
-    as_of_ts = CURRENT_TIMESTAMP
+    as_of_ts = now()
 """
 
 UPSERT_SPLIT_EVENT = """
@@ -203,13 +203,13 @@ INSERT INTO split_event (
     source,
     as_of_ts
 )
-VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+VALUES (?, ?, ?, ?, ?, now())
 ON CONFLICT (asset_id, ex_date)
 DO UPDATE SET
     split_from = excluded.split_from,
     split_to = excluded.split_to,
     source = excluded.source,
-    as_of_ts = CURRENT_TIMESTAMP
+    as_of_ts = now()
 """
 
 SELECT_ALL_ASSET_IDS = """

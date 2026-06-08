@@ -17,6 +17,8 @@ import pytest
 
 from dashboard.db.db_conn import DB, init_db
 from dashboard.models.storage import DashboardManager
+from dashboard.ingestion.price_history.db.ingestion_repo import PriceHistoryIngestionRepository
+from dashboard.ingestion.price_history.models import DividendEventRow, SplitEventRow
 from dashboard.ingestion.price_history.models import PriceDailyRow
 from dashboard.ingestion.price_history.service import PriceHistoryIngestionService
 
@@ -326,6 +328,84 @@ def test_price_history_scheduler_processes_one_backfill_job(manager, monkeypatch
     assert quote_rows[0][1] == date(2024, 1, 2)
     assert quote_rows[0][2] == 104.0
     assert quote_rows[0][3] == "fake_yfinance"
+
+
+def test_market_ingestion_upserts_dividends_and_splits_on_conflict(manager):
+    """
+    Dividend and split upserts should work for both new rows and conflict updates.
+    """
+
+    insert_asset(manager, "AAPL")
+    repo = PriceHistoryIngestionRepository(manager.conn)
+
+    repo.upsert_dividend_rows(
+        [
+            DividendEventRow(
+                asset_id="AAPL",
+                ex_date=date(2024, 1, 5),
+                payment_date=None,
+                record_date=None,
+                declaration_date=None,
+                dividend_per_share=0.24,
+                currency="USD",
+                source="test",
+            )
+        ]
+    )
+    repo.upsert_dividend_rows(
+        [
+            DividendEventRow(
+                asset_id="AAPL",
+                ex_date=date(2024, 1, 5),
+                payment_date=None,
+                record_date=None,
+                declaration_date=None,
+                dividend_per_share=0.25,
+                currency="USD",
+                source="test",
+            )
+        ]
+    )
+    repo.upsert_split_rows(
+        [
+            SplitEventRow(
+                asset_id="AAPL",
+                ex_date=date(2024, 2, 1),
+                split_from=1,
+                split_to=2,
+                source="test",
+            )
+        ]
+    )
+    repo.upsert_split_rows(
+        [
+            SplitEventRow(
+                asset_id="AAPL",
+                ex_date=date(2024, 2, 1),
+                split_from=1,
+                split_to=4,
+                source="test",
+            )
+        ]
+    )
+
+    dividend = manager.conn.execute(
+        """
+        SELECT dividend_per_share, currency
+        FROM dividend_event
+        WHERE asset_id = 'AAPL'
+        """
+    ).fetchone()
+    split = manager.conn.execute(
+        """
+        SELECT split_from, split_to
+        FROM split_event
+        WHERE asset_id = 'AAPL'
+        """
+    ).fetchone()
+
+    assert dividend == (0.25, "USD")
+    assert split == (1, 4)
 
 
 def test_price_history_scheduler_ignores_completed_asset(manager):
