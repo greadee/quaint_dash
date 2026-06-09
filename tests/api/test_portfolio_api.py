@@ -302,8 +302,18 @@ def test_asset_holdings_include_portfolio_context_and_returns(tmp_path):
     )
     db.conn.execute(
         """
-        INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
-        VALUES ('MU.TO', '2026-01-03', 7, 7, 'test')
+        INSERT INTO broker_position_snapshot(
+            provider,
+            provider_account_id,
+            provider_position_id,
+            as_of_date,
+            asset_id,
+            symbol,
+            quantity,
+            market_value,
+            currency
+        )
+        VALUES ('snaptrade', 'acct-1', 'pos-mu', '2026-01-03', 'MU.TO', 'MU.TO', 85, 595, 'CAD')
         """
     )
     db.conn.close()
@@ -319,6 +329,7 @@ def test_asset_holdings_include_portfolio_context_and_returns(tmp_path):
     assert payload[0]["portfolio_name"] == "Main"
     assert payload[0]["quantity"] == 85
     assert payload[0]["book_cost"] == 464.1
+    assert payload[0]["latest_price"] == 7
     assert payload[0]["market_value"] == 595
     assert round(payload[0]["total_return_percent"], 4) == 0.2821
     assert payload[0]["broker_linked"] is True

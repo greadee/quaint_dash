@@ -189,17 +189,47 @@ class PortfolioApiService:
                 FROM asset_quote_daily
                 QUALIFY ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY date DESC) = 1
             ),
+            latest_broker_positions AS (
+                SELECT
+                    provider,
+                    provider_account_id,
+                    provider_position_id,
+                    MAX(as_of_date) AS as_of_date
+                FROM broker_position_snapshot
+                GROUP BY provider, provider_account_id, provider_position_id
+            ),
+            broker_prices AS (
+                SELECT
+                    pm.portfolio_id,
+                    pm.asset_id,
+                    SUM(ps.market_value) / NULLIF(SUM(ps.quantity), 0) AS price
+                FROM broker_portfolio_position_map pm
+                JOIN latest_broker_positions latest
+                  ON latest.provider = pm.provider
+                 AND latest.provider_account_id = pm.provider_account_id
+                 AND latest.provider_position_id = pm.provider_position_id
+                JOIN broker_position_snapshot ps
+                  ON ps.provider = latest.provider
+                 AND ps.provider_account_id = latest.provider_account_id
+                 AND ps.provider_position_id = latest.provider_position_id
+                 AND ps.as_of_date = latest.as_of_date
+                GROUP BY pm.portfolio_id, pm.asset_id
+            ),
             totals AS (
                 SELECT
                     h.portfolio_id,
                     COUNT(*) FILTER (WHERE h.quantity <> 0) AS position_count,
                     COALESCE(SUM(h.book_cost) FILTER (WHERE h.quantity <> 0), 0) AS book_cost,
                     COALESCE(
-                        SUM(COALESCE(h.quantity * lp.price, h.book_cost)) FILTER (WHERE h.quantity <> 0),
+                        SUM(COALESCE(h.quantity * lp.price, h.quantity * bp.price, h.book_cost))
+                            FILTER (WHERE h.quantity <> 0),
                         0
                     ) AS market_value
                 FROM holdings h
                 LEFT JOIN latest_prices lp ON lp.asset_id = h.asset_id
+                LEFT JOIN broker_prices bp
+                  ON bp.portfolio_id = h.portfolio_id
+                 AND bp.asset_id = h.asset_id
                 GROUP BY h.portfolio_id
             )
             SELECT
@@ -399,7 +429,7 @@ class PortfolioApiService:
         if portfolio_id is not None:
             self.get_portfolio(portfolio_id)
             where = "WHERE portfolio_id = ?"
-            params: list[object] = [portfolio_id, portfolio_id]
+            params: list[object] = [portfolio_id, portfolio_id, portfolio_id]
         else:
             where = ""
             params = []
@@ -426,6 +456,32 @@ class PortfolioApiService:
                 FROM asset_quote_daily
                 QUALIFY ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY date DESC) = 1
             ),
+            latest_broker_positions AS (
+                SELECT
+                    provider,
+                    provider_account_id,
+                    provider_position_id,
+                    MAX(as_of_date) AS as_of_date
+                FROM broker_position_snapshot
+                GROUP BY provider, provider_account_id, provider_position_id
+            ),
+            broker_prices AS (
+                SELECT
+                    pm.asset_id,
+                    SUM(ps.market_value) / NULLIF(SUM(ps.quantity), 0) AS price
+                FROM broker_portfolio_position_map pm
+                JOIN latest_broker_positions latest
+                  ON latest.provider = pm.provider
+                 AND latest.provider_account_id = pm.provider_account_id
+                 AND latest.provider_position_id = pm.provider_position_id
+                JOIN broker_position_snapshot ps
+                  ON ps.provider = latest.provider
+                 AND ps.provider_account_id = latest.provider_account_id
+                 AND ps.provider_position_id = latest.provider_position_id
+                 AND ps.as_of_date = latest.as_of_date
+                {where}
+                GROUP BY pm.asset_id
+            ),
             valued AS (
                 SELECT
                 h.*,
@@ -446,12 +502,13 @@ class PortfolioApiService:
                 END AS country,
                 a.ccy,
                 COALESCE(bl.broker_account_count, 0) AS broker_account_count,
-                lp.price,
-                COALESCE(h.quantity * lp.price, h.book_cost) AS market_value
+                COALESCE(lp.price, bp.price) AS price,
+                COALESCE(h.quantity * lp.price, h.quantity * bp.price, h.book_cost) AS market_value
                 FROM holdings h
                 JOIN asset a ON a.asset_id = h.asset_id
                 {_ENRICHED_ASSET_JOIN}
                 LEFT JOIN latest_prices lp ON lp.asset_id = h.asset_id
+                LEFT JOIN broker_prices bp ON bp.asset_id = h.asset_id
                 LEFT JOIN broker_links bl ON bl.asset_id = h.asset_id
             )
             SELECT
@@ -541,6 +598,33 @@ class PortfolioApiService:
                 FROM asset_quote_daily
                 QUALIFY ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY date DESC) = 1
             ),
+            latest_broker_positions AS (
+                SELECT
+                    provider,
+                    provider_account_id,
+                    provider_position_id,
+                    MAX(as_of_date) AS as_of_date
+                FROM broker_position_snapshot
+                GROUP BY provider, provider_account_id, provider_position_id
+            ),
+            broker_prices AS (
+                SELECT
+                    pm.portfolio_id,
+                    pm.asset_id,
+                    SUM(ps.market_value) / NULLIF(SUM(ps.quantity), 0) AS price
+                FROM broker_portfolio_position_map pm
+                JOIN latest_broker_positions latest
+                  ON latest.provider = pm.provider
+                 AND latest.provider_account_id = pm.provider_account_id
+                 AND latest.provider_position_id = pm.provider_position_id
+                JOIN broker_position_snapshot ps
+                  ON ps.provider = latest.provider
+                 AND ps.provider_account_id = latest.provider_account_id
+                 AND ps.provider_position_id = latest.provider_position_id
+                 AND ps.as_of_date = latest.as_of_date
+                WHERE UPPER(pm.asset_id) = ?
+                GROUP BY pm.portfolio_id, pm.asset_id
+            ),
             valued AS (
                 SELECT
                     h.portfolio_id,
@@ -565,12 +649,15 @@ class PortfolioApiService:
                     END AS country,
                     a.ccy,
                     COALESCE(bl.broker_account_count, 0) AS broker_account_count,
-                    lp.price,
-                    COALESCE(h.quantity * lp.price, h.book_cost) AS market_value
+                    COALESCE(lp.price, bp.price) AS price,
+                    COALESCE(h.quantity * lp.price, h.quantity * bp.price, h.book_cost) AS market_value
                 FROM holdings h
                 JOIN asset a ON a.asset_id = h.asset_id
                 {_ENRICHED_ASSET_JOIN}
                 LEFT JOIN latest_prices lp ON lp.asset_id = h.asset_id
+                LEFT JOIN broker_prices bp
+                  ON bp.portfolio_id = h.portfolio_id
+                 AND bp.asset_id = h.asset_id
                 LEFT JOIN broker_links bl
                   ON bl.portfolio_id = h.portfolio_id
                  AND bl.asset_id = h.asset_id
@@ -595,7 +682,7 @@ class PortfolioApiService:
             FROM valued
             ORDER BY portfolio_name, portfolio_id
             """,
-            [asset_id, asset_id],
+            [asset_id, asset_id, asset_id],
         ).fetchall()
 
         holdings: list[AssetHoldingSummary] = []
