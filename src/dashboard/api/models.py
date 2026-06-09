@@ -85,6 +85,8 @@ class TransactionSummary(BaseModel):
 class AssetDetail(BaseModel):
     asset_id: str
     symbol: str
+    is_cdr: bool = False
+    underlying_asset_id: str | None = None
     exchange_code: str | None
     asset_type: str | None
     asset_subtype: str | None

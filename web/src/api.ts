@@ -30,6 +30,8 @@ export type Position = {
 export type Asset = {
   asset_id: string;
   symbol: string;
+  is_cdr: boolean;
+  underlying_asset_id: string | null;
   name: string | null;
   description: string | null;
   sector: string | null;

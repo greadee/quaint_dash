@@ -407,10 +407,11 @@ function AssetPage() {
   const asset = useQuery({ queryKey: ["asset", assetId], queryFn: () => api.asset(assetId) });
   const prices = useQuery({ queryKey: ["prices", assetId], queryFn: () => api.prices(assetId) });
   const analytics = useQuery({ queryKey: ["asset-analytics", assetId], queryFn: () => api.assetAnalytics(assetId) });
+  const underlyingAssetId = asset.data?.underlying_asset_id;
   if (asset.isLoading) return <Loading />;
   if (asset.error) return <ErrorPanel error={asset.error} />;
   return <div className="page">
-    <div className="page-title"><div><p className="eyebrow">{asset.data?.sector ?? "Asset detail"}</p><h1>{asset.data?.symbol} <small>{asset.data?.name}</small></h1></div><div className="actions"><Link className="button-link" to={`/compare?left=${asset.data?.asset_id ?? assetId}`}><BarChart3 size={17}/>Compare</Link><strong className="asset-price">{money(asset.data?.latest_price, asset.data?.currency)}</strong></div></div>
+    <div className="page-title"><div><p className="eyebrow">{asset.data?.sector ?? "Asset detail"}</p><h1>{asset.data?.symbol} <small>{asset.data?.name}</small></h1></div><div className="actions">{underlyingAssetId ? <Link className="button-link" to={`/asset/${underlyingAssetId}`}><Activity size={17}/>Underlying chart</Link> : null}<Link className="button-link" to={`/compare?left=${asset.data?.asset_id ?? assetId}`}><BarChart3 size={17}/>Compare</Link><strong className="asset-price">{money(asset.data?.latest_price, asset.data?.currency)}</strong></div></div>
     <section className="card chart-card"><div className="card-heading"><div><p className="eyebrow">Last 365 observations</p><h2>Price history</h2></div></div>
       <div className="chart"><ResponsiveContainer width="100%" height="100%"><AreaChart data={prices.data}><defs><linearGradient id="price" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#5da78b" stopOpacity={0.4}/><stop offset="100%" stopColor="#5da78b" stopOpacity={0}/></linearGradient></defs><XAxis dataKey="date" hide/><YAxis hide domain={["dataMin", "dataMax"]}/><Tooltip/><Area type="monotone" dataKey="close" stroke="#5da78b" fill="url(#price)" strokeWidth={2}/></AreaChart></ResponsiveContainer></div>
     </section>

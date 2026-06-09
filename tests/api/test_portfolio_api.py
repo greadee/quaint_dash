@@ -101,6 +101,8 @@ def test_portfolio_positions_use_underlying_metadata_for_cdrs(tmp_path):
     assert asset.json()["sector"] == "Technology"
     assert asset.json()["industry"] == "Semiconductors"
     assert asset.json()["country"] == "US"
+    assert asset.json()["is_cdr"] is True
+    assert asset.json()["underlying_asset_id"] == "AMD"
 
 
 def test_asset_detail_uses_known_cdr_classification_when_underlying_is_missing(tmp_path):
@@ -117,11 +119,17 @@ def test_asset_detail_uses_known_cdr_classification_when_underlying_is_missing(t
 
     with TestClient(app) as client:
         asset = client.get("/api/v1/assets/AMD.TO")
+        underlying = client.get("/api/v1/assets/AMD")
 
     assert asset.status_code == 200
     assert asset.json()["sector"] == "Technology"
     assert asset.json()["industry"] == "Semiconductors"
     assert asset.json()["country"] == "US"
+    assert asset.json()["is_cdr"] is True
+    assert asset.json()["underlying_asset_id"] == "AMD"
+    assert underlying.status_code == 200
+    assert underlying.json()["symbol"] == "AMD"
+    assert underlying.json()["is_cdr"] is False
 
 
 def test_portfolio_position_delete_warns_for_broker_linked_holding(tmp_path):

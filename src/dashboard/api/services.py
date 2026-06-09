@@ -121,6 +121,10 @@ _CDR_CLASSIFICATION_OVERRIDES = {
     "AMD": {"sector": "Technology", "industry": "Semiconductors", "country": "US"},
 }
 
+_KNOWN_CDR_UNDERLYING_NAMES = {
+    "AMD": "Advanced Micro Devices, Inc.",
+}
+
 
 class PortfolioApiService:
     def __init__(self, conn) -> None:
@@ -619,6 +623,9 @@ class AssetApiService:
             [asset_id],
         ).fetchone()
         if row is None:
+            fallback = _known_underlying_asset_detail(asset_id)
+            if fallback is not None:
+                return fallback
             raise LookupError(f"Asset not found: {asset_id}")
         classification = _cdr_classification_override(
             asset_id=row[0],
@@ -628,9 +635,12 @@ class AssetApiService:
             industry=row[9],
             country=row[10],
         )
+        underlying_asset_id = _cdr_underlying_asset_id(row[0], row[1], row[6])
         return AssetDetail(
             asset_id=row[0],
             symbol=row[1],
+            is_cdr=underlying_asset_id is not None,
+            underlying_asset_id=underlying_asset_id,
             exchange_code=row[2],
             asset_type=row[3],
             asset_subtype=row[4],
@@ -1100,6 +1110,38 @@ def _cdr_base_symbol(asset_id: str, symbol: str, name: str | None) -> str:
         return ""
     candidate = symbol or asset_id
     return candidate.split(".", maxsplit=1)[0].upper()
+
+
+def _cdr_underlying_asset_id(asset_id: str, symbol: str, name: str | None) -> str | None:
+    base_symbol = _cdr_base_symbol(asset_id, symbol, name)
+    return base_symbol or None
+
+
+def _known_underlying_asset_detail(asset_id: str) -> AssetDetail | None:
+    classification = _CDR_CLASSIFICATION_OVERRIDES.get(asset_id)
+    if classification is None:
+        return None
+    return AssetDetail(
+        asset_id=asset_id,
+        symbol=asset_id,
+        is_cdr=False,
+        underlying_asset_id=None,
+        exchange_code=None,
+        asset_type="stock",
+        asset_subtype=None,
+        currency="USD",
+        name=_KNOWN_CDR_UNDERLYING_NAMES.get(asset_id),
+        description=None,
+        sector=classification["sector"],
+        industry=classification["industry"],
+        country=classification["country"],
+        region=None,
+        size=None,
+        market_cap=None,
+        shares_outstanding=None,
+        market_beta=None,
+        latest_price=None,
+    )
 
 
 def _json_dict(value) -> dict[str, Any]:
