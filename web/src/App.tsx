@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { Link, NavLink, Route, Routes, useParams, useSearchParams } from "react-router-dom";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { api, type AssetHolding, type ComparisonAsset, type Position } from "./api";
+import { api, type AssetActivity, type AssetHolding, type ComparisonAsset, type Position } from "./api";
 
 const money = (value: number | null | undefined, currency = "CAD") =>
   value == null
@@ -411,6 +411,7 @@ function AssetPage() {
   const { assetId = "" } = useParams();
   const asset = useQuery({ queryKey: ["asset", assetId], queryFn: () => api.asset(assetId) });
   const holdings = useQuery({ queryKey: ["asset-holdings", assetId], queryFn: () => api.assetHoldings(assetId) });
+  const activity = useQuery({ queryKey: ["asset-activity", assetId], queryFn: () => api.assetActivity(assetId) });
   const prices = useQuery({ queryKey: ["prices", assetId], queryFn: () => api.prices(assetId) });
   const analytics = useQuery({ queryKey: ["asset-analytics", assetId], queryFn: () => api.assetAnalytics(assetId) });
   const deletePosition = useMutation({
@@ -443,9 +444,33 @@ function AssetPage() {
       <div className="chart"><ResponsiveContainer width="100%" height="100%"><AreaChart data={prices.data}><defs><linearGradient id="price" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#5da78b" stopOpacity={0.4}/><stop offset="100%" stopColor="#5da78b" stopOpacity={0}/></linearGradient></defs><XAxis dataKey="date" hide/><YAxis hide domain={["dataMin", "dataMax"]}/><Tooltip/><Area type="monotone" dataKey="close" stroke="#5da78b" fill="url(#price)" strokeWidth={2}/></AreaChart></ResponsiveContainer></div>
     </section>
     <AssetHoldingsPanel holdings={holdings.data ?? []} isLoading={holdings.isLoading} isDeleting={deletePosition.isPending} onDelete={deleteHolding} />
+    <AssetActivityPanel activity={activity.data?.items ?? []} total={activity.data?.total ?? 0} isLoading={activity.isLoading} />
     <AssetAnalyticsPanel payload={analytics.data} isLoading={analytics.isLoading} />
     <section className="detail-grid"><div className="card"><p className="eyebrow">Classification</p><h2>{asset.data?.industry ?? "Not classified"}</h2><p>{asset.data?.country ?? "Country unavailable"} - {asset.data?.currency}</p></div><div className="card"><p className="eyebrow">Business profile</p><p>{asset.data?.description ?? "No company description has been ingested yet."}</p></div></section>
   </div>;
+}
+
+function AssetActivityPanel({ activity, total, isLoading }: { activity: AssetActivity[]; total: number; isLoading: boolean }) {
+  return <section className="card asset-activity-card">
+    <div className="card-heading"><div><p className="eyebrow">Brokerage activity</p><h2>Activity for this asset</h2></div><span>{total} item{total === 1 ? "" : "s"}</span></div>
+    {isLoading ? <Loading compact /> : activity.length ? (
+      <div className="asset-activity-list">
+        {activity.map((item) => {
+          const key = item.provider_transaction_id ?? item.transaction_id ?? `${item.timestamp}-${item.transaction_type}`;
+          const currency = item.currency ?? "CAD";
+          const amount = item.cash_amount != null ? money(Math.abs(item.cash_amount), currency) : item.price != null && item.quantity != null ? money(Math.abs(item.quantity * item.price), currency) : "Unavailable";
+          return <article key={key}>
+            <div>
+              <strong>{item.transaction_type}</strong>
+              <span>{new Date(item.timestamp).toLocaleDateString()} - {item.portfolio_name ?? item.provider_account_id ?? item.source}</span>
+            </div>
+            <span>{number(item.quantity, 4)} @ {money(item.price, currency)}</span>
+            <b>{amount}</b>
+          </article>;
+        })}
+      </div>
+    ) : <EmptyRow text="No broker or local activity has been recorded for this asset yet." />}
+  </section>;
 }
 
 function AssetHoldingsPanel({ holdings, isLoading, isDeleting, onDelete }: { holdings: AssetHolding[]; isLoading: boolean; isDeleting: boolean; onDelete: (holding: AssetHolding) => void }) {
@@ -647,6 +672,7 @@ function AnalyticsPanel({ payload, isLoading }: { payload?: Record<string, unkno
   const aiContext = record(payload?.ai_context);
   const anomalies = arrayOfRecords(aiContext?.anomalies);
   const volatilityContributions = arrayOfRecords(decomposition?.volatility_contributions).slice(0, 4);
+  const valuationContributions = arrayOfRecords(valuation?.position_contributions).slice(0, 6);
   const missing = report?.missing_inputs as string[] | undefined;
   return <section className="card">
     <div className="card-heading"><div><p className="eyebrow">Phase 3 analytics</p><h2>Portfolio signals</h2></div><span>{payload?.schema_version as string ?? "loading"}</span></div>
@@ -683,6 +709,21 @@ function AnalyticsPanel({ payload, isLoading }: { payload?: Record<string, unkno
             <MetricLine label="Blended CAGR" value={percent(num(forecast?.blended_expected_cagr))} />
           </AnalyticsBlock>
         </div>
+        <div className="model-grid">
+          <AnalyticsBlock title="Monte Carlo projection">
+            <MetricLine label="Expected value" value={money(num(simulation?.expected_value))} />
+            <MetricLine label="Expected CAGR" value={percent(num(simulation?.expected_cagr))} />
+            <MetricLine label="Bear CAGR" value={percent(num(simulation?.p10_cagr))} />
+            <MetricLine label="Bull CAGR" value={percent(num(simulation?.p90_cagr))} />
+          </AnalyticsBlock>
+          <AnalyticsBlock title="Valuation rollup">
+            <MetricLine label="Margin of safety" value={percent(num(valuation?.weighted_margin_of_safety))} />
+            <MetricLine label="Undervalued weight" value={percent(num(valuation?.undervalued_weight))} />
+            <MetricLine label="Fair value weight" value={percent(num(valuation?.fair_value_weight))} />
+            <MetricLine label="Overvalued weight" value={percent(num(valuation?.overvalued_weight))} />
+          </AnalyticsBlock>
+        </div>
+        {valuationContributions.length ? <div className="model-table"><table><thead><tr><th>Holding</th><th>Weight</th><th>Expected CAGR</th><th>Margin</th><th>P/E</th><th>P/FCF</th></tr></thead><tbody>{valuationContributions.map((item) => <tr key={String(item.asset_id)}><td>{String(item.asset_id)}</td><td>{percent(num(item.weight))}</td><td>{percent(num(item.expected_cagr))}</td><td>{percent(num(item.margin_of_safety))}</td><td>{number(num(item.pe_ratio))}</td><td>{number(num(item.price_to_free_cash_flow))}</td></tr>)}</tbody></table></div> : null}
         {anomalies.length ? <InsightList items={anomalies.map((item) => `${String(item.severity).toUpperCase()}: ${String(item.message)}`)} /> : null}
         {missing?.length ? <p className="missing-inputs">Missing inputs: {missing.slice(0, 3).join(", ")}</p> : <p className="missing-inputs good">Analytics inputs look complete for this report.</p>}
       </div>
@@ -702,6 +743,9 @@ function AssetAnalyticsPanel({ payload, isLoading }: { payload?: Record<string, 
   const dcf = record(report?.discounted_cash_flow);
   const forecast = record(report?.forecast);
   const simulation = record(forecast?.simulation);
+  const dcfInputs = record(dcf?.inputs_used);
+  const dividendInputs = record(dividend?.inputs_used);
+  const dcfScenarios = arrayOfRecords(valuation?.dcf_scenarios);
   const aiContext = record(payload?.ai_context);
   const anomalies = arrayOfRecords(aiContext?.anomalies);
   const missing = [
@@ -748,6 +792,27 @@ function AssetAnalyticsPanel({ payload, isLoading }: { payload?: Record<string, 
             <MetricLine label="Expected value" value={money(num(simulation?.expected_value))} />
           </AnalyticsBlock>
         </div>
+        <div className="model-grid">
+          <AnalyticsBlock title="DCF model">
+            <MetricLine label="Cash flow/share" value={money(num(dcfInputs?.cashflow_per_share))} />
+            <MetricLine label="Discount rate" value={percent(num(dcfInputs?.discount_rate))} />
+            <MetricLine label="Growth rate" value={percent(num(dcfInputs?.growth_rate))} />
+            <MetricLine label="Terminal growth" value={percent(num(dcfInputs?.terminal_growth_rate))} />
+          </AnalyticsBlock>
+          <AnalyticsBlock title="Dividend model">
+            <MetricLine label="DDM fair value" value={money(num(dividend?.intrinsic_value_per_share))} />
+            <MetricLine label="Annual dividend" value={money(num(dividendInputs?.annual_dividend))} />
+            <MetricLine label="Implied growth" value={percent(num(dividend?.implied_growth_rate))} />
+            <MetricLine label="Dividend growth" value={percent(num(forecast?.dividend_growth_projection))} />
+          </AnalyticsBlock>
+          <AnalyticsBlock title="Monte Carlo projection">
+            <MetricLine label="Expected CAGR" value={percent(num(simulation?.expected_cagr))} />
+            <MetricLine label="Bear CAGR" value={percent(num(simulation?.p10_cagr))} />
+            <MetricLine label="Median CAGR" value={percent(num(simulation?.p50_cagr))} />
+            <MetricLine label="Bull CAGR" value={percent(num(simulation?.p90_cagr))} />
+          </AnalyticsBlock>
+        </div>
+        {dcfScenarios.length ? <div className="model-table"><table><thead><tr><th>DCF scenario</th><th>Fair value</th><th>Margin</th><th>Growth</th><th>Discount</th><th>Terminal</th></tr></thead><tbody>{dcfScenarios.map((item) => <tr key={String(item.scenario_name)}><td>{String(item.scenario_name)}</td><td>{money(num(item.intrinsic_value_per_share))}</td><td>{percent(num(item.margin_of_safety))}</td><td>{percent(num(item.growth_rate))}</td><td>{percent(num(item.discount_rate))}</td><td>{percent(num(item.terminal_growth_rate))}</td></tr>)}</tbody></table></div> : null}
         {anomalies.length ? <InsightList items={anomalies.map((item) => `${String(item.severity).toUpperCase()}: ${String(item.message)}`)} /> : null}
         {missing.length ? <p className="missing-inputs">Missing inputs: {Array.from(new Set(missing)).slice(0, 4).join(", ")}</p> : <p className="missing-inputs good">Asset analytics inputs look complete for this report.</p>}
       </div>

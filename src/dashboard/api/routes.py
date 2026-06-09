@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from dashboard.api.dependencies import get_connection
 from dashboard.api.models import (
     ActionResult,
+    AssetActivitySummary,
     AssetDetail,
     AssetHoldingSummary,
     BrokerAccountMappingRequest,
@@ -146,6 +147,16 @@ def delete_portfolio_position(
 @router.get("/assets/{asset_id}/holdings", response_model=list[AssetHoldingSummary])
 def asset_holdings(asset_id: str, conn=Depends(get_connection)):
     return PortfolioApiService(conn).list_asset_holdings(asset_id)
+
+
+@router.get("/assets/{asset_id}/activity", response_model=Page[AssetActivitySummary])
+def asset_activity(
+    asset_id: str,
+    limit: int = Query(default=20, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    conn=Depends(get_connection),
+):
+    return PortfolioApiService(conn).list_asset_activity(asset_id, limit, offset)
 
 
 @router.get("/assets/{asset_id}", response_model=AssetDetail)

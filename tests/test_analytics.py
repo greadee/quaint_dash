@@ -538,6 +538,12 @@ def test_portfolio_report_rolls_up_holding_valuation_metrics(tmp_path):
     assert report.valuation.weighted_pe_ratio == pytest.approx(20.0)
     assert report.valuation.weighted_price_to_free_cash_flow == pytest.approx(20.0)
     assert report.valuation.weighted_expected_cagr is not None
+    assert report.forecast.expected_cagr_from_valuation == pytest.approx(
+        report.valuation.weighted_expected_cagr
+    )
+    assert report.forecast.blended_expected_cagr == pytest.approx(
+        report.valuation.weighted_expected_cagr
+    )
     assert len(report.valuation.position_contributions) == 2
     assert any(fact.key == "weighted_pe_ratio" for fact in report.ai_context.facts)
     assert any(explanation.topic == "portfolio_valuation" for explanation in report.ai_context.explanations)

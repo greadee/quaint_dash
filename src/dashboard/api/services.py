@@ -6,6 +6,7 @@ from typing import Any
 
 from dashboard.api.models import (
     AssetDetail,
+    AssetActivitySummary,
     AssetHoldingSummary,
     BrokerAccountResponse,
     BrokerConnectionResponse,
@@ -721,6 +722,104 @@ class PortfolioApiService:
                 )
             )
         return holdings
+
+    def list_asset_activity(self, asset_id: str, limit: int, offset: int) -> Page[AssetActivitySummary]:
+        asset_id = asset_id.upper().strip()
+        rows = self.conn.execute(
+            """
+            SELECT *
+            FROM (
+                SELECT
+                    'broker' AS source,
+                    bt.provider,
+                    bt.provider_account_id,
+                    bt.provider_transaction_id,
+                    CAST(NULL AS BIGINT) AS txn_id,
+                    ba.portfolio_id,
+                    p.portfolio_name,
+                    CAST(bt.trade_date AS TIMESTAMP) AS activity_time,
+                    bt.txn_type,
+                    COALESCE(bt.asset_id, bt.symbol) AS activity_asset_id,
+                    COALESCE(bt.symbol, bt.asset_id) AS symbol,
+                    bt.quantity,
+                    bt.price,
+                    bt.currency,
+                    bt.amount
+                FROM broker_transaction bt
+                LEFT JOIN broker_account ba
+                  ON ba.provider = bt.provider
+                 AND ba.provider_account_id = bt.provider_account_id
+                LEFT JOIN portfolio p ON p.portfolio_id = ba.portfolio_id
+                WHERE UPPER(COALESCE(bt.asset_id, bt.symbol)) = ?
+                UNION ALL
+                SELECT
+                    'local' AS source,
+                    CAST(NULL AS TEXT) AS provider,
+                    CAST(NULL AS TEXT) AS provider_account_id,
+                    CAST(NULL AS TEXT) AS provider_transaction_id,
+                    t.txn_id,
+                    t.portfolio_id,
+                    p.portfolio_name,
+                    t.time_stamp AS activity_time,
+                    t.txn_type,
+                    t.asset_id AS activity_asset_id,
+                    COALESCE(a.symbol, t.asset_id) AS symbol,
+                    t.qty,
+                    t.price,
+                    t.ccy,
+                    t.cash_amt
+                FROM txn t
+                JOIN portfolio p ON p.portfolio_id = t.portfolio_id
+                LEFT JOIN asset a ON a.asset_id = t.asset_id
+                LEFT JOIN broker_portfolio_txn_map tm ON tm.txn_id = t.txn_id
+                WHERE UPPER(t.asset_id) = ?
+                  AND tm.txn_id IS NULL
+            ) activity
+            ORDER BY activity_time DESC, COALESCE(provider_transaction_id, CAST(txn_id AS TEXT)) DESC
+            LIMIT ? OFFSET ?
+            """,
+            [asset_id, asset_id, limit, offset],
+        ).fetchall()
+        total = int(
+            self.conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM (
+                    SELECT provider_transaction_id
+                    FROM broker_transaction
+                    WHERE UPPER(COALESCE(asset_id, symbol)) = ?
+                    UNION ALL
+                    SELECT CAST(t.txn_id AS TEXT)
+                    FROM txn t
+                    LEFT JOIN broker_portfolio_txn_map tm ON tm.txn_id = t.txn_id
+                    WHERE UPPER(t.asset_id) = ?
+                      AND tm.txn_id IS NULL
+                ) activity
+                """,
+                [asset_id, asset_id],
+            ).fetchone()[0]
+        )
+        items = [
+            AssetActivitySummary(
+                source=row[0],
+                provider=row[1],
+                provider_account_id=row[2],
+                provider_transaction_id=row[3],
+                transaction_id=int(row[4]) if row[4] is not None else None,
+                portfolio_id=int(row[5]) if row[5] is not None else None,
+                portfolio_name=row[6],
+                timestamp=row[7],
+                transaction_type=row[8],
+                asset_id=str(row[9]).upper(),
+                symbol=str(row[10]).upper(),
+                quantity=_float_or_none(row[11]),
+                price=_float_or_none(row[12]),
+                currency=row[13],
+                cash_amount=_float_or_none(row[14]),
+            )
+            for row in rows
+        ]
+        return Page(items=items, total=total, limit=limit, offset=offset)
 
     def list_transactions(self, portfolio_id: int | None, limit: int, offset: int) -> Page[TransactionSummary]:
         where = ""

@@ -847,9 +847,16 @@ def portfolio_forecast_metrics(
     market_value: float,
     risk: RiskReturnMetrics | None,
     performance: PortfolioPerformanceMetrics,
+    valuation_expected_cagr: float | None = None,
     forecast_years: int = 5,
 ) -> ForecastMetrics:
-    expected = risk.cagr if risk and risk.cagr is not None else performance.money_weighted_return
+    expected = (
+        valuation_expected_cagr
+        if valuation_expected_cagr is not None
+        else risk.cagr
+        if risk and risk.cagr is not None
+        else performance.money_weighted_return
+    )
     simulation = simulated_forecast_band(
         start_value=market_value if market_value > 0 else None,
         expected_cagr=expected,
@@ -867,7 +874,7 @@ def portfolio_forecast_metrics(
 
     return ForecastMetrics(
         horizon_years=forecast_years,
-        expected_cagr_from_valuation=None,
+        expected_cagr_from_valuation=valuation_expected_cagr,
         dividend_growth_projection=None,
         fundamental_growth_assumption=None,
         blended_expected_cagr=expected,

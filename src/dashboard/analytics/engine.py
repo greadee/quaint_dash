@@ -209,6 +209,7 @@ class AnalyticsEngine:
             market_value=total_value,
             risk=risk,
             performance=performance,
+            valuation_expected_cagr=valuation.weighted_expected_cagr,
             forecast_years=5,
         )
         if not weighted_positions:

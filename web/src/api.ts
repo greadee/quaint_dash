@@ -37,6 +37,24 @@ export type AssetHolding = Position & {
   portfolio_name: string;
 };
 
+export type AssetActivity = {
+  source: string;
+  provider: string | null;
+  provider_account_id: string | null;
+  provider_transaction_id: string | null;
+  transaction_id: number | null;
+  portfolio_id: number | null;
+  portfolio_name: string | null;
+  timestamp: string;
+  transaction_type: string;
+  asset_id: string;
+  symbol: string;
+  quantity: number | null;
+  price: number | null;
+  currency: string | null;
+  cash_amount: number | null;
+};
+
 export type Asset = {
   asset_id: string;
   symbol: string;
@@ -209,6 +227,7 @@ export const api = {
     request(`/portfolios/${portfolioId}/positions/${assetId}`, { method: "DELETE" }),
   asset: (id: string) => request<Asset>(`/assets/${id}`),
   assetHoldings: (id: string) => request<AssetHolding[]>(`/assets/${id}/holdings`),
+  assetActivity: (id: string) => request<Page<AssetActivity>>(`/assets/${id}/activity?limit=20`),
   prices: (id: string) => request<PricePoint[]>(`/assets/${id}/prices?limit=365`),
   assetAnalytics: (id: string) => request<Record<string, unknown>>(`/assets/${id}/analytics`),
   brokerConnections: () => request<BrokerConnection[]>("/brokers/connections"),

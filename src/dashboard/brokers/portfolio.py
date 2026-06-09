@@ -400,8 +400,9 @@ class BrokerPortfolioIntegrationService:
 
     def _projected_book_cost(self, position: "_NormalizedBrokerPosition") -> float:
         return (
-            self._book_cost_from_position_snapshot(position)
-            or self._book_cost_from_broker_transactions(position)
+            self._book_cost_from_broker_transactions(position)
+            or self._book_cost_from_position_snapshot(position)
+            or position.book_cost
         )
 
     def _book_cost_from_position_snapshot(self, position: "_NormalizedBrokerPosition") -> float | None:
@@ -431,7 +432,7 @@ class BrokerPortfolioIntegrationService:
             return None
         return average_price * position.quantity
 
-    def _book_cost_from_broker_transactions(self, position: "_NormalizedBrokerPosition") -> float:
+    def _book_cost_from_broker_transactions(self, position: "_NormalizedBrokerPosition") -> float | None:
         rows = self.conn.execute(
             """
             SELECT
@@ -441,7 +442,8 @@ class BrokerPortfolioIntegrationService:
                 symbol,
                 quantity,
                 price,
-                amount
+                amount,
+                raw_json
             FROM broker_transaction
             WHERE provider = ?
               AND provider_account_id = ?
@@ -460,7 +462,28 @@ class BrokerPortfolioIntegrationService:
             if asset_id != position.asset_id:
                 continue
             txn_qty = _normalize_quantity(txn_type, row[4])
+            payload = _json_payload(row[7])
+            if txn_qty is None:
+                txn_qty = _normalize_quantity(
+                    txn_type,
+                    _payload_value(payload, "units") or _payload_value(payload, "quantity"),
+                )
             price = _float_or_none(row[5])
+            amount = _float_or_none(row[6])
+            if price is None:
+                price = _float_or_none(
+                    _payload_value(payload, "price")
+                    or _payload_value(payload, "trade_price")
+                    or _payload_value(payload, "execution_price")
+                )
+            if amount is None:
+                amount = _float_or_none(
+                    _payload_value(payload, "amount")
+                    or _payload_value(payload, "net_amount")
+                    or _payload_value(payload, "value")
+                )
+            if price is None and amount is not None and txn_qty not in (None, 0):
+                price = abs(amount) / abs(txn_qty)
             if txn_qty is None or price is None:
                 continue
             matched_trade_count += 1
@@ -477,7 +500,7 @@ class BrokerPortfolioIntegrationService:
             cost -= average_cost * sell_qty
 
         if not matched_trade_count or quantity <= 0 or cost <= 0:
-            return position.book_cost
+            return None
         average_cost = cost / quantity
         return average_cost * position.quantity
 

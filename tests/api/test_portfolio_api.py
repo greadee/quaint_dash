@@ -337,6 +337,78 @@ def test_asset_holdings_include_portfolio_context_and_returns(tmp_path):
     assert after.json() == []
 
 
+def test_asset_activity_lists_broker_and_local_activity(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name)
+        VALUES ('MU.TO', 'MU.TO', 'stock', 'CAD', 'Micron CDR')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO broker_account(
+            provider,
+            provider_account_id,
+            provider_connection_id,
+            account_name,
+            account_type,
+            currency,
+            balance,
+            portfolio_id,
+            raw_json
+        )
+        VALUES ('snaptrade', 'acct-1', 'conn-1', 'TFSA', 'registered', 'CAD', 0, 1, '{}')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO broker_transaction(
+            provider,
+            provider_transaction_id,
+            provider_account_id,
+            trade_date,
+            txn_type,
+            asset_id,
+            symbol,
+            quantity,
+            price,
+            amount,
+            currency,
+            raw_json
+        )
+        VALUES
+            ('snaptrade', 'buy-mu', 'acct-1', '2026-01-02', 'BUY', 'MU.TO', 'MU.TO', 85, 5.46, -464.10, 'CAD', '{}'),
+            ('snaptrade', 'div-mu', 'acct-1', '2026-01-03', 'DIVIDEND', 'MU.TO', 'MU.TO', NULL, NULL, 12.50, 'CAD', '{}')
+        """
+    )
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO txn(
+            portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id
+        )
+        VALUES (1, '2026-01-04 10:00:00', 'sell', 'MU.TO', -5, 40, 'CAD', 0, 1)
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/assets/MU.TO/activity")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 3
+    assert [item["transaction_type"] for item in payload["items"]] == ["sell", "DIVIDEND", "BUY"]
+    assert payload["items"][0]["source"] == "local"
+    assert payload["items"][1]["source"] == "broker"
+    assert payload["items"][1]["cash_amount"] == 12.5
+    assert payload["items"][2]["portfolio_name"] == "Main"
+
+
 def test_portfolio_aggregate_and_delete(tmp_path):
     db_path = tmp_path / "api.db"
     app = create_app(db_path)

@@ -82,6 +82,24 @@ class AssetHoldingSummary(PositionSummary):
     portfolio_name: str
 
 
+class AssetActivitySummary(BaseModel):
+    source: str
+    provider: str | None = None
+    provider_account_id: str | None = None
+    provider_transaction_id: str | None = None
+    transaction_id: int | None = None
+    portfolio_id: int | None = None
+    portfolio_name: str | None = None
+    timestamp: datetime
+    transaction_type: str
+    asset_id: str
+    symbol: str
+    quantity: float | None
+    price: float | None
+    currency: str | None
+    cash_amount: float | None
+
+
 class TransactionSummary(BaseModel):
     transaction_id: int
     portfolio_id: int
