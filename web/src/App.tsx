@@ -20,7 +20,7 @@ import {
   WalletCards,
   X,
 } from "lucide-react";
-import { Link, NavLink, Route, Routes, useParams } from "react-router-dom";
+import { Link, NavLink, Route, Routes, useParams, useSearchParams } from "react-router-dom";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, type ComparisonAsset, type Position } from "./api";
 
@@ -73,7 +73,7 @@ export default function App() {
           <Route path="/" element={<OverviewPage />} />
           <Route path="/portfolios" element={<PortfoliosPage />} />
           <Route path="/compare" element={<ComparePage />} />
-          <Route path="/assets/:assetId" element={<AssetPage />} />
+          <Route path="/asset/:assetId" element={<AssetPage />} />
           <Route path="/brokers" element={<BrokersPage />} />
           <Route path="/operations" element={<OperationsPage />} />
         </Routes>
@@ -106,7 +106,7 @@ function OverviewPage() {
     <section className="update-grid">
       <section className="card">
         <div className="card-heading"><div><p className="eyebrow">Price movers</p><h2>Holdings moving most</h2></div><span>{updates.data?.mover_count ?? 0} tracked</span></div>
-        {updates.isLoading ? <Loading compact /> : updates.data?.price_movers.length ? <div className="mover-list">{updates.data.price_movers.map((item) => <Link to={`/assets/${item.asset_id}`} className="mover-row" key={item.asset_id}><div><strong>{item.symbol}</strong><span>{item.name ?? "Held asset"}</span></div><b className={(item.change_percent ?? 0) >= 0 ? "positive" : "negative"}>{percent(item.change_percent)}</b><span>{money(item.market_value)}</span></Link>)}</div> : <EmptyRow text="No price movers yet. Add price history for held assets to light this up." />}
+        {updates.isLoading ? <Loading compact /> : updates.data?.price_movers.length ? <div className="mover-list">{updates.data.price_movers.map((item) => <Link to={`/asset/${item.asset_id}`} className="mover-row" key={item.asset_id}><div><strong>{item.symbol}</strong><span>{item.name ?? "Held asset"}</span></div><b className={(item.change_percent ?? 0) >= 0 ? "positive" : "negative"}>{percent(item.change_percent)}</b><span>{money(item.market_value)}</span></Link>)}</div> : <EmptyRow text="No price movers yet. Add price history for held assets to light this up." />}
       </section>
       <section className="card">
         <div className="card-heading"><div><p className="eyebrow">Market notes</p><h2>News affecting holdings</h2></div><span>{updates.data?.news_count ?? 0} items</span></div>
@@ -247,7 +247,7 @@ function PortfoliosPage() {
         {positions.isLoading ? <Loading compact /> : positions.data?.length ? (
           <div className="table-wrap"><table><thead><tr><th>Asset</th><th>Value</th><th>Weight</th><th>Book cost</th><th>Gain</th></tr></thead>
           <tbody>{positions.data.map((item) => <tr key={item.asset_id}>
-            <td><Link className="asset-link" to={`/assets/${item.asset_id}`}><strong>{item.symbol}</strong><span>{item.name ?? item.asset_type ?? "Asset"}</span></Link></td>
+            <td><Link className="asset-link" to={`/asset/${item.asset_id}`}><strong>{item.symbol}</strong><span>{item.name ?? item.asset_type ?? "Asset"}</span></Link></td>
             <td>{money(item.market_value, selected.base_ccy)}</td><td>{percent(item.weight)}</td>
             <td>{money(item.book_cost, selected.base_ccy)}</td>
             <td className={(item.unrealized_gain ?? 0) >= 0 ? "positive" : "negative"}>{money(item.unrealized_gain, selected.base_ccy)}</td>
@@ -259,9 +259,11 @@ function PortfoliosPage() {
 }
 
 function ComparePage() {
-  const [left, setLeft] = useState("NVDA");
-  const [right, setRight] = useState("MSFT");
-  const [benchmark, setBenchmark] = useState("SP500");
+  const [params] = useSearchParams();
+  const initialLeft = params.get("left")?.toUpperCase() ?? "NVDA";
+  const [left, setLeft] = useState(initialLeft);
+  const [right, setRight] = useState("");
+  const [benchmark, setBenchmark] = useState("");
   const [submitted, setSubmitted] = useState({ left: "", right: "", benchmark: "" });
   const comparison = useQuery({
     queryKey: ["comparison", submitted],
@@ -373,13 +375,15 @@ function AssetPage() {
   const { assetId = "" } = useParams();
   const asset = useQuery({ queryKey: ["asset", assetId], queryFn: () => api.asset(assetId) });
   const prices = useQuery({ queryKey: ["prices", assetId], queryFn: () => api.prices(assetId) });
+  const analytics = useQuery({ queryKey: ["asset-analytics", assetId], queryFn: () => api.assetAnalytics(assetId) });
   if (asset.isLoading) return <Loading />;
   if (asset.error) return <ErrorPanel error={asset.error} />;
   return <div className="page">
-    <div className="page-title"><div><p className="eyebrow">{asset.data?.sector ?? "Asset detail"}</p><h1>{asset.data?.symbol} <small>{asset.data?.name}</small></h1></div><strong className="asset-price">{money(asset.data?.latest_price, asset.data?.currency)}</strong></div>
+    <div className="page-title"><div><p className="eyebrow">{asset.data?.sector ?? "Asset detail"}</p><h1>{asset.data?.symbol} <small>{asset.data?.name}</small></h1></div><div className="actions"><Link className="button-link" to={`/compare?left=${asset.data?.asset_id ?? assetId}`}><BarChart3 size={17}/>Compare</Link><strong className="asset-price">{money(asset.data?.latest_price, asset.data?.currency)}</strong></div></div>
     <section className="card chart-card"><div className="card-heading"><div><p className="eyebrow">Last 365 observations</p><h2>Price history</h2></div></div>
       <div className="chart"><ResponsiveContainer width="100%" height="100%"><AreaChart data={prices.data}><defs><linearGradient id="price" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#5da78b" stopOpacity={0.4}/><stop offset="100%" stopColor="#5da78b" stopOpacity={0}/></linearGradient></defs><XAxis dataKey="date" hide/><YAxis hide domain={["dataMin", "dataMax"]}/><Tooltip/><Area type="monotone" dataKey="close" stroke="#5da78b" fill="url(#price)" strokeWidth={2}/></AreaChart></ResponsiveContainer></div>
     </section>
+    <AssetAnalyticsPanel payload={analytics.data} isLoading={analytics.isLoading} />
     <section className="detail-grid"><div className="card"><p className="eyebrow">Classification</p><h2>{asset.data?.industry ?? "Not classified"}</h2><p>{asset.data?.country ?? "Country unavailable"} - {asset.data?.currency}</p></div><div className="card"><p className="eyebrow">Business profile</p><p>{asset.data?.description ?? "No company description has been ingested yet."}</p></div></section>
   </div>;
 }
@@ -574,6 +578,32 @@ function AnalyticsPanel({ payload, isLoading }: { payload?: Record<string, unkno
 }
 function Signal({ label, value }: { label: string; value: string }) {
   return <div className="signal"><span>{label}</span><strong>{value}</strong></div>;
+}
+
+function AssetAnalyticsPanel({ payload, isLoading }: { payload?: Record<string, unknown>; isLoading: boolean }) {
+  const report = payload?.report as Record<string, unknown> | undefined;
+  const risk = report?.risk as Record<string, number | null> | undefined;
+  const relative = report?.relative as Record<string, number | null> | undefined;
+  const valuation = report?.valuation_depth as Record<string, number | null | string[] | undefined> | undefined;
+  const forecast = report?.forecast as Record<string, number | null | string[] | undefined> | undefined;
+  const missing = [
+    ...((valuation?.missing_inputs as string[] | undefined) ?? []),
+    ...((forecast?.missing_inputs as string[] | undefined) ?? []),
+  ];
+  return <section className="card asset-analytics-card">
+    <div className="card-heading"><div><p className="eyebrow">Phase 3 analytics</p><h2>Asset signals</h2></div><span>{payload?.schema_version as string ?? "loading"}</span></div>
+    {isLoading ? <Loading compact /> : (
+      <div className="signal-grid">
+        <Signal label="Historical CAGR" value={percent(risk?.cagr)} />
+        <Signal label="Volatility" value={percent(risk?.annualized_volatility)} />
+        <Signal label="Sharpe" value={number(risk?.sharpe_ratio)} />
+        <Signal label="Beta" value={number(relative?.beta)} />
+        <Signal label="P/E" value={number(valuation?.pe_ratio as number | null | undefined)} />
+        <Signal label="Expected CAGR" value={percent(forecast?.expected_cagr_from_valuation as number | null | undefined)} />
+        {missing.length ? <p className="missing-inputs">Missing inputs: {Array.from(new Set(missing)).slice(0, 4).join(", ")}</p> : <p className="missing-inputs good">Asset analytics inputs look complete for this report.</p>}
+      </div>
+    )}
+  </section>;
 }
 function AggregatePanel() {
   return <section className="card">

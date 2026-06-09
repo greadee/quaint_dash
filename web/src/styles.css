@@ -53,7 +53,7 @@ header strong { font-size: 14px; } .avatar { margin-left: auto; border-radius: 5
 .card-heading { padding: 20px 22px 15px; display: flex; justify-content: space-between; align-items: center; }.card-heading h2 { margin: 2px 0 0; font-size: 16px; }.card-heading span { font-size: 11px; color: #84908a; }
 .table-wrap { overflow-x: auto; } table { border-collapse: collapse; width: 100%; font-size: 13px; } th { color: #89928e; text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .7px; } th, td { padding: 13px 22px; border-top: 1px solid #eaede8; } td { font-weight: 500; }
 .asset-link { display: grid; color: #1a2a28; text-decoration: none; }.asset-link span { color: #87908d; font-size: 11px; font-weight: 400; margin-top: 2px; }
-.chart-card { margin-bottom: 18px; }.chart { height: 340px; padding: 5px 20px 20px; }.asset-price { font: 600 24px "Fraunces", serif; }
+.chart-card, .asset-analytics-card { margin-bottom: 18px; }.chart { height: 340px; padding: 5px 20px 20px; }.asset-price { font: 600 24px "Fraunces", serif; }
 .detail-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 18px; }.detail-grid .card { padding: 22px; }.detail-grid h2 { font-size: 17px; }.detail-grid p:not(.eyebrow) { color: #68736f; font-size: 13px; line-height: 1.7; }
 .account-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 12px; padding: 0 20px 20px; }.account { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; border: 1px solid #e4e7e2; padding: 16px; border-radius: 11px; }.account span { display: block; color: #7e8984; font-size: 11px; margin-top: 3px; }.account b { font-size: 13px; }
 .broker-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 18px; }
