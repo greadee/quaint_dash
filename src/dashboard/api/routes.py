@@ -143,14 +143,14 @@ def delete_portfolio_position(
     return ActionResult(result=result)
 
 
-@router.get("/assets/{asset_id}", response_model=AssetDetail)
-def asset_detail(asset_id: str, conn=Depends(get_connection)):
-    return AssetApiService(conn).get_asset(asset_id)
-
-
 @router.get("/assets/{asset_id}/holdings", response_model=list[AssetHoldingSummary])
 def asset_holdings(asset_id: str, conn=Depends(get_connection)):
     return PortfolioApiService(conn).list_asset_holdings(asset_id)
+
+
+@router.get("/assets/{asset_id}", response_model=AssetDetail)
+def asset_detail(asset_id: str, conn=Depends(get_connection)):
+    return AssetApiService(conn).get_asset(asset_id)
 
 
 @router.get("/assets/{asset_id}/prices", response_model=list[PricePointResponse])
