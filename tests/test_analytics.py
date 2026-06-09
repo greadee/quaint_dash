@@ -142,29 +142,17 @@ def test_asset_report_uses_default_benchmark_from_asset_metadata(tmp_path):
     init_db(db)
     db.conn.execute(
         """
-        CREATE TABLE benchmark_index (
-            index_id TEXT PRIMARY KEY,
-            country_code TEXT,
-            currency TEXT,
-            is_core BOOLEAN,
-            is_active BOOLEAN
+        INSERT INTO benchmark_index(
+            index_id,
+            index_name,
+            index_family,
+            index_category,
+            country_code,
+            currency,
+            is_core,
+            is_active
         )
-        """
-    )
-    db.conn.execute(
-        """
-        CREATE TABLE benchmark_index_daily_price (
-            index_id TEXT,
-            price_date DATE,
-            close DOUBLE,
-            adj_close DOUBLE
-        )
-        """
-    )
-    db.conn.execute(
-        """
-        INSERT INTO benchmark_index(index_id, country_code, currency, is_core, is_active)
-        VALUES ('SP500', 'US', 'USD', TRUE, TRUE)
+        VALUES ('SP500', 'S&P 500', 'S&P', 'core_geo', 'US', 'USD', TRUE, TRUE)
         """
     )
     db.conn.execute(
@@ -184,8 +172,15 @@ def test_asset_report_uses_default_benchmark_from_asset_metadata(tmp_path):
         )
         db.conn.execute(
             """
-            INSERT INTO benchmark_index_daily_price(index_id, price_date, close, adj_close)
-            VALUES ('SP500', ?, ?, ?)
+            INSERT INTO benchmark_index_daily_price(
+                index_id,
+                price_date,
+                close,
+                adj_close,
+                source,
+                source_symbol
+            )
+            VALUES ('SP500', ?, ?, ?, 'test', 'SPY')
             """,
             [start + timedelta(days=i), 200.0 + i, 200.0 + i],
         )
@@ -663,16 +658,6 @@ def test_asset_report_includes_etf_profile_holdings_and_overlap(tmp_path):
     )
     db.conn.execute(
         """
-        CREATE TABLE benchmark_index_daily_price (
-            index_id TEXT,
-            price_date DATE,
-            close DOUBLE,
-            adj_close DOUBLE
-        )
-        """
-    )
-    db.conn.execute(
-        """
         INSERT INTO asset(asset_id, symbol, asset_type, ccy)
         VALUES
             ('VTI', 'VTI', 'etf', 'USD'),
@@ -691,6 +676,21 @@ def test_asset_report_includes_etf_profile_holdings_and_overlap(tmp_path):
         """
         INSERT INTO etf_profile(asset_id, expense_ratio, benchmark_index_id)
         VALUES ('VTI', 0.0003, 'TOTAL_US')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO benchmark_index(
+            index_id,
+            index_name,
+            index_family,
+            index_category,
+            country_code,
+            currency,
+            is_core,
+            is_active
+        )
+        VALUES ('TOTAL_US', 'Total US Market', 'CRSP', 'core_geo', 'US', 'USD', TRUE, TRUE)
         """
     )
     db.conn.execute(
@@ -732,8 +732,15 @@ def test_asset_report_includes_etf_profile_holdings_and_overlap(tmp_path):
         )
         db.conn.execute(
             """
-            INSERT INTO benchmark_index_daily_price(index_id, price_date, close, adj_close)
-            VALUES ('TOTAL_US', ?, ?, ?)
+            INSERT INTO benchmark_index_daily_price(
+                index_id,
+                price_date,
+                close,
+                adj_close,
+                source,
+                source_symbol
+            )
+            VALUES ('TOTAL_US', ?, ?, ?, 'test', 'VTI')
             """,
             [start + timedelta(days=i), 100.0 + (i * 1.8), 100.0 + (i * 1.8)],
         )
