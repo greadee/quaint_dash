@@ -195,6 +195,42 @@ def test_sync_portfolio_tickers_from_positions_handles_qty_and_ignores_zero_posi
     ]
 
 
+def test_sync_portfolio_tickers_from_positions_deactivates_unheld_portfolio_tickers():
+    conn = make_new_universe_conn()
+    conn.execute(
+        """
+        INSERT INTO position(portfolio_id, asset_id, qty)
+        VALUES (1, 'AAPL', 10)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES
+            (1, 'AAPL', FALSE, 'position'),
+            (1, 'OLD', TRUE, 'position'),
+            (2, 'SPY', TRUE, 'position')
+        """
+    )
+
+    count = TickerUniverseRepository(conn).sync_portfolio_tickers_from_positions()
+
+    rows = conn.execute(
+        """
+        SELECT portfolio_id, asset_id, is_active
+        FROM portfolio_ticker
+        ORDER BY portfolio_id, asset_id
+        """
+    ).fetchall()
+
+    assert count == 1
+    assert rows == [
+        (1, "AAPL", True),
+        (1, "OLD", False),
+        (2, "SPY", False),
+    ]
+
+
 def test_legacy_position_and_watchlist_asset_fallbacks_still_work_without_new_tables():
     conn = duckdb.connect(":memory:")
     conn.execute(

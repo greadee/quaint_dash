@@ -9,13 +9,35 @@ def test_portfolio_create_list_and_conflict(tmp_path):
 
     with TestClient(app) as client:
         created = client.post("/api/v1/portfolios", json={"name": "Main", "base_ccy": "cad"})
-        listed = client.get("/api/v1/portfolios")
         conflict = client.post("/api/v1/portfolios", json={"name": "Main"})
+        renamed = client.patch(
+            f"/api/v1/portfolios/{created.json()['portfolio_id']}",
+            json={"name": "Core"},
+        )
+        listed = client.get("/api/v1/portfolios")
 
     assert created.status_code == 201
     assert created.json()["name"] == "Main"
     assert created.json()["base_ccy"] == "CAD"
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "conflict"
+    assert renamed.status_code == 200
+    assert renamed.json()["name"] == "Core"
     assert listed.json()[0]["portfolio_id"] == created.json()["portfolio_id"]
+    assert listed.json()[0]["name"] == "Core"
+
+
+def test_portfolio_rename_conflicts_with_existing_name(tmp_path):
+    app = create_app(tmp_path / "api.db")
+
+    with TestClient(app) as client:
+        client.post("/api/v1/portfolios", json={"name": "Main"})
+        second = client.post("/api/v1/portfolios", json={"name": "Sandbox"})
+        conflict = client.patch(
+            f"/api/v1/portfolios/{second.json()['portfolio_id']}",
+            json={"name": "Main"},
+        )
+
     assert conflict.status_code == 409
     assert conflict.json()["error"]["code"] == "conflict"
 
@@ -42,8 +64,20 @@ def test_portfolio_overview_positions_and_transactions(tmp_path):
     )
     db.conn.execute(
         """
+        INSERT INTO position(portfolio_id, asset_id, qty, book_cost, created_at, updated_at)
+        VALUES (1, 'AAPL', 2, 200, now(), now())
+        """
+    )
+    db.conn.execute(
+        """
         INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
-        VALUES ('AAPL', '2026-01-03', 125, 125, 'test')
+        SELECT
+            'AAPL',
+            DATE '2025-01-01' + CAST(i AS INTEGER),
+            100 + i * 0.05 + CASE WHEN i % 2 = 0 THEN 0.10 ELSE -0.10 END,
+            100 + i * 0.05 + CASE WHEN i % 2 = 0 THEN 0.10 ELSE -0.10 END,
+            'test'
+        FROM range(0, 366) AS prices(i)
         """
     )
     db.conn.close()
@@ -55,8 +89,10 @@ def test_portfolio_overview_positions_and_transactions(tmp_path):
         missing = client.get("/api/v1/portfolios/99/overview")
 
     assert overview.status_code == 200
-    assert overview.json()["market_value"] == 250
-    assert overview.json()["unrealized_gain"] == 50
+    assert round(overview.json()["market_value"], 2) == 236.30
+    assert round(overview.json()["unrealized_gain"], 2) == 36.30
+    assert overview.json()["projected_value"] is not None
+    assert overview.json()["projected_horizon_years"] == 5
     assert positions.json()[0]["weight"] == 1
     assert positions.json()[0]["name"] == "Apple Inc."
     assert positions.json()[0]["sector"] == "Technology"

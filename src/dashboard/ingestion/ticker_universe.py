@@ -110,6 +110,21 @@ class TickerUniverseRepository:
                 updated_at = now()
             """
         )
+        self.conn.execute(
+            f"""
+            UPDATE portfolio_ticker pt
+            SET is_active = FALSE,
+                updated_at = now()
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM position p
+                WHERE p.portfolio_id = pt.portfolio_id
+                  AND p.asset_id = pt.asset_id
+                  AND p.asset_id IS NOT NULL
+                  AND COALESCE(p.{quantity_column}, 0) <> 0
+            )
+            """
+        )
 
         row = self.conn.execute(
             """

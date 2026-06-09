@@ -27,6 +27,7 @@ from dashboard.api.models import (
     Page,
     PortfolioCreate,
     PortfolioSummary,
+    PortfolioUpdate,
     PositionSummary,
     PricePointResponse,
     TransactionSummary,
@@ -85,6 +86,17 @@ def create_portfolio(payload: PortfolioCreate, request: Request, conn=Depends(ge
 @router.get("/portfolios/{portfolio_id}/overview", response_model=PortfolioSummary)
 def portfolio_overview(portfolio_id: int, conn=Depends(get_connection)):
     return PortfolioApiService(conn).get_portfolio(portfolio_id)
+
+
+@router.patch("/portfolios/{portfolio_id}", response_model=PortfolioSummary)
+def update_portfolio(
+    portfolio_id: int,
+    payload: PortfolioUpdate,
+    request: Request,
+    conn=Depends(get_connection),
+):
+    with request.app.state.write_lock:
+        return PortfolioApiService(conn).update_portfolio(portfolio_id, payload)
 
 
 @router.get("/portfolios/{portfolio_id}/positions", response_model=list[PositionSummary])

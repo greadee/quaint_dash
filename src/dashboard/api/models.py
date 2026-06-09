@@ -37,6 +37,10 @@ class PortfolioCreate(BaseModel):
     base_ccy: str = Field(default="CAD", min_length=3, max_length=3)
 
 
+class PortfolioUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
 class PortfolioSummary(BaseModel):
     portfolio_id: int
     name: str
@@ -47,6 +51,10 @@ class PortfolioSummary(BaseModel):
     market_value: float
     book_cost: float
     unrealized_gain: float | None
+    projected_value: float | None = None
+    projected_value_low: float | None = None
+    projected_value_high: float | None = None
+    projected_horizon_years: int | None = None
 
 
 class PositionSummary(BaseModel):

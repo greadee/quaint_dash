@@ -26,9 +26,12 @@ header strong { font-size: 14px; } .avatar { margin-left: auto; border-radius: 5
 .page-title h1 small { font: 500 15px "DM Sans"; color: #7b8583; margin-left: 8px; }
 .page-subtitle { margin: 8px 0 0; max-width: 620px; color: #68736f; font-size: 14px; line-height: 1.5; }
 .overview-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.rename-form { display: flex; align-items: center; gap: 7px; border: 1px solid #d9ddd6; background: #fff; border-radius: 10px; padding: 4px 4px 4px 10px; color: #7b8583; }
+.rename-form input { width: 190px; min-width: 0; border: 0; outline: 0; padding: 7px 4px; color: #182231; }
+.rename-form button { padding: 8px 10px; }
 .eyebrow { text-transform: uppercase; letter-spacing: 1.1px; font-size: 10px; font-weight: 700; color: #79847f; margin: 0; }
 .card { background: #fbfcf9; border: 1px solid #e0e3dd; border-radius: 14px; box-shadow: 0 5px 18px rgba(29,45,40,.035); }
-.metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
+.metric-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
 .metric { padding: 18px; position: relative; }.metric p { color: #77827e; margin: 16px 0 5px; font-size: 12px; }.metric strong { font-size: 21px; display: block; }.metric span { font-size: 12px; font-weight: 700; margin-top: 5px; display: inline-block; }
 .metric-icon { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; background: #e7f0ea; color: #34765f; }.metric-icon svg { width: 17px; }
 .positive { color: #287158; }.negative { color: #b24d49; }

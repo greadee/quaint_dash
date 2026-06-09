@@ -20,6 +20,7 @@ from dashboard.api.models import (
     Page,
     PortfolioCreate,
     PortfolioSummary,
+    PortfolioUpdate,
     PositionSummary,
     PricePointResponse,
     PriceMoverResponse,
@@ -222,6 +223,30 @@ class PortfolioApiService:
             market_value=market_value,
             book_cost=book_cost,
             unrealized_gain=market_value - book_cost if market_value else None,
+            projected_value=sum(
+                item.projected_value for item in portfolios if item.projected_value is not None
+            )
+            or None,
+            projected_value_low=sum(
+                item.projected_value_low
+                for item in portfolios
+                if item.projected_value_low is not None
+            )
+            or None,
+            projected_value_high=sum(
+                item.projected_value_high
+                for item in portfolios
+                if item.projected_value_high is not None
+            )
+            or None,
+            projected_horizon_years=max(
+                (
+                    item.projected_horizon_years
+                    for item in portfolios
+                    if item.projected_horizon_years is not None
+                ),
+                default=None,
+            ),
         )
 
     def get_portfolio(self, portfolio_id: int) -> PortfolioSummary:
@@ -249,6 +274,32 @@ class PortfolioApiService:
             [name, request.base_ccy],
         ).fetchone()
         return self.get_portfolio(int(row[0]))
+
+    def update_portfolio(self, portfolio_id: int, request: PortfolioUpdate) -> PortfolioSummary:
+        self.get_portfolio(portfolio_id)
+        name = request.name.strip()
+        if not name:
+            raise ValueError("Portfolio name is required.")
+        if self.conn.execute(
+            """
+            SELECT 1
+            FROM portfolio
+            WHERE portfolio_id <> ?
+              AND portfolio_name = ?
+            """,
+            [portfolio_id, name],
+        ).fetchone():
+            raise FileExistsError(f"Portfolio already exists: {name}")
+        self.conn.execute(
+            """
+            UPDATE portfolio
+            SET portfolio_name = ?,
+                updated_at = now()
+            WHERE portfolio_id = ?
+            """,
+            [name, portfolio_id],
+        )
+        return self.get_portfolio(portfolio_id)
 
     def delete_portfolio(self, portfolio_id: int) -> dict[str, int]:
         self.get_portfolio(portfolio_id)
@@ -617,10 +668,10 @@ class PortfolioApiService:
             ],
         )
 
-    @staticmethod
-    def _portfolio_summary(row) -> PortfolioSummary:
+    def _portfolio_summary(self, row) -> PortfolioSummary:
         market_value = float(row[6])
         book_cost = float(row[7])
+        projection = self._portfolio_projection(int(row[0]))
         return PortfolioSummary(
             portfolio_id=int(row[0]),
             name=row[1],
@@ -631,7 +682,27 @@ class PortfolioApiService:
             market_value=market_value,
             book_cost=book_cost,
             unrealized_gain=market_value - book_cost if market_value else None,
+            projected_value=projection.get("projected_value"),
+            projected_value_low=projection.get("projected_value_low"),
+            projected_value_high=projection.get("projected_value_high"),
+            projected_horizon_years=projection.get("projected_horizon_years"),
         )
+
+    def _portfolio_projection(self, portfolio_id: int) -> dict[str, float | int | None]:
+        try:
+            report = AnalyticsEngine(AnalyticsRepository(self.conn)).portfolio_report(portfolio_id)
+        except Exception:
+            return {}
+        simulation = report.forecast.simulation
+        if simulation is None:
+            return {}
+        return {
+            "projected_value": _float_or_none(simulation.p50_value)
+            or _float_or_none(simulation.expected_value),
+            "projected_value_low": _float_or_none(simulation.p10_value),
+            "projected_value_high": _float_or_none(simulation.p90_value),
+            "projected_horizon_years": simulation.horizon_years,
+        }
 
 
 class AssetApiService:

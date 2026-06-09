@@ -6,6 +6,10 @@ export type Portfolio = {
   market_value: number;
   book_cost: number;
   unrealized_gain: number | null;
+  projected_value: number | null;
+  projected_value_low: number | null;
+  projected_value_high: number | null;
+  projected_horizon_years: number | null;
 };
 
 export type Position = {
@@ -192,6 +196,8 @@ export const api = {
   portfolioAnalytics: (id: number) => request<Record<string, unknown>>(`/portfolios/${id}/analytics`),
   createPortfolio: (name: string) =>
     request<Portfolio>("/portfolios", { method: "POST", body: JSON.stringify({ name }) }),
+  updatePortfolio: (id: number, name: string) =>
+    request<Portfolio>(`/portfolios/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
   deletePortfolio: (id: number) => request(`/portfolios/${id}`, { method: "DELETE" }),
   deletePosition: (portfolioId: number, assetId: string) =>
     request(`/portfolios/${portfolioId}/positions/${assetId}`, { method: "DELETE" }),

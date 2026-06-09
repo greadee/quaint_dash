@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
@@ -13,8 +13,10 @@ import {
   KeyRound,
   LayoutDashboard,
   Menu,
+  Pencil,
   Plus,
   RefreshCw,
+  Save,
   ShieldCheck,
   Trash2,
   WalletCards,
@@ -137,6 +139,7 @@ function PortfoliosPage() {
   const [selectedId, setSelectedId] = useState<number | "all" | null>(null);
   const [groupBy, setGroupBy] = useState<TrancheDimension>("sector");
   const [newName, setNewName] = useState("");
+  const [renameName, setRenameName] = useState("");
   const [selectedPositionId, setSelectedPositionId] = useState<string | null>(null);
   const isAggregate = selectedId === "all";
   const aggregate = useQuery({
@@ -169,6 +172,14 @@ function PortfoliosPage() {
       client.invalidateQueries({ queryKey: ["portfolios"] });
     },
   });
+  const renamePortfolio = useMutation({
+    mutationFn: ({ id, name }: { id: number; name: string }) => api.updatePortfolio(id, name),
+    onSuccess: (item) => {
+      setRenameName(item.name);
+      client.invalidateQueries({ queryKey: ["portfolios"] });
+      client.invalidateQueries({ queryKey: ["portfolio-aggregate"] });
+    },
+  });
   const deletePortfolio = useMutation({
     mutationFn: api.deletePortfolio,
     onSuccess: () => {
@@ -193,6 +204,9 @@ function PortfoliosPage() {
       client.invalidateQueries({ queryKey: ["broker-accounts"] });
     },
   });
+  useEffect(() => {
+    setRenameName(!isAggregate && selected ? selected.name : "");
+  }, [isAggregate, selected?.portfolio_id, selected?.name]);
 
   if (portfolios.isLoading) return <Loading />;
   if (portfolios.error) return <ErrorPanel error={portfolios.error} />;
@@ -213,6 +227,11 @@ function PortfoliosPage() {
 
   const gain = selected.unrealized_gain ?? 0;
   const gainRate = selected.book_cost ? gain / selected.book_cost : null;
+  const projectionDetail = selected.projected_value_low != null && selected.projected_value_high != null
+    ? `${money(selected.projected_value_low, selected.base_ccy)} - ${money(selected.projected_value_high, selected.base_ccy)}`
+    : selected.projected_horizon_years
+      ? `${selected.projected_horizon_years}y projection`
+      : undefined;
   const tranches = groupPositions(positions.data ?? [], groupBy);
   const selectedPosition = positions.data?.find((item) => item.asset_id === selectedPositionId) ?? null;
   const canDeletePosition = !isAggregate && selectedPosition != null && selected.portfolio_id !== 0;
@@ -234,12 +253,25 @@ function PortfoliosPage() {
             <option value="all">All portfolios</option>
             {portfolios.data?.map((item) => <option key={item.portfolio_id} value={item.portfolio_id}>{item.name}</option>)}
           </select>
+          {!isAggregate ? (
+            <form className="rename-form" onSubmit={(event) => {
+              event.preventDefault();
+              if (renameName.trim() && renameName.trim() !== selected.name) {
+                renamePortfolio.mutate({ id: selected.portfolio_id, name: renameName.trim() });
+              }
+            }}>
+              <Pencil size={15} />
+              <input value={renameName} onChange={(event) => setRenameName(event.target.value)} aria-label="Portfolio name" />
+              <button className="primary" disabled={!renameName.trim() || renameName.trim() === selected.name || renamePortfolio.isPending}><Save size={15}/>Save</button>
+            </form>
+          ) : null}
           {!isAggregate ? <button className="danger" disabled={deletePortfolio.isPending} onClick={() => window.confirm(`Delete ${selected.name} from the overview? This removes its local transactions, mappings, and positions.`) && deletePortfolio.mutate(selected.portfolio_id)}><Trash2 size={16}/>Delete</button> : null}
         </div>
       </div>
       <section className="metric-grid">
         <Metric icon={<CircleDollarSign />} label="Market value" value={money(selected.market_value, selected.base_ccy)} />
         <Metric icon={<ArrowUpRight />} label="Unrealized gain" value={money(gain, selected.base_ccy)} detail={percent(gainRate)} positive={gain >= 0} />
+        <Metric icon={<BarChart3 />} label="Projected value" value={money(selected.projected_value, selected.base_ccy)} detail={projectionDetail} />
         <Metric icon={<WalletCards />} label="Book cost" value={money(selected.book_cost, selected.base_ccy)} />
         <Metric icon={<Activity />} label="Active holdings" value={String(selected.position_count)} />
       </section>
