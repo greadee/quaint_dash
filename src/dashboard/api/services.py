@@ -6,6 +6,7 @@ from typing import Any
 
 from dashboard.api.models import (
     AssetDetail,
+    AssetHoldingSummary,
     BrokerAccountResponse,
     BrokerConnectionResponse,
     BrokerUserResponse,
@@ -492,10 +493,137 @@ class PortfolioApiService:
             latest_price=_float_or_none(row[11]),
             market_value=_float_or_none(row[12]),
             unrealized_gain=_float_or_none(row[13]),
+            total_return_percent=_ratio_or_none(row[13], row[10]),
             weight=_float_or_none(row[14]),
             broker_linked=int(row[8]) > 0,
             broker_account_count=int(row[8]),
         )
+
+    def list_asset_holdings(self, asset_id: str) -> list[AssetHoldingSummary]:
+        asset_id = asset_id.upper().strip()
+        rows = self.conn.execute(
+            f"""
+            WITH portfolio_holdings AS ({_HOLDINGS_SQL}),
+            holdings AS (
+                SELECT
+                    h.portfolio_id,
+                    p.portfolio_name,
+                    h.asset_id,
+                    SUM(h.quantity) AS quantity,
+                    SUM(h.book_cost) AS book_cost
+                FROM portfolio_holdings h
+                JOIN portfolio p ON p.portfolio_id = h.portfolio_id
+                WHERE UPPER(h.asset_id) = ?
+                GROUP BY h.portfolio_id, p.portfolio_name, h.asset_id
+                HAVING SUM(h.quantity) <> 0
+            ),
+            broker_links AS (
+                SELECT
+                    portfolio_id,
+                    asset_id,
+                    COUNT(DISTINCT provider_account_id) AS broker_account_count
+                FROM broker_portfolio_position_map
+                WHERE UPPER(asset_id) = ?
+                GROUP BY portfolio_id, asset_id
+            ),
+            latest_prices AS (
+                SELECT asset_id, COALESCE(adj_close, close) AS price
+                FROM asset_quote_daily
+                QUALIFY ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY date DESC) = 1
+            ),
+            valued AS (
+                SELECT
+                    h.portfolio_id,
+                    h.portfolio_name,
+                    h.asset_id,
+                    h.quantity,
+                    h.book_cost,
+                    COALESCE(a.symbol, a.asset_id) AS symbol,
+                    a.name,
+                    a.asset_type,
+                    CASE WHEN cdr_underlying.asset_id IS NOT NULL
+                        THEN COALESCE(cdr_underlying.sector, a.sector)
+                        ELSE a.sector
+                    END AS sector,
+                    CASE WHEN cdr_underlying.asset_id IS NOT NULL
+                        THEN COALESCE(cdr_underlying.industry, a.industry)
+                        ELSE a.industry
+                    END AS industry,
+                    CASE WHEN cdr_underlying.asset_id IS NOT NULL
+                        THEN COALESCE(cdr_underlying.country, a.country)
+                        ELSE a.country
+                    END AS country,
+                    a.ccy,
+                    COALESCE(bl.broker_account_count, 0) AS broker_account_count,
+                    lp.price,
+                    COALESCE(h.quantity * lp.price, h.book_cost) AS market_value
+                FROM holdings h
+                JOIN asset a ON a.asset_id = h.asset_id
+                {_ENRICHED_ASSET_JOIN}
+                LEFT JOIN latest_prices lp ON lp.asset_id = h.asset_id
+                LEFT JOIN broker_links bl
+                  ON bl.portfolio_id = h.portfolio_id
+                 AND bl.asset_id = h.asset_id
+            )
+            SELECT
+                portfolio_id,
+                portfolio_name,
+                asset_id,
+                symbol,
+                name,
+                asset_type,
+                sector,
+                industry,
+                country,
+                ccy,
+                broker_account_count,
+                quantity,
+                book_cost,
+                price,
+                market_value,
+                market_value - book_cost
+            FROM valued
+            ORDER BY portfolio_name, portfolio_id
+            """,
+            [asset_id, asset_id],
+        ).fetchall()
+
+        holdings: list[AssetHoldingSummary] = []
+        for row in rows:
+            classification = _cdr_classification_override(
+                asset_id=row[2],
+                symbol=row[3],
+                name=row[4],
+                sector=row[6],
+                industry=row[7],
+                country=row[8],
+            )
+            unrealized_gain = _float_or_none(row[15])
+            book_cost = float(row[12])
+            holdings.append(
+                AssetHoldingSummary(
+                    portfolio_id=int(row[0]),
+                    portfolio_name=row[1],
+                    asset_id=row[2],
+                    symbol=row[3],
+                    name=row[4],
+                    asset_type=row[5],
+                    sector=classification["sector"],
+                    industry=classification["industry"],
+                    country=classification["country"],
+                    currency=row[9],
+                    quantity=float(row[11]),
+                    book_cost=book_cost,
+                    latest_price=_float_or_none(row[13]),
+                    market_value=_float_or_none(row[14]),
+                    unrealized_gain=unrealized_gain,
+                    total_return_percent=_ratio_or_none(unrealized_gain, book_cost),
+                    weight=None,
+                    broker_linked=int(row[10]) > 0,
+                    broker_account_count=int(row[10]),
+                )
+            )
+        return holdings
 
     def list_transactions(self, portfolio_id: int | None, limit: int, offset: int) -> Page[TransactionSummary]:
         where = ""
@@ -1191,6 +1319,14 @@ class CommandApiService(BrokerCommands, IngestionCommands):
 
 def _float_or_none(value) -> float | None:
     return float(value) if value is not None else None
+
+
+def _ratio_or_none(numerator, denominator) -> float | None:
+    numerator = _float_or_none(numerator)
+    denominator = _float_or_none(denominator)
+    if numerator is None or denominator in (None, 0):
+        return None
+    return numerator / denominator
 
 
 def _cdr_classification_override(

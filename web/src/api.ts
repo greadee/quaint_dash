@@ -26,9 +26,15 @@ export type Position = {
   latest_price: number | null;
   market_value: number | null;
   unrealized_gain: number | null;
+  total_return_percent: number | null;
   weight: number | null;
   broker_linked: boolean;
   broker_account_count: number;
+};
+
+export type AssetHolding = Position & {
+  portfolio_id: number;
+  portfolio_name: string;
 };
 
 export type Asset = {
@@ -202,6 +208,7 @@ export const api = {
   deletePosition: (portfolioId: number, assetId: string) =>
     request(`/portfolios/${portfolioId}/positions/${assetId}`, { method: "DELETE" }),
   asset: (id: string) => request<Asset>(`/assets/${id}`),
+  assetHoldings: (id: string) => request<AssetHolding[]>(`/assets/${id}/holdings`),
   prices: (id: string) => request<PricePoint[]>(`/assets/${id}/prices?limit=365`),
   assetAnalytics: (id: string) => request<Record<string, unknown>>(`/assets/${id}/analytics`),
   brokerConnections: () => request<BrokerConnection[]>("/brokers/connections"),

@@ -71,9 +71,15 @@ class PositionSummary(BaseModel):
     latest_price: float | None
     market_value: float | None
     unrealized_gain: float | None
+    total_return_percent: float | None = None
     weight: float | None
     broker_linked: bool = False
     broker_account_count: int = 0
+
+
+class AssetHoldingSummary(PositionSummary):
+    portfolio_id: int
+    portfolio_name: str
 
 
 class TransactionSummary(BaseModel):

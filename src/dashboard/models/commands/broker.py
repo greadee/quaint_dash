@@ -144,6 +144,8 @@ class BrokerCommands:
         start_date: str | None = None,
         end_date: str | None = None,
     ):
+        from dashboard.brokers.portfolio import BrokerPortfolioIntegrationService
+        from dashboard.brokers.snaptrade import SNAPTRADE_PROVIDER
         from dashboard.brokers.sync import BrokerSyncService
 
         repo, cipher = self._broker_repo_and_cipher()
@@ -152,11 +154,21 @@ class BrokerCommands:
             self._snaptrade_provider(),
             cipher,
         )
-        return service.sync_user(
+        result = service.sync_user(
             user_key.strip(),
             start_date=self._broker_parse_date(start_date),
             end_date=self._broker_parse_date(end_date),
         )
+        portfolio_service = BrokerPortfolioIntegrationService(self.conn)
+        for account in repo.list_accounts(SNAPTRADE_PROVIDER):
+            if account.portfolio_id is None:
+                continue
+            portfolio_service.project_account_positions(
+                provider_account_id=account.provider_account_id,
+                portfolio_id=account.portfolio_id,
+                provider=SNAPTRADE_PROVIDER,
+            )
+        return result
 
     def broker_snaptrade_sync_due(
         self,

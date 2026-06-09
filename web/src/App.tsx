@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { Link, NavLink, Route, Routes, useParams, useSearchParams } from "react-router-dom";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { api, type ComparisonAsset, type Position } from "./api";
+import { api, type AssetHolding, type ComparisonAsset, type Position } from "./api";
 
 const money = (value: number | null | undefined, currency = "CAD") =>
   value == null
@@ -140,7 +140,6 @@ function PortfoliosPage() {
   const [groupBy, setGroupBy] = useState<TrancheDimension>("sector");
   const [newName, setNewName] = useState("");
   const [renameName, setRenameName] = useState("");
-  const [selectedPositionId, setSelectedPositionId] = useState<string | null>(null);
   const isAggregate = selectedId === "all";
   const aggregate = useQuery({
     queryKey: ["portfolio-aggregate"],
@@ -191,19 +190,6 @@ function PortfoliosPage() {
       client.invalidateQueries({ queryKey: ["broker-accounts"] });
     },
   });
-  const deletePosition = useMutation({
-    mutationFn: ({ portfolioId, assetId }: { portfolioId: number; assetId: string }) =>
-      api.deletePosition(portfolioId, assetId),
-    onSuccess: () => {
-      setSelectedPositionId(null);
-      client.invalidateQueries({ queryKey: ["portfolios"] });
-      client.invalidateQueries({ queryKey: ["portfolio-aggregate"] });
-      client.invalidateQueries({ queryKey: ["positions"] });
-      client.invalidateQueries({ queryKey: ["transactions"] });
-      client.invalidateQueries({ queryKey: ["overview-updates"] });
-      client.invalidateQueries({ queryKey: ["broker-accounts"] });
-    },
-  });
   useEffect(() => {
     setRenameName(!isAggregate && selected ? selected.name : "");
   }, [isAggregate, selected?.portfolio_id, selected?.name]);
@@ -233,17 +219,6 @@ function PortfoliosPage() {
       ? `${selected.projected_horizon_years}y projection`
       : undefined;
   const tranches = groupPositions(positions.data ?? [], groupBy);
-  const selectedPosition = positions.data?.find((item) => item.asset_id === selectedPositionId) ?? null;
-  const canDeletePosition = !isAggregate && selectedPosition != null && selected.portfolio_id !== 0;
-  const deleteSelectedPosition = () => {
-    if (!canDeletePosition || !selectedPosition) return;
-    const warning = selectedPosition.broker_linked
-      ? `Delete ${selectedPosition.symbol}? This holding is linked to a brokerage account, so the portfolio will fall out of sync with the brokerage account.`
-      : `Delete ${selectedPosition.symbol} from ${selected.name}?`;
-    if (window.confirm(warning)) {
-      deletePosition.mutate({ portfolioId: selected.portfolio_id, assetId: selectedPosition.asset_id });
-    }
-  };
   return (
     <div className="page">
       <div className="page-title">
@@ -302,18 +277,15 @@ function PortfoliosPage() {
       <section className="card holdings-card">
         <div className="card-heading">
           <div><p className="eyebrow">Composition</p><h2>Holdings</h2></div>
-          <div className="holding-actions">
-            {selectedPosition?.broker_linked ? <span className="holding-warning">Deleting will put this portfolio out of sync with the brokerage account.</span> : null}
-            {!isAggregate ? <button className={selectedPosition?.broker_linked ? "danger broker-warning" : "danger"} disabled={!canDeletePosition || deletePosition.isPending} onClick={deleteSelectedPosition}><Trash2 size={16}/>Delete holding</button> : <span>{positions.data?.length ?? 0} positions</span>}
-          </div>
+          <span>{positions.data?.length ?? 0} positions</span>
         </div>
         {positions.isLoading ? <Loading compact /> : positions.data?.length ? (
           <div className="table-wrap"><table><thead><tr><th>Asset</th><th>Value</th><th>Weight</th><th>Book cost</th><th>Gain</th></tr></thead>
-          <tbody>{positions.data.map((item) => <tr key={item.asset_id} className={selectedPositionId === item.asset_id ? "selected-row" : ""} onClick={() => setSelectedPositionId(item.asset_id)}>
-            <td><Link className="asset-link" to={`/asset/${item.asset_id}`} onClick={(event) => event.stopPropagation()}><strong>{item.symbol}</strong><span>{item.name ?? item.asset_type ?? "Asset"}</span></Link></td>
+          <tbody>{positions.data.map((item) => <tr key={item.asset_id}>
+            <td><Link className="asset-link" to={`/asset/${item.asset_id}`}><strong>{item.symbol}</strong><span>{item.name ?? item.asset_type ?? "Asset"}</span></Link></td>
             <td>{money(item.market_value, selected.base_ccy)}</td><td>{percent(item.weight)}</td>
             <td>{money(item.book_cost, selected.base_ccy)}</td>
-            <td className={(item.unrealized_gain ?? 0) >= 0 ? "positive" : "negative"}>{money(item.unrealized_gain, selected.base_ccy)}</td>
+            <td className={(item.unrealized_gain ?? 0) >= 0 ? "positive" : "negative"}>{money(item.unrealized_gain, selected.base_ccy)} <span>{percent(item.total_return_percent)}</span></td>
           </tr>)}</tbody></table></div>
         ) : <EmptyRow text="No active positions yet." />}
       </section>
@@ -435,11 +407,34 @@ function groupPositions(positions: Position[], dimension: TrancheDimension) {
 }
 
 function AssetPage() {
+  const client = useQueryClient();
   const { assetId = "" } = useParams();
   const asset = useQuery({ queryKey: ["asset", assetId], queryFn: () => api.asset(assetId) });
+  const holdings = useQuery({ queryKey: ["asset-holdings", assetId], queryFn: () => api.assetHoldings(assetId) });
   const prices = useQuery({ queryKey: ["prices", assetId], queryFn: () => api.prices(assetId) });
   const analytics = useQuery({ queryKey: ["asset-analytics", assetId], queryFn: () => api.assetAnalytics(assetId) });
+  const deletePosition = useMutation({
+    mutationFn: ({ portfolioId, holdingAssetId }: { portfolioId: number; holdingAssetId: string }) =>
+      api.deletePosition(portfolioId, holdingAssetId),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: ["asset-holdings", assetId] });
+      client.invalidateQueries({ queryKey: ["portfolios"] });
+      client.invalidateQueries({ queryKey: ["portfolio-aggregate"] });
+      client.invalidateQueries({ queryKey: ["positions"] });
+      client.invalidateQueries({ queryKey: ["transactions"] });
+      client.invalidateQueries({ queryKey: ["overview-updates"] });
+      client.invalidateQueries({ queryKey: ["broker-accounts"] });
+    },
+  });
   const underlyingAssetId = asset.data?.underlying_asset_id;
+  const deleteHolding = (holding: AssetHolding) => {
+    const warning = holding.broker_linked
+      ? `Delete ${holding.symbol} from ${holding.portfolio_name}? This holding is linked to a brokerage account, so the portfolio will fall out of sync with the brokerage account.`
+      : `Delete ${holding.symbol} from ${holding.portfolio_name}?`;
+    if (window.confirm(warning)) {
+      deletePosition.mutate({ portfolioId: holding.portfolio_id, holdingAssetId: holding.asset_id });
+    }
+  };
   if (asset.isLoading) return <Loading />;
   if (asset.error) return <ErrorPanel error={asset.error} />;
   return <div className="page">
@@ -447,9 +442,29 @@ function AssetPage() {
     <section className="card chart-card"><div className="card-heading"><div><p className="eyebrow">Last 365 observations</p><h2>Price history</h2></div></div>
       <div className="chart"><ResponsiveContainer width="100%" height="100%"><AreaChart data={prices.data}><defs><linearGradient id="price" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#5da78b" stopOpacity={0.4}/><stop offset="100%" stopColor="#5da78b" stopOpacity={0}/></linearGradient></defs><XAxis dataKey="date" hide/><YAxis hide domain={["dataMin", "dataMax"]}/><Tooltip/><Area type="monotone" dataKey="close" stroke="#5da78b" fill="url(#price)" strokeWidth={2}/></AreaChart></ResponsiveContainer></div>
     </section>
+    <AssetHoldingsPanel holdings={holdings.data ?? []} isLoading={holdings.isLoading} isDeleting={deletePosition.isPending} onDelete={deleteHolding} />
     <AssetAnalyticsPanel payload={analytics.data} isLoading={analytics.isLoading} />
     <section className="detail-grid"><div className="card"><p className="eyebrow">Classification</p><h2>{asset.data?.industry ?? "Not classified"}</h2><p>{asset.data?.country ?? "Country unavailable"} - {asset.data?.currency}</p></div><div className="card"><p className="eyebrow">Business profile</p><p>{asset.data?.description ?? "No company description has been ingested yet."}</p></div></section>
   </div>;
+}
+
+function AssetHoldingsPanel({ holdings, isLoading, isDeleting, onDelete }: { holdings: AssetHolding[]; isLoading: boolean; isDeleting: boolean; onDelete: (holding: AssetHolding) => void }) {
+  return <section className="card asset-holdings-card">
+    <div className="card-heading"><div><p className="eyebrow">Portfolio holding</p><h2>Manage this asset</h2></div><span>{holdings.length} holding{holdings.length === 1 ? "" : "s"}</span></div>
+    {isLoading ? <Loading compact /> : holdings.length ? <div className="asset-holding-list">
+      {holdings.map((holding) => <article key={`${holding.portfolio_id}-${holding.asset_id}`} className={holding.broker_linked ? "asset-holding broker-linked" : "asset-holding"}>
+        <div>
+          <strong>{holding.portfolio_name}</strong>
+          <span>{number(holding.quantity, 4)} shares - {money(holding.book_cost, holding.currency)} book - {percent(holding.total_return_percent)} return</span>
+          {holding.broker_linked ? <em>Deleting will put this portfolio out of sync with the brokerage account.</em> : null}
+        </div>
+        <div>
+          <b>{money(holding.market_value, holding.currency)}</b>
+          <button className="danger" disabled={isDeleting} onClick={() => onDelete(holding)}><Trash2 size={16}/>Delete holding</button>
+        </div>
+      </article>)}
+    </div> : <EmptyRow text="This asset is not currently held in a portfolio." />}
+  </section>;
 }
 
 function BrokersPage() {

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, time
 from typing import Any
 
@@ -36,6 +36,8 @@ class BrokerPortfolioIntegrationService:
     ) -> BrokerPortfolioImportResult:
         rows = self._pending_rows(provider, portfolio_id)
         if not rows:
+            if self.recalculate_projected_book_costs(provider, portfolio_id):
+                self._refresh_positions()
             return BrokerPortfolioImportResult(
                 provider=provider,
                 imported_transactions=0,
@@ -64,6 +66,7 @@ class BrokerPortfolioIntegrationService:
             """,
             [batch_id, batch_id],
         )
+        self.recalculate_projected_book_costs(provider, portfolio_id)
         self._refresh_positions()
         return BrokerPortfolioImportResult(
             provider=provider,
@@ -95,6 +98,10 @@ class BrokerPortfolioIntegrationService:
             if normalized is None:
                 skipped += 1
                 continue
+            normalized = replace(
+                normalized,
+                book_cost=self._book_cost_from_broker_transactions(normalized),
+            )
             self._ensure_position_asset(normalized)
             self._insert_position_mapping(normalized)
             upserted += 1
@@ -107,6 +114,67 @@ class BrokerPortfolioIntegrationService:
             upserted_positions=upserted,
             skipped_positions=skipped,
         )
+
+    def recalculate_projected_book_costs(
+        self,
+        provider: str = "snaptrade",
+        portfolio_id: int | None = None,
+    ) -> int:
+        where = ["provider = ?"]
+        params: list[object] = [provider]
+        if portfolio_id is not None:
+            where.append("portfolio_id = ?")
+            params.append(portfolio_id)
+        rows = self.conn.execute(
+            f"""
+            SELECT
+                provider,
+                provider_account_id,
+                provider_position_id,
+                portfolio_id,
+                asset_id,
+                quantity,
+                book_cost,
+                currency
+            FROM broker_portfolio_position_map
+            WHERE {" AND ".join(where)}
+            """,
+            params,
+        ).fetchall()
+        updated = 0
+        for row in rows:
+            position = _NormalizedBrokerPosition(
+                provider=row[0],
+                provider_account_id=row[1],
+                provider_position_id=row[2],
+                portfolio_id=int(row[3]),
+                asset_id=row[4],
+                description=None,
+                quantity=float(row[5]),
+                book_cost=float(row[6]),
+                currency=row[7],
+            )
+            book_cost = self._book_cost_from_broker_transactions(position)
+            if abs(book_cost - position.book_cost) < 0.0001:
+                continue
+            self.conn.execute(
+                """
+                UPDATE broker_portfolio_position_map
+                SET book_cost = ?,
+                    updated_at = now()
+                WHERE provider = ?
+                  AND provider_account_id = ?
+                  AND provider_position_id = ?
+                """,
+                [
+                    book_cost,
+                    position.provider,
+                    position.provider_account_id,
+                    position.provider_position_id,
+                ],
+            )
+            updated += 1
+        return updated
 
     def _latest_position_rows(self, provider: str, provider_account_id: str) -> list[tuple]:
         return self.conn.execute(
@@ -328,6 +396,56 @@ class BrokerPortfolioIntegrationService:
                 position.currency,
             ],
         )
+
+    def _book_cost_from_broker_transactions(self, position: "_NormalizedBrokerPosition") -> float:
+        rows = self.conn.execute(
+            """
+            SELECT
+                trade_date,
+                txn_type,
+                asset_id,
+                symbol,
+                quantity,
+                price,
+                amount
+            FROM broker_transaction
+            WHERE provider = ?
+              AND provider_account_id = ?
+            ORDER BY trade_date, provider_transaction_id
+            """,
+            [position.provider, position.provider_account_id],
+        ).fetchall()
+        quantity = 0.0
+        cost = 0.0
+        matched_trade_count = 0
+        for row in rows:
+            txn_type = _normalize_type(row[1])
+            if txn_type not in {"buy", "sell"}:
+                continue
+            asset_id = _normalize_asset_id(row[2] or row[3])
+            if asset_id != position.asset_id:
+                continue
+            txn_qty = _normalize_quantity(txn_type, row[4])
+            price = _float_or_none(row[5])
+            if txn_qty is None or price is None:
+                continue
+            matched_trade_count += 1
+            if txn_type == "buy":
+                buy_qty = abs(txn_qty)
+                quantity += buy_qty
+                cost += buy_qty * price
+                continue
+            sell_qty = min(abs(txn_qty), quantity)
+            if sell_qty <= 0 or quantity <= 0:
+                continue
+            average_cost = cost / quantity if quantity else 0.0
+            quantity -= sell_qty
+            cost -= average_cost * sell_qty
+
+        if not matched_trade_count or quantity <= 0 or cost <= 0:
+            return position.book_cost
+        average_cost = cost / quantity
+        return average_cost * position.quantity
 
     def _refresh_positions(self) -> None:
         self.conn.execute("DELETE FROM position")

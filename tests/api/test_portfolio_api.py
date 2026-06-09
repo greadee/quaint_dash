@@ -274,6 +274,58 @@ def test_portfolio_position_delete_warns_for_broker_linked_holding(tmp_path):
     assert after.json() == []
 
 
+def test_asset_holdings_include_portfolio_context_and_returns(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name)
+        VALUES ('MU.TO', 'MU.TO', 'stock', 'CAD', 'Micron CDR')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO broker_portfolio_position_map(
+            provider,
+            provider_account_id,
+            provider_position_id,
+            portfolio_id,
+            asset_id,
+            quantity,
+            book_cost,
+            currency
+        )
+        VALUES ('snaptrade', 'acct-1', 'pos-mu', 1, 'MU.TO', 85, 464.10, 'CAD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+        VALUES ('MU.TO', '2026-01-03', 7, 7, 'test')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        holdings = client.get("/api/v1/assets/MU.TO/holdings")
+        delete = client.delete("/api/v1/portfolios/1/positions/MU.TO")
+        after = client.get("/api/v1/assets/MU.TO/holdings")
+
+    assert holdings.status_code == 200
+    payload = holdings.json()
+    assert payload[0]["portfolio_id"] == 1
+    assert payload[0]["portfolio_name"] == "Main"
+    assert payload[0]["quantity"] == 85
+    assert payload[0]["book_cost"] == 464.1
+    assert payload[0]["market_value"] == 595
+    assert round(payload[0]["total_return_percent"], 4) == 0.2821
+    assert payload[0]["broker_linked"] is True
+    assert delete.status_code == 200
+    assert after.json() == []
+
+
 def test_portfolio_aggregate_and_delete(tmp_path):
     db_path = tmp_path / "api.db"
     app = create_app(db_path)
