@@ -23,6 +23,8 @@ export type Position = {
   market_value: number | null;
   unrealized_gain: number | null;
   weight: number | null;
+  broker_linked: boolean;
+  broker_account_count: number;
 };
 
 export type Asset = {
@@ -189,6 +191,8 @@ export const api = {
   createPortfolio: (name: string) =>
     request<Portfolio>("/portfolios", { method: "POST", body: JSON.stringify({ name }) }),
   deletePortfolio: (id: number) => request(`/portfolios/${id}`, { method: "DELETE" }),
+  deletePosition: (portfolioId: number, assetId: string) =>
+    request(`/portfolios/${portfolioId}/positions/${assetId}`, { method: "DELETE" }),
   asset: (id: string) => request<Asset>(`/assets/${id}`),
   prices: (id: string) => request<PricePoint[]>(`/assets/${id}/prices?limit=365`),
   assetAnalytics: (id: string) => request<Record<string, unknown>>(`/assets/${id}/analytics`),

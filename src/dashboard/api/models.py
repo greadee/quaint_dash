@@ -64,6 +64,8 @@ class PositionSummary(BaseModel):
     market_value: float | None
     unrealized_gain: float | None
     weight: float | None
+    broker_linked: bool = False
+    broker_account_count: int = 0
 
 
 class TransactionSummary(BaseModel):

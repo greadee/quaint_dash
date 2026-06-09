@@ -118,6 +118,18 @@ def delete_portfolio(portfolio_id: int, request: Request, conn=Depends(get_conne
     return ActionResult(result=result)
 
 
+@router.delete("/portfolios/{portfolio_id}/positions/{asset_id}", response_model=ActionResult)
+def delete_portfolio_position(
+    portfolio_id: int,
+    asset_id: str,
+    request: Request,
+    conn=Depends(get_connection),
+):
+    with request.app.state.write_lock:
+        result = PortfolioApiService(conn).delete_position(portfolio_id, asset_id)
+    return ActionResult(result=result)
+
+
 @router.get("/assets/{asset_id}", response_model=AssetDetail)
 def asset_detail(asset_id: str, conn=Depends(get_connection)):
     return AssetApiService(conn).get_asset(asset_id)

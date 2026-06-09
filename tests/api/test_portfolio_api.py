@@ -67,6 +67,105 @@ def test_portfolio_overview_positions_and_transactions(tmp_path):
     assert missing.status_code == 404
 
 
+def test_portfolio_positions_use_underlying_metadata_for_cdrs(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, asset_subtype, ccy, name, sector, industry, country)
+        VALUES
+            ('AMD', 'AMD', 'stock', NULL, 'USD', 'Advanced Micro Devices', 'Technology', 'Semiconductors', 'US'),
+            ('AMD.TO', 'AMD.TO', 'etf', 'cdr', 'CAD', 'AMD Canadian Depositary Receipt', NULL, NULL, 'CA')
+        """
+    )
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO txn(portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id)
+        VALUES (1, '2026-01-02 10:00:00', 'buy', 'AMD.TO', 3, 40, 'CAD', 0, 1)
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        positions = client.get("/api/v1/portfolios/1/positions")
+        asset = client.get("/api/v1/assets/AMD.TO")
+
+    assert positions.status_code == 200
+    assert positions.json()[0]["sector"] == "Technology"
+    assert positions.json()[0]["industry"] == "Semiconductors"
+    assert positions.json()[0]["country"] == "US"
+    assert asset.status_code == 200
+    assert asset.json()["sector"] == "Technology"
+    assert asset.json()["industry"] == "Semiconductors"
+    assert asset.json()["country"] == "US"
+
+
+def test_asset_detail_uses_known_cdr_classification_when_underlying_is_missing(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name)
+        VALUES ('AMD.TO', 'AMD.TO', 'stock', 'CAD', 'Advanced Micro Devices, Inc. CDR')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        asset = client.get("/api/v1/assets/AMD.TO")
+
+    assert asset.status_code == 200
+    assert asset.json()["sector"] == "Technology"
+    assert asset.json()["industry"] == "Semiconductors"
+    assert asset.json()["country"] == "US"
+
+
+def test_portfolio_position_delete_warns_for_broker_linked_holding(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy)
+        VALUES ('AAPL', 'AAPL', 'stock', 'USD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO broker_portfolio_position_map(
+            provider,
+            provider_account_id,
+            provider_position_id,
+            portfolio_id,
+            asset_id,
+            quantity,
+            book_cost,
+            currency
+        )
+        VALUES ('snaptrade', 'acct-1', 'pos-1', 1, 'AAPL', 2, 200, 'USD')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        positions = client.get("/api/v1/portfolios/1/positions")
+        delete = client.delete("/api/v1/portfolios/1/positions/AAPL")
+        after = client.get("/api/v1/portfolios/1/positions")
+
+    assert positions.status_code == 200
+    assert positions.json()[0]["broker_linked"] is True
+    assert positions.json()[0]["broker_account_count"] == 1
+    assert delete.status_code == 200
+    assert delete.json()["result"]["broker_linked"] is True
+    assert delete.json()["result"]["deleted_broker_mappings"] == 1
+    assert after.json() == []
+
+
 def test_portfolio_aggregate_and_delete(tmp_path):
     db_path = tmp_path / "api.db"
     app = create_app(db_path)

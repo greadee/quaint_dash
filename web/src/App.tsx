@@ -137,6 +137,7 @@ function PortfoliosPage() {
   const [selectedId, setSelectedId] = useState<number | "all" | null>(null);
   const [groupBy, setGroupBy] = useState<TrancheDimension>("sector");
   const [newName, setNewName] = useState("");
+  const [selectedPositionId, setSelectedPositionId] = useState<string | null>(null);
   const isAggregate = selectedId === "all";
   const aggregate = useQuery({
     queryKey: ["portfolio-aggregate"],
@@ -179,6 +180,19 @@ function PortfoliosPage() {
       client.invalidateQueries({ queryKey: ["broker-accounts"] });
     },
   });
+  const deletePosition = useMutation({
+    mutationFn: ({ portfolioId, assetId }: { portfolioId: number; assetId: string }) =>
+      api.deletePosition(portfolioId, assetId),
+    onSuccess: () => {
+      setSelectedPositionId(null);
+      client.invalidateQueries({ queryKey: ["portfolios"] });
+      client.invalidateQueries({ queryKey: ["portfolio-aggregate"] });
+      client.invalidateQueries({ queryKey: ["positions"] });
+      client.invalidateQueries({ queryKey: ["transactions"] });
+      client.invalidateQueries({ queryKey: ["overview-updates"] });
+      client.invalidateQueries({ queryKey: ["broker-accounts"] });
+    },
+  });
 
   if (portfolios.isLoading) return <Loading />;
   if (portfolios.error) return <ErrorPanel error={portfolios.error} />;
@@ -200,6 +214,17 @@ function PortfoliosPage() {
   const gain = selected.unrealized_gain ?? 0;
   const gainRate = selected.book_cost ? gain / selected.book_cost : null;
   const tranches = groupPositions(positions.data ?? [], groupBy);
+  const selectedPosition = positions.data?.find((item) => item.asset_id === selectedPositionId) ?? null;
+  const canDeletePosition = !isAggregate && selectedPosition != null && selected.portfolio_id !== 0;
+  const deleteSelectedPosition = () => {
+    if (!canDeletePosition || !selectedPosition) return;
+    const warning = selectedPosition.broker_linked
+      ? `Delete ${selectedPosition.symbol}? This holding is linked to a brokerage account, so the portfolio will fall out of sync with the brokerage account.`
+      : `Delete ${selectedPosition.symbol} from ${selected.name}?`;
+    if (window.confirm(warning)) {
+      deletePosition.mutate({ portfolioId: selected.portfolio_id, assetId: selectedPosition.asset_id });
+    }
+  };
   return (
     <div className="page">
       <div className="page-title">
@@ -243,11 +268,17 @@ function PortfoliosPage() {
         {positions.isLoading ? <Loading compact /> : tranches.length ? <div className="tranche-grid">{tranches.map((group) => <article className="tranche" key={group.label}><div><strong>{group.label}</strong><span>{group.count} holding{group.count === 1 ? "" : "s"}</span></div><b>{money(group.marketValue, selected.base_ccy)}</b><div className="bar"><span style={{ width: `${Math.max(group.weight * 100, 2)}%` }} /></div><em>{percent(group.weight)} of selected scope</em></article>)}</div> : <EmptyRow text="No tranche data yet. Add holdings with sector, industry, country, or currency metadata." />}
       </section>
       <section className="card holdings-card">
-        <div className="card-heading"><div><p className="eyebrow">Composition</p><h2>Holdings</h2></div><span>{positions.data?.length ?? 0} positions</span></div>
+        <div className="card-heading">
+          <div><p className="eyebrow">Composition</p><h2>Holdings</h2></div>
+          <div className="holding-actions">
+            {selectedPosition?.broker_linked ? <span className="holding-warning">Deleting will put this portfolio out of sync with the brokerage account.</span> : null}
+            {!isAggregate ? <button className={selectedPosition?.broker_linked ? "danger broker-warning" : "danger"} disabled={!canDeletePosition || deletePosition.isPending} onClick={deleteSelectedPosition}><Trash2 size={16}/>Delete holding</button> : <span>{positions.data?.length ?? 0} positions</span>}
+          </div>
+        </div>
         {positions.isLoading ? <Loading compact /> : positions.data?.length ? (
           <div className="table-wrap"><table><thead><tr><th>Asset</th><th>Value</th><th>Weight</th><th>Book cost</th><th>Gain</th></tr></thead>
-          <tbody>{positions.data.map((item) => <tr key={item.asset_id}>
-            <td><Link className="asset-link" to={`/asset/${item.asset_id}`}><strong>{item.symbol}</strong><span>{item.name ?? item.asset_type ?? "Asset"}</span></Link></td>
+          <tbody>{positions.data.map((item) => <tr key={item.asset_id} className={selectedPositionId === item.asset_id ? "selected-row" : ""} onClick={() => setSelectedPositionId(item.asset_id)}>
+            <td><Link className="asset-link" to={`/asset/${item.asset_id}`} onClick={(event) => event.stopPropagation()}><strong>{item.symbol}</strong><span>{item.name ?? item.asset_type ?? "Asset"}</span></Link></td>
             <td>{money(item.market_value, selected.base_ccy)}</td><td>{percent(item.weight)}</td>
             <td>{money(item.book_cost, selected.base_ccy)}</td>
             <td className={(item.unrealized_gain ?? 0) >= 0 ? "positive" : "negative"}>{money(item.unrealized_gain, selected.base_ccy)}</td>

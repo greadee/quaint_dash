@@ -57,6 +57,71 @@ GROUP BY portfolio_id, asset_id
 """
 
 
+_ENRICHED_ASSET_SELECT = """
+    a.asset_id,
+    COALESCE(a.symbol, a.asset_id) AS symbol,
+    a.exchange_code,
+    a.asset_type,
+    a.asset_subtype,
+    a.ccy,
+    a.name,
+    a.description,
+    CASE WHEN cdr_underlying.asset_id IS NOT NULL
+        THEN COALESCE(cdr_underlying.sector, a.sector)
+        ELSE a.sector
+    END AS sector,
+    CASE WHEN cdr_underlying.asset_id IS NOT NULL
+        THEN COALESCE(cdr_underlying.industry, a.industry)
+        ELSE a.industry
+    END AS industry,
+    CASE WHEN cdr_underlying.asset_id IS NOT NULL
+        THEN COALESCE(cdr_underlying.country, a.country)
+        ELSE a.country
+    END AS country,
+    CASE WHEN cdr_underlying.asset_id IS NOT NULL
+        THEN COALESCE(cdr_underlying.region, a.region)
+        ELSE a.region
+    END AS region,
+    a.size,
+    COALESCE(a.mkt_cap, cdr_underlying.mkt_cap) AS mkt_cap,
+    COALESCE(a.shares_outstanding, cdr_underlying.shares_outstanding) AS shares_outstanding,
+    COALESCE(a.market_beta, cdr_underlying.market_beta) AS market_beta
+"""
+
+
+_ENRICHED_ASSET_JOIN = """
+LEFT JOIN asset cdr_underlying ON UPPER(cdr_underlying.asset_id) = UPPER(
+        CASE
+            WHEN POSITION('.' IN COALESCE(a.symbol, a.asset_id)) > 0
+                THEN SPLIT_PART(COALESCE(a.symbol, a.asset_id), '.', 1)
+            ELSE ''
+        END
+    )
+    AND cdr_underlying.asset_id <> a.asset_id
+    AND (
+        LOWER(COALESCE(a.asset_subtype, '')) LIKE '%cdr%'
+        OR LOWER(COALESCE(a.name, '')) LIKE '%depositary receipt%'
+        OR LOWER(COALESCE(a.description, '')) LIKE '%depositary receipt%'
+        OR LOWER(COALESCE(a.name, '')) LIKE '% cdr%'
+        OR LOWER(COALESCE(a.description, '')) LIKE '% cdr%'
+        OR (
+            POSITION('.' IN COALESCE(a.symbol, a.asset_id)) > 0
+            AND (
+                a.sector IS NULL
+                OR a.industry IS NULL
+                OR a.country IS NULL
+                OR UPPER(a.country) = 'CA'
+            )
+        )
+    )
+"""
+
+
+_CDR_CLASSIFICATION_OVERRIDES = {
+    "AMD": {"sector": "Technology", "industry": "Semiconductors", "country": "US"},
+}
+
+
 class PortfolioApiService:
     def __init__(self, conn) -> None:
         self.conn = conn
@@ -154,11 +219,83 @@ class PortfolioApiService:
         self.conn.execute("DELETE FROM portfolio WHERE portfolio_id = ?", [portfolio_id])
         return {"portfolio_id": portfolio_id}
 
+    def delete_position(self, portfolio_id: int, asset_id: str) -> dict[str, int | str]:
+        self.get_portfolio(portfolio_id)
+        asset_id = asset_id.upper().strip()
+        existing = self.conn.execute(
+            f"""
+            WITH holdings AS ({_HOLDINGS_SQL})
+            SELECT 1
+            FROM holdings
+            WHERE portfolio_id = ?
+              AND UPPER(asset_id) = ?
+              AND quantity <> 0
+            """,
+            [portfolio_id, asset_id],
+        ).fetchone()
+        if existing is None:
+            raise LookupError(f"Holding not found in portfolio {portfolio_id}: {asset_id}")
+
+        broker_rows = int(
+            self.conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM broker_portfolio_position_map
+                WHERE portfolio_id = ?
+                  AND UPPER(asset_id) = ?
+                """,
+                [portfolio_id, asset_id],
+            ).fetchone()[0]
+        )
+        txn_rows = self.conn.execute(
+            """
+            DELETE FROM txn
+            WHERE portfolio_id = ?
+              AND UPPER(asset_id) = ?
+            RETURNING txn_id
+            """,
+            [portfolio_id, asset_id],
+        ).fetchall()
+        position_rows = self.conn.execute(
+            """
+            DELETE FROM position
+            WHERE portfolio_id = ?
+              AND UPPER(asset_id) = ?
+            RETURNING asset_id
+            """,
+            [portfolio_id, asset_id],
+        ).fetchall()
+        broker_map_rows = self.conn.execute(
+            """
+            DELETE FROM broker_portfolio_position_map
+            WHERE portfolio_id = ?
+              AND UPPER(asset_id) = ?
+            RETURNING asset_id
+            """,
+            [portfolio_id, asset_id],
+        ).fetchall()
+        self.conn.execute(
+            """
+            DELETE FROM portfolio_ticker
+            WHERE portfolio_id = ?
+              AND UPPER(asset_id) = ?
+            """,
+            [portfolio_id, asset_id],
+        )
+        return {
+            "portfolio_id": portfolio_id,
+            "asset_id": asset_id,
+            "deleted_transactions": len(txn_rows),
+            "deleted_positions": len(position_rows),
+            "deleted_broker_mappings": len(broker_map_rows),
+            "broker_linked": broker_rows > 0,
+        }
+
     def list_positions(self, portfolio_id: int | None = None) -> list[PositionSummary]:
         if portfolio_id is not None:
             self.get_portfolio(portfolio_id)
             where = "WHERE portfolio_id = ?"
-            params: list[object] = [portfolio_id]
+            params: list[object] = [portfolio_id, portfolio_id]
         else:
             where = ""
             params = []
@@ -172,6 +309,14 @@ class PortfolioApiService:
                 GROUP BY asset_id
                 HAVING SUM(quantity) <> 0
             ),
+            broker_links AS (
+                SELECT
+                    asset_id,
+                    COUNT(DISTINCT provider_account_id) AS broker_account_count
+                FROM broker_portfolio_position_map
+                {where}
+                GROUP BY asset_id
+            ),
             latest_prices AS (
                 SELECT asset_id, COALESCE(adj_close, close) AS price
                 FROM asset_quote_daily
@@ -183,15 +328,27 @@ class PortfolioApiService:
                 a.symbol,
                 a.name,
                 a.asset_type,
-                a.sector,
-                a.industry,
-                a.country,
+                CASE WHEN cdr_underlying.asset_id IS NOT NULL
+                    THEN COALESCE(cdr_underlying.sector, a.sector)
+                    ELSE a.sector
+                END AS sector,
+                CASE WHEN cdr_underlying.asset_id IS NOT NULL
+                    THEN COALESCE(cdr_underlying.industry, a.industry)
+                    ELSE a.industry
+                END AS industry,
+                CASE WHEN cdr_underlying.asset_id IS NOT NULL
+                    THEN COALESCE(cdr_underlying.country, a.country)
+                    ELSE a.country
+                END AS country,
                 a.ccy,
+                COALESCE(bl.broker_account_count, 0) AS broker_account_count,
                 lp.price,
                 COALESCE(h.quantity * lp.price, h.book_cost) AS market_value
                 FROM holdings h
                 JOIN asset a ON a.asset_id = h.asset_id
+                {_ENRICHED_ASSET_JOIN}
                 LEFT JOIN latest_prices lp ON lp.asset_id = h.asset_id
+                LEFT JOIN broker_links bl ON bl.asset_id = h.asset_id
             )
             SELECT
                 asset_id,
@@ -202,6 +359,7 @@ class PortfolioApiService:
                 industry,
                 country,
                 ccy,
+                broker_account_count,
                 quantity,
                 book_cost,
                 price,
@@ -216,25 +374,35 @@ class PortfolioApiService:
             """,
             params,
         ).fetchall()
-        return [
-            PositionSummary(
-                asset_id=row[0],
-                symbol=row[1],
-                name=row[2],
-                asset_type=row[3],
-                sector=row[4],
-                industry=row[5],
-                country=row[6],
-                currency=row[7],
-                quantity=float(row[8]),
-                book_cost=float(row[9]),
-                latest_price=_float_or_none(row[10]),
-                market_value=_float_or_none(row[11]),
-                unrealized_gain=_float_or_none(row[12]),
-                weight=_float_or_none(row[13]),
-            )
-            for row in rows
-        ]
+        return [self._position_summary(row) for row in rows]
+
+    def _position_summary(self, row) -> PositionSummary:
+        classification = _cdr_classification_override(
+            asset_id=row[0],
+            symbol=row[1],
+            name=row[2],
+            sector=row[4],
+            industry=row[5],
+            country=row[6],
+        )
+        return PositionSummary(
+            asset_id=row[0],
+            symbol=row[1],
+            name=row[2],
+            asset_type=row[3],
+            sector=classification["sector"],
+            industry=classification["industry"],
+            country=classification["country"],
+            currency=row[7],
+            quantity=float(row[9]),
+            book_cost=float(row[10]),
+            latest_price=_float_or_none(row[11]),
+            market_value=_float_or_none(row[12]),
+            unrealized_gain=_float_or_none(row[13]),
+            weight=_float_or_none(row[14]),
+            broker_linked=int(row[8]) > 0,
+            broker_account_count=int(row[8]),
+        )
 
     def list_transactions(self, portfolio_id: int | None, limit: int, offset: int) -> Page[TransactionSummary]:
         where = ""
@@ -433,22 +601,7 @@ class AssetApiService:
         row = self.conn.execute(
             """
             SELECT
-                a.asset_id,
-                COALESCE(a.symbol, a.asset_id),
-                a.exchange_code,
-                a.asset_type,
-                a.asset_subtype,
-                a.ccy,
-                a.name,
-                a.description,
-                a.sector,
-                a.industry,
-                a.country,
-                a.region,
-                a.size,
-                a.mkt_cap,
-                a.shares_outstanding,
-                a.market_beta,
+                {_ENRICHED_ASSET_SELECT},
                 (
                     SELECT COALESCE(q.adj_close, q.close)
                     FROM asset_quote_daily q
@@ -457,12 +610,24 @@ class AssetApiService:
                     LIMIT 1
                 )
             FROM asset a
+            {_ENRICHED_ASSET_JOIN}
             WHERE a.asset_id = ?
-            """,
+            """.format(
+                _ENRICHED_ASSET_SELECT=_ENRICHED_ASSET_SELECT,
+                _ENRICHED_ASSET_JOIN=_ENRICHED_ASSET_JOIN,
+            ),
             [asset_id],
         ).fetchone()
         if row is None:
             raise LookupError(f"Asset not found: {asset_id}")
+        classification = _cdr_classification_override(
+            asset_id=row[0],
+            symbol=row[1],
+            name=row[6],
+            sector=row[8],
+            industry=row[9],
+            country=row[10],
+        )
         return AssetDetail(
             asset_id=row[0],
             symbol=row[1],
@@ -472,9 +637,9 @@ class AssetApiService:
             currency=row[5],
             name=row[6],
             description=row[7],
-            sector=row[8],
-            industry=row[9],
-            country=row[10],
+            sector=classification["sector"],
+            industry=classification["industry"],
+            country=classification["country"],
             region=row[11],
             size=row[12],
             market_cap=_float_or_none(row[13]),
@@ -907,6 +1072,34 @@ class CommandApiService(BrokerCommands, IngestionCommands):
 
 def _float_or_none(value) -> float | None:
     return float(value) if value is not None else None
+
+
+def _cdr_classification_override(
+    *,
+    asset_id: str,
+    symbol: str,
+    name: str | None,
+    sector: str | None,
+    industry: str | None,
+    country: str | None,
+) -> dict[str, str | None]:
+    base_symbol = _cdr_base_symbol(asset_id, symbol, name)
+    override = _CDR_CLASSIFICATION_OVERRIDES.get(base_symbol)
+    if not override:
+        return {"sector": sector, "industry": industry, "country": country}
+    return {
+        "sector": sector or override["sector"],
+        "industry": industry or override["industry"],
+        "country": override["country"] if country is None or country.upper() == "CA" else country,
+    }
+
+
+def _cdr_base_symbol(asset_id: str, symbol: str, name: str | None) -> str:
+    text = f"{asset_id} {symbol} {name or ''}".lower()
+    if "cdr" not in text and "depositary receipt" not in text:
+        return ""
+    candidate = symbol or asset_id
+    return candidate.split(".", maxsplit=1)[0].upper()
 
 
 def _json_dict(value) -> dict[str, Any]:
