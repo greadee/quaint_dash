@@ -132,6 +132,70 @@ def test_asset_detail_uses_known_cdr_classification_when_underlying_is_missing(t
     assert underlying.json()["is_cdr"] is False
 
 
+def test_portfolio_positions_classify_known_cdr_tickers_without_cdr_name(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name)
+        VALUES ('GOOG.TO', 'GOOG.TO', 'stock', 'CAD', 'Alphabet Inc.')
+        """
+    )
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'broker-ingest')")
+    db.conn.execute(
+        """
+        INSERT INTO txn(portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id)
+        VALUES (1, '2026-01-02 10:00:00', 'buy', 'GOOG.TO', 2, 50, 'CAD', 0, 1)
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        positions = client.get("/api/v1/portfolios/1/positions")
+
+    assert positions.status_code == 200
+    assert positions.json()[0]["sector"] == "Communication Services"
+    assert positions.json()[0]["industry"] == "Internet Content & Information"
+    assert positions.json()[0]["country"] == "US"
+
+
+def test_portfolio_positions_classify_cdr_ticker_aliases(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name)
+        VALUES (
+            'NOWS.TO',
+            'NOWS.TO',
+            'stock',
+            'CAD',
+            'ServiceNow Inc Canadian Depository Receipt (CAD Hedged)'
+        )
+        """
+    )
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'broker-ingest')")
+    db.conn.execute(
+        """
+        INSERT INTO txn(portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id)
+        VALUES (1, '2026-01-02 10:00:00', 'buy', 'NOWS.TO', 2, 50, 'CAD', 0, 1)
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        positions = client.get("/api/v1/portfolios/1/positions")
+
+    assert positions.status_code == 200
+    assert positions.json()[0]["sector"] == "Technology"
+    assert positions.json()[0]["industry"] == "Software - Application"
+    assert positions.json()[0]["country"] == "US"
+
+
 def test_portfolio_position_delete_warns_for_broker_linked_holding(tmp_path):
     db_path = tmp_path / "api.db"
     app = create_app(db_path)

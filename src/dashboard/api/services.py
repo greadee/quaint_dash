@@ -118,11 +118,49 @@ LEFT JOIN asset cdr_underlying ON UPPER(cdr_underlying.asset_id) = UPPER(
 
 
 _CDR_CLASSIFICATION_OVERRIDES = {
+    "AAPL": {"sector": "Technology", "industry": "Consumer Electronics", "country": "US"},
     "AMD": {"sector": "Technology", "industry": "Semiconductors", "country": "US"},
+    "AMZN": {"sector": "Consumer Cyclical", "industry": "Internet Retail", "country": "US"},
+    "ANET": {"sector": "Technology", "industry": "Computer Hardware", "country": "US"},
+    "ASML": {"sector": "Technology", "industry": "Semiconductors", "country": "NL"},
+    "AVGO": {"sector": "Technology", "industry": "Semiconductors", "country": "US"},
+    "GEV": {"sector": "Industrials", "industry": "Electrical Equipment & Parts", "country": "US"},
+    "GOOG": {"sector": "Communication Services", "industry": "Internet Content & Information", "country": "US"},
+    "ISRG": {"sector": "Healthcare", "industry": "Medical Instruments & Supplies", "country": "US"},
+    "LLY": {"sector": "Healthcare", "industry": "Medical - Pharmaceuticals", "country": "US"},
+    "META": {"sector": "Communication Services", "industry": "Internet Content & Information", "country": "US"},
+    "MSFT": {"sector": "Technology", "industry": "Software - Infrastructure", "country": "US"},
+    "MU": {"sector": "Technology", "industry": "Semiconductors", "country": "US"},
+    "NOW": {"sector": "Technology", "industry": "Software - Application", "country": "US"},
+    "NVDA": {"sector": "Technology", "industry": "Semiconductors", "country": "US"},
+    "SPGI": {"sector": "Financial Services", "industry": "Financial Data & Stock Exchanges", "country": "US"},
+    "TSLA": {"sector": "Consumer Cyclical", "industry": "Auto Manufacturers", "country": "US"},
+    "VISA": {"sector": "Financial Services", "industry": "Credit Services", "country": "US"},
 }
 
 _KNOWN_CDR_UNDERLYING_NAMES = {
+    "AAPL": "Apple Inc.",
     "AMD": "Advanced Micro Devices, Inc.",
+    "AMZN": "Amazon.com, Inc.",
+    "ANET": "Arista Networks, Inc.",
+    "ASML": "ASML Holding N.V.",
+    "AVGO": "Broadcom Inc.",
+    "GEV": "GE Vernova Inc.",
+    "GOOG": "Alphabet Inc.",
+    "ISRG": "Intuitive Surgical, Inc.",
+    "LLY": "Eli Lilly and Company",
+    "META": "Meta Platforms, Inc.",
+    "MSFT": "Microsoft Corporation",
+    "MU": "Micron Technology, Inc.",
+    "NOW": "ServiceNow, Inc.",
+    "NVDA": "NVIDIA Corporation",
+    "SPGI": "S&P Global Inc.",
+    "TSLA": "Tesla, Inc.",
+    "VISA": "Visa Inc.",
+}
+
+_CDR_SYMBOL_ALIASES = {
+    "NOWS": "NOW",
 }
 
 
@@ -1105,11 +1143,22 @@ def _cdr_classification_override(
 
 
 def _cdr_base_symbol(asset_id: str, symbol: str, name: str | None) -> str:
+    candidate = symbol or asset_id
+    base = candidate.split(".", maxsplit=1)[0].upper()
+    base = _CDR_SYMBOL_ALIASES.get(base, base)
+    if base in _CDR_CLASSIFICATION_OVERRIDES and _looks_like_cdr_listing(asset_id, symbol, name):
+        return base
     text = f"{asset_id} {symbol} {name or ''}".lower()
     if "cdr" not in text and "depositary receipt" not in text:
         return ""
-    candidate = symbol or asset_id
-    return candidate.split(".", maxsplit=1)[0].upper()
+    return base
+
+
+def _looks_like_cdr_listing(asset_id: str, symbol: str, name: str | None) -> bool:
+    text = f"{asset_id} {symbol} {name or ''}".lower()
+    if "cdr" in text or "depositary receipt" in text or "depository receipt" in text:
+        return True
+    return (symbol or asset_id).upper().endswith(".TO")
 
 
 def _cdr_underlying_asset_id(asset_id: str, symbol: str, name: str | None) -> str | None:
