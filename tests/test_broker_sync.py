@@ -755,6 +755,63 @@ def test_broker_projected_positions_use_transaction_cost_basis(tmp_path):
     assert position_row == (85.0, 464.1)
 
 
+def test_broker_projected_positions_do_not_double_count_imported_transactions(tmp_path):
+    db = DB(str(tmp_path / "broker_projected_no_double_count.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Broker')")
+    repo = BrokerSyncRepository(db.conn)
+    repo.upsert_account(
+        BrokerAccount(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_connection_id="conn-1",
+            account_name="TFSA",
+            account_type="registered",
+            currency="CAD",
+            balance=1000.0,
+            portfolio_id=1,
+        )
+    )
+    repo.upsert_position_snapshot(
+        BrokerPosition(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_position_id="acct-1:MU.TO",
+            symbol="MU.TO",
+            description="Micron CDR",
+            quantity=85.0,
+            market_value=1200.0,
+            currency="CAD",
+            as_of_date=date(2026, 1, 5),
+        )
+    )
+    repo.upsert_transaction(
+        BrokerTransaction(
+            provider="snaptrade",
+            provider_transaction_id="buy-mu",
+            provider_account_id="acct-1",
+            txn_type="BUY",
+            trade_date=date(2025, 12, 1),
+            symbol="MU.TO",
+            quantity=85.0,
+            price=5.46,
+            amount=-464.10,
+            currency="CAD",
+        )
+    )
+    service = BrokerPortfolioIntegrationService(db.conn)
+
+    imported = service.import_mapped_transactions()
+    service.project_account_positions("acct-1", 1)
+
+    position_row = db.conn.execute(
+        "SELECT qty, book_cost FROM position WHERE asset_id = 'MU.TO'"
+    ).fetchone()
+
+    assert imported.imported_transactions == 1
+    assert position_row == (85.0, 464.1)
+
+
 def test_broker_projected_cost_basis_recalculates_existing_position_maps(tmp_path):
     db = DB(str(tmp_path / "broker_projected_cost_recalc.db"))
     init_db(db)

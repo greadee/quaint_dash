@@ -468,6 +468,16 @@ class BrokerPortfolioIntegrationService:
                 FROM txn
                 WHERE txn_type IN ('buy', 'sell')
                   AND asset_id IS NOT NULL
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM broker_portfolio_txn_map tm
+                    JOIN broker_portfolio_position_map pm
+                      ON pm.provider = tm.provider
+                     AND pm.provider_account_id = tm.provider_account_id
+                     AND pm.portfolio_id = txn.portfolio_id
+                     AND pm.asset_id = txn.asset_id
+                    WHERE tm.txn_id = txn.txn_id
+                  )
                 GROUP BY portfolio_id, asset_id
                 UNION ALL
                 SELECT
