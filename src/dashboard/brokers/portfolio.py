@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass, replace
 from datetime import datetime, time
+import json
 from typing import Any
 
 
@@ -100,7 +101,7 @@ class BrokerPortfolioIntegrationService:
                 continue
             normalized = replace(
                 normalized,
-                book_cost=self._book_cost_from_broker_transactions(normalized),
+                book_cost=self._projected_book_cost(normalized),
             )
             self._ensure_position_asset(normalized)
             self._insert_position_mapping(normalized)
@@ -154,7 +155,7 @@ class BrokerPortfolioIntegrationService:
                 book_cost=float(row[6]),
                 currency=row[7],
             )
-            book_cost = self._book_cost_from_broker_transactions(position)
+            book_cost = self._projected_book_cost(position)
             if abs(book_cost - position.book_cost) < 0.0001:
                 continue
             self.conn.execute(
@@ -396,6 +397,39 @@ class BrokerPortfolioIntegrationService:
                 position.currency,
             ],
         )
+
+    def _projected_book_cost(self, position: "_NormalizedBrokerPosition") -> float:
+        return (
+            self._book_cost_from_position_snapshot(position)
+            or self._book_cost_from_broker_transactions(position)
+        )
+
+    def _book_cost_from_position_snapshot(self, position: "_NormalizedBrokerPosition") -> float | None:
+        row = self.conn.execute(
+            """
+            SELECT raw_json
+            FROM broker_position_snapshot
+            WHERE provider = ?
+              AND provider_account_id = ?
+              AND provider_position_id = ?
+            ORDER BY as_of_date DESC
+            LIMIT 1
+            """,
+            [
+                position.provider,
+                position.provider_account_id,
+                position.provider_position_id,
+            ],
+        ).fetchone()
+        if row is None:
+            return None
+        payload = _json_payload(row[0])
+        average_price = _float_or_none(_payload_value(payload, "average_purchase_price"))
+        if average_price is None:
+            average_price = _float_or_none(_payload_value(payload, "averagePrice"))
+        if average_price is None or average_price <= 0:
+            return None
+        return average_price * position.quantity
 
     def _book_cost_from_broker_transactions(self, position: "_NormalizedBrokerPosition") -> float:
         rows = self.conn.execute(
@@ -667,6 +701,18 @@ def _symbol_payload(value) -> dict[str, Any]:
     try:
         payload = ast.literal_eval(normalized)
     except (SyntaxError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _json_payload(value) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if value is None:
+        return {}
+    try:
+        payload = json.loads(str(value))
+    except (TypeError, json.JSONDecodeError):
         return {}
     return payload if isinstance(payload, dict) else {}
 
