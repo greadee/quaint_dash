@@ -590,19 +590,53 @@ function Metric({ icon, label, value, detail, positive }: { icon: React.ReactNod
   return <article className="metric card"><div className="metric-icon">{icon}</div><p>{label}</p><strong>{value}</strong>{detail && <span className={positive ? "positive" : "negative"}>{detail}</span>}</article>;
 }
 function AnalyticsPanel({ payload, isLoading }: { payload?: Record<string, unknown>; isLoading: boolean }) {
-  const report = payload?.report as Record<string, unknown> | undefined;
-  const performance = report?.performance as Record<string, number | null> | undefined;
-  const risk = report?.risk as Record<string, number | null> | undefined;
-  const valuation = report?.valuation as Record<string, number | null> | undefined;
+  const report = payload?.report as AnyRecord | undefined;
+  const performance = record(report?.performance);
+  const risk = record(report?.risk);
+  const decomposition = record(report?.risk_decomposition);
+  const valuation = record(report?.valuation);
+  const forecast = record(report?.forecast);
+  const simulation = record(forecast?.simulation);
+  const aiContext = record(payload?.ai_context);
+  const anomalies = arrayOfRecords(aiContext?.anomalies);
+  const volatilityContributions = arrayOfRecords(decomposition?.volatility_contributions).slice(0, 4);
   const missing = report?.missing_inputs as string[] | undefined;
   return <section className="card">
     <div className="card-heading"><div><p className="eyebrow">Phase 3 analytics</p><h2>Portfolio signals</h2></div><span>{payload?.schema_version as string ?? "loading"}</span></div>
     {isLoading ? <Loading compact /> : (
-      <div className="signal-grid">
-        <Signal label="Modified Dietz" value={percent(performance?.modified_dietz_return)} />
-        <Signal label="Volatility" value={percent(risk?.annualized_volatility)} />
-        <Signal label="Sharpe" value={number(risk?.sharpe_ratio)} />
-        <Signal label="Expected CAGR" value={percent(valuation?.weighted_expected_cagr)} />
+      <div className="analytics-stack">
+        <div className="signal-grid deep">
+          <Signal label="Modified Dietz" value={percent(num(performance?.modified_dietz_return))} />
+          <Signal label="CAGR" value={percent(num(risk?.cagr))} />
+          <Signal label="Volatility" value={percent(num(risk?.annualized_volatility))} />
+          <Signal label="Sharpe" value={number(num(risk?.sharpe_ratio))} />
+          <Signal label="Sortino" value={number(num(risk?.sortino_ratio))} />
+          <Signal label="Max drawdown" value={percent(num(risk?.max_drawdown))} />
+          <Signal label="Expected CAGR" value={percent(num(valuation?.weighted_expected_cagr))} />
+          <Signal label="Dividend yield" value={percent(num(valuation?.weighted_dividend_yield))} />
+        </div>
+        <div className="analytics-detail-grid">
+          <AnalyticsBlock title="Concentration">
+            <MetricLine label="Largest holding" value={percent(num(decomposition?.largest_position_weight))} />
+            <MetricLine label="Effective assets" value={number(num(decomposition?.effective_asset_count), 1)} />
+            <MetricLine label="Diversification" value={number(num(decomposition?.diversification_score), 1)} />
+            <MetricLine label="Average correlation" value={number(num(decomposition?.average_pairwise_correlation), 2)} />
+          </AnalyticsBlock>
+          <AnalyticsBlock title="Exposure">
+            <ExposureBars values={record(decomposition?.sector_exposure)} />
+            <ExposureBars values={record(decomposition?.country_exposure)} />
+          </AnalyticsBlock>
+          <AnalyticsBlock title="Risk contributors">
+            {volatilityContributions.length ? volatilityContributions.map((item) => <MetricLine key={String(item.asset_id)} label={String(item.asset_id)} value={percent(num(item.percent_of_portfolio_volatility))} />) : <span className="muted-copy">No volatility contribution data yet.</span>}
+          </AnalyticsBlock>
+          <AnalyticsBlock title="Forecast">
+            <MetricLine label="5y median" value={money(num(simulation?.p50_value))} />
+            <MetricLine label="10th percentile" value={money(num(simulation?.p10_value))} />
+            <MetricLine label="90th percentile" value={money(num(simulation?.p90_value))} />
+            <MetricLine label="Blended CAGR" value={percent(num(forecast?.blended_expected_cagr))} />
+          </AnalyticsBlock>
+        </div>
+        {anomalies.length ? <InsightList items={anomalies.map((item) => `${String(item.severity).toUpperCase()}: ${String(item.message)}`)} /> : null}
         {missing?.length ? <p className="missing-inputs">Missing inputs: {missing.slice(0, 3).join(", ")}</p> : <p className="missing-inputs good">Analytics inputs look complete for this report.</p>}
       </div>
     )}
@@ -613,11 +647,16 @@ function Signal({ label, value }: { label: string; value: string }) {
 }
 
 function AssetAnalyticsPanel({ payload, isLoading }: { payload?: Record<string, unknown>; isLoading: boolean }) {
-  const report = payload?.report as Record<string, unknown> | undefined;
-  const risk = report?.risk as Record<string, number | null> | undefined;
-  const relative = report?.relative as Record<string, number | null> | undefined;
-  const valuation = report?.valuation_depth as Record<string, number | null | string[] | undefined> | undefined;
-  const forecast = report?.forecast as Record<string, number | null | string[] | undefined> | undefined;
+  const report = payload?.report as AnyRecord | undefined;
+  const risk = record(report?.risk);
+  const relative = record(report?.relative);
+  const valuation = record(report?.valuation_depth);
+  const dividend = record(report?.dividend_discount);
+  const dcf = record(report?.discounted_cash_flow);
+  const forecast = record(report?.forecast);
+  const simulation = record(forecast?.simulation);
+  const aiContext = record(payload?.ai_context);
+  const anomalies = arrayOfRecords(aiContext?.anomalies);
   const missing = [
     ...((valuation?.missing_inputs as string[] | undefined) ?? []),
     ...((forecast?.missing_inputs as string[] | undefined) ?? []),
@@ -625,17 +664,76 @@ function AssetAnalyticsPanel({ payload, isLoading }: { payload?: Record<string, 
   return <section className="card asset-analytics-card">
     <div className="card-heading"><div><p className="eyebrow">Phase 3 analytics</p><h2>Asset signals</h2></div><span>{payload?.schema_version as string ?? "loading"}</span></div>
     {isLoading ? <Loading compact /> : (
-      <div className="signal-grid">
-        <Signal label="Historical CAGR" value={percent(risk?.cagr)} />
-        <Signal label="Volatility" value={percent(risk?.annualized_volatility)} />
-        <Signal label="Sharpe" value={number(risk?.sharpe_ratio)} />
-        <Signal label="Beta" value={number(relative?.beta)} />
-        <Signal label="P/E" value={number(valuation?.pe_ratio as number | null | undefined)} />
-        <Signal label="Expected CAGR" value={percent(forecast?.expected_cagr_from_valuation as number | null | undefined)} />
+      <div className="analytics-stack">
+        <div className="signal-grid deep">
+          <Signal label="Historical CAGR" value={percent(num(risk?.cagr))} />
+          <Signal label="Volatility" value={percent(num(risk?.annualized_volatility))} />
+          <Signal label="Sharpe" value={number(num(risk?.sharpe_ratio))} />
+          <Signal label="Sortino" value={number(num(risk?.sortino_ratio))} />
+          <Signal label="Max drawdown" value={percent(num(risk?.max_drawdown))} />
+          <Signal label="Beta" value={number(num(relative?.beta))} />
+          <Signal label="P/E" value={number(num(valuation?.pe_ratio))} />
+          <Signal label="Blended CAGR" value={percent(num(forecast?.blended_expected_cagr))} />
+        </div>
+        <div className="analytics-detail-grid">
+          <AnalyticsBlock title="Risk profile">
+            <MetricLine label="Best day" value={percent(num(risk?.best_daily_return))} />
+            <MetricLine label="Worst day" value={percent(num(risk?.worst_daily_return))} />
+            <MetricLine label="Alpha" value={percent(num(relative?.alpha_annualized))} />
+            <MetricLine label="Correlation" value={number(num(relative?.correlation), 2)} />
+          </AnalyticsBlock>
+          <AnalyticsBlock title="Valuation">
+            <MetricLine label="DCF fair value" value={money(num(dcf?.intrinsic_value_per_share))} />
+            <MetricLine label="DCF safety" value={percent(num(dcf?.margin_of_safety))} />
+            <MetricLine label="DDM fair value" value={money(num(dividend?.intrinsic_value_per_share))} />
+            <MetricLine label="P/FCF" value={number(num(valuation?.price_to_free_cash_flow))} />
+          </AnalyticsBlock>
+          <AnalyticsBlock title="Quality">
+            <MetricLine label="Gross margin" value={percent(num(valuation?.gross_margin))} />
+            <MetricLine label="Net margin" value={percent(num(valuation?.net_margin))} />
+            <MetricLine label="ROE" value={percent(num(valuation?.return_on_equity))} />
+            <MetricLine label="Debt/equity" value={number(num(valuation?.debt_to_equity))} />
+          </AnalyticsBlock>
+          <AnalyticsBlock title="Forecast band">
+            <MetricLine label="5y median" value={money(num(simulation?.p50_value))} />
+            <MetricLine label="10th percentile" value={money(num(simulation?.p10_value))} />
+            <MetricLine label="90th percentile" value={money(num(simulation?.p90_value))} />
+            <MetricLine label="Expected value" value={money(num(simulation?.expected_value))} />
+          </AnalyticsBlock>
+        </div>
+        {anomalies.length ? <InsightList items={anomalies.map((item) => `${String(item.severity).toUpperCase()}: ${String(item.message)}`)} /> : null}
         {missing.length ? <p className="missing-inputs">Missing inputs: {Array.from(new Set(missing)).slice(0, 4).join(", ")}</p> : <p className="missing-inputs good">Asset analytics inputs look complete for this report.</p>}
       </div>
     )}
   </section>;
+}
+type AnyRecord = Record<string, unknown>;
+function record(value: unknown): AnyRecord {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as AnyRecord : {};
+}
+function arrayOfRecords(value: unknown): AnyRecord[] {
+  return Array.isArray(value) ? value.filter((item): item is AnyRecord => Boolean(item) && typeof item === "object" && !Array.isArray(item)) : [];
+}
+function num(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+function AnalyticsBlock({ title, children }: { title: string; children: React.ReactNode }) {
+  return <div className="analytics-block"><strong>{title}</strong><div>{children}</div></div>;
+}
+function MetricLine({ label, value }: { label: string; value: string }) {
+  return <p className="metric-line"><span>{label}</span><b>{value}</b></p>;
+}
+function ExposureBars({ values }: { values: AnyRecord }) {
+  const entries = Object.entries(values)
+    .map(([label, value]) => ({ label, value: num(value) ?? 0 }))
+    .filter((item) => item.value > 0)
+    .sort((left, right) => right.value - left.value)
+    .slice(0, 4);
+  if (!entries.length) return <span className="muted-copy">No exposure data yet.</span>;
+  return <div className="exposure-bars">{entries.map((item) => <div key={item.label}><p><span>{item.label}</span><b>{percent(item.value)}</b></p><div className="bar"><span style={{ width: `${Math.max(item.value * 100, 2)}%` }} /></div></div>)}</div>;
+}
+function InsightList({ items }: { items: string[] }) {
+  return <div className="analytics-insights">{items.slice(0, 3).map((item) => <p key={item}>{item}</p>)}</div>;
 }
 function AggregatePanel() {
   return <section className="card">
