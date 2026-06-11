@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from dashboard.api.dependencies import get_connection
+from dashboard.api.ingestion_background import IngestionBackgroundConfig, IngestionBackgroundWorker
 from dashboard.api.models import ErrorResponse, HealthResponse
 from dashboard.api.routes import router
 from dashboard.brokers.snaptrade import SnapTradeError
@@ -42,7 +43,12 @@ def create_app(
             _run_startup_broker_sync_if_enabled(app.state.db_path)
         except Exception as exc:
             LOGGER.warning("Broker sync scheduler skipped during API startup: %s", exc)
-        yield
+        worker = app.state.ingestion_background_worker
+        worker.start()
+        try:
+            yield
+        finally:
+            await worker.stop()
 
     app = FastAPI(
         title="Quaint Dash API",
@@ -54,6 +60,11 @@ def create_app(
     app.state.db_path = resolved_db_path
     app.state.write_lock = Lock()
     app.state.web_dist = Path(web_dist)
+    app.state.ingestion_background_worker = IngestionBackgroundWorker(
+        resolved_db_path,
+        app.state.write_lock,
+        IngestionBackgroundConfig.from_env(),
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[os.getenv("DASHBOARD_WEB_DEV_ORIGIN", "http://127.0.0.1:5173")],

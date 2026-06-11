@@ -203,6 +203,33 @@ class IngestionCommands:
 
         raise ValueError(f"Unsupported ingestion pipeline: {pipeline}")
 
+    def schedule_due_routine_ingestion_jobs(
+        self,
+        max_assets: int = 25,
+        years: int = 10,
+        prices_only: bool = False,
+    ) -> int:
+        """
+        Schedule routine background-safe ingestion work.
+
+        This intentionally excludes historical backfills, provider-sensitive
+        news/social refreshes, retries, and broker work. Those remain explicit
+        Operations actions.
+        """
+        include_dividends = not prices_only
+        include_splits = not prices_only
+        total = 0
+        total += self.schedule_due_market_refreshes(
+            max_assets=max_assets,
+            include_dividends=include_dividends,
+            include_splits=include_splits,
+        )
+        total += self.schedule_due_corporate_calendar_refresh()
+        total += self.schedule_due_corporate_fundamental_updates(max_assets=max_assets)
+        total += self.schedule_due_fundamental_refreshes(max_assets=max_assets)
+        total += self.schedule_due_sentiment_snapshot_refreshes(max_assets=max_assets)
+        return total
+
     def run_ingestion_jobs(self, domain: str = "all", max_jobs: int = 1) -> int:
         """
         Process pending ingestion jobs through the shared dev command surface.
@@ -503,6 +530,46 @@ class IngestionCommands:
 
         return total_jobs
 
+    def schedule_due_market_refreshes(
+        self,
+        max_assets: int = 25,
+        include_dividends: bool = True,
+        include_splits: bool = True,
+    ) -> int:
+        asset_ids = TickerUniverseRepository(self.conn).ingestible_asset_ids()
+        if not asset_ids:
+            return 0
+
+        placeholders = ", ".join("?" for _ in asset_ids)
+        rows = self.conn.execute(
+            f"""
+            SELECT a.asset_id
+            FROM asset a
+            WHERE a.asset_id IN ({placeholders})
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM ingestion_job j
+                  WHERE j.asset_id = a.asset_id
+                    AND j.domain = 'market'
+                    AND j.job_type = 'refresh'
+                    AND j.dataset IN ('price_daily', 'dividends', 'splits')
+                    AND j.status IN ('pending', 'running')
+              )
+            ORDER BY a.asset_id
+            LIMIT ?
+            """,
+            [*asset_ids, max_assets],
+        ).fetchall()
+
+        total_jobs = 0
+        for row in rows:
+            total_jobs += self.enqueue_market_refresh(
+                asset_id=row[0],
+                include_dividends=include_dividends,
+                include_splits=include_splits,
+            )
+        return total_jobs
+
     def run_price_history_backfill_jobs(self, max_jobs: int = 1) -> int:
         service = _price_history_service(self.conn)
         return service.process_backfill_jobs(max_jobs=max_jobs)
@@ -637,6 +704,109 @@ class IngestionCommands:
                 max_assets=max_assets,
             )
         )
+
+    def schedule_due_sentiment_snapshot_refreshes(self, max_assets: int = 25) -> int:
+        """
+        Schedule local sentiment aggregates, factor snapshots, and quant ratings.
+        """
+        from dashboard.ingestion_sentiment.constants import (
+            DATASET_FACTOR_SNAPSHOT,
+            DATASET_QUANT_RATING,
+            DATASET_SENTIMENT_DAILY,
+            JOB_TYPE_FACTOR_SNAPSHOT_REFRESH,
+            JOB_TYPE_QUANT_RATING_REFRESH,
+            JOB_TYPE_SENTIMENT_DAILY_AGGREGATE,
+            PRIORITY_DAILY_AGGREGATE,
+            PRIORITY_FACTOR_REFRESH,
+            PRIORITY_QUANT_REFRESH,
+        )
+        from dashboard.ingestion_sentiment.repo import SentimentIngestionRepository
+
+        asset_ids = TickerUniverseRepository(self.conn).ingestible_asset_ids()
+        if not asset_ids:
+            return 0
+
+        repo = SentimentIngestionRepository(self.conn)
+        snapshot_date = date.today()
+        total = 0
+        specs = [
+            (
+                JOB_TYPE_SENTIMENT_DAILY_AGGREGATE,
+                DATASET_SENTIMENT_DAILY,
+                PRIORITY_DAILY_AGGREGATE,
+                "ticker_sentiment_daily",
+            ),
+            (
+                JOB_TYPE_FACTOR_SNAPSHOT_REFRESH,
+                DATASET_FACTOR_SNAPSHOT,
+                PRIORITY_FACTOR_REFRESH,
+                "ticker_factor_snapshot",
+            ),
+            (
+                JOB_TYPE_QUANT_RATING_REFRESH,
+                DATASET_QUANT_RATING,
+                PRIORITY_QUANT_REFRESH,
+                "ticker_quant_rating_snapshot",
+            ),
+        ]
+
+        for job_type, dataset, priority, table_name in specs:
+            rows = self._due_sentiment_snapshot_assets(
+                asset_ids=asset_ids,
+                dataset=dataset,
+                job_type=job_type,
+                table_name=table_name,
+                snapshot_date=snapshot_date,
+                max_assets=max_assets,
+            )
+            for asset_id in rows:
+                repo.create_job(
+                    asset_id=asset_id,
+                    job_type=job_type,
+                    dataset=dataset,
+                    priority=priority,
+                    start_date=snapshot_date,
+                    end_date=snapshot_date,
+                )
+                total += 1
+        return total
+
+    def _due_sentiment_snapshot_assets(
+        self,
+        asset_ids: list[str],
+        dataset: str,
+        job_type: str,
+        table_name: str,
+        snapshot_date: date,
+        max_assets: int,
+    ) -> list[str]:
+        placeholders = ", ".join("?" for _ in asset_ids)
+        rows = self.conn.execute(
+            f"""
+            SELECT a.asset_id
+            FROM asset a
+            WHERE a.asset_id IN ({placeholders})
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM ingestion_job j
+                  WHERE j.asset_id = a.asset_id
+                    AND j.domain = 'sentiment'
+                    AND j.dataset = ?
+                    AND j.job_type = ?
+                    AND j.status IN ('pending', 'running')
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM {table_name} s
+                  WHERE s.asset_id = a.asset_id
+                    AND s.snapshot_date = ?
+              )
+            ORDER BY a.asset_id
+            LIMIT ?
+            """,
+            [*asset_ids, dataset, job_type, snapshot_date, max_assets],
+        ).fetchall()
+        return [row[0] for row in rows]
 
     def run_corporate_ingestion_jobs(self, max_jobs: int = 1) -> int:
         """

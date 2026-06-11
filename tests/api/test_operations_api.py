@@ -1,8 +1,12 @@
+import asyncio
 from datetime import date
+from threading import Lock
 
 from fastapi.testclient import TestClient
 
+from dashboard.api.ingestion_background import IngestionBackgroundConfig, IngestionBackgroundWorker
 from dashboard.api.app import create_app
+from dashboard.api.services import CommandApiService
 from dashboard.brokers.models import BrokerAccount, BrokerConnection, BrokerPosition
 from dashboard.brokers.repository import BrokerSyncRepository
 from dashboard.brokers.secrets import LocalSecretCipher
@@ -237,6 +241,113 @@ def test_ingestion_job_list_and_bounded_empty_run(tmp_path):
     assert jobs.json()[0]["dataset"] == "daily_prices"
     assert invalid.status_code == 422
     assert invalid.json()["error"]["code"] == "validation_error"
+
+
+def test_ingestion_background_status_defaults_disabled(tmp_path):
+    app = create_app(tmp_path / "api.db")
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/ingestion/background/status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "enabled": False,
+        "running": False,
+        "last_schedule_at": None,
+        "last_schedule_count": None,
+        "last_run_at": None,
+        "last_completed_count": None,
+        "last_error": None,
+        "schedule_interval_seconds": 3600,
+        "run_interval_seconds": 300,
+        "max_jobs_per_tick": 2,
+        "max_assets_per_schedule": 25,
+        "years": 10,
+        "prices_only": False,
+    }
+
+
+def test_ingestion_background_disabled_state_does_not_schedule_or_run(tmp_path, monkeypatch):
+    calls: list[str] = []
+
+    def fail_schedule(self, *args, **kwargs):
+        calls.append("schedule")
+        raise AssertionError("disabled worker should not schedule")
+
+    def fail_run(self, *args, **kwargs):
+        calls.append("run")
+        raise AssertionError("disabled worker should not run")
+
+    monkeypatch.setattr(CommandApiService, "schedule_due_routine_ingestion_jobs", fail_schedule)
+    monkeypatch.setattr(CommandApiService, "run_ingestion_jobs", fail_run)
+
+    worker = IngestionBackgroundWorker(
+        tmp_path / "api.db",
+        Lock(),
+        IngestionBackgroundConfig(enabled=False),
+    )
+    worker.start()
+
+    assert worker.status()["running"] is False
+    assert calls == []
+
+
+def test_ingestion_background_enabled_tick_uses_capped_schedule_and_run(tmp_path, monkeypatch):
+    calls: list[tuple[str, dict]] = []
+
+    def fake_schedule(self, **kwargs):
+        calls.append(("schedule", kwargs))
+        return 4
+
+    def fake_run(self, **kwargs):
+        calls.append(("run", kwargs))
+        return 2
+
+    monkeypatch.setattr(CommandApiService, "schedule_due_routine_ingestion_jobs", fake_schedule)
+    monkeypatch.setattr(CommandApiService, "run_ingestion_jobs", fake_run)
+
+    worker = IngestionBackgroundWorker(
+        tmp_path / "api.db",
+        Lock(),
+        IngestionBackgroundConfig(
+            enabled=True,
+            max_assets_per_schedule=7,
+            years=3,
+            prices_only=True,
+            max_jobs_per_tick=2,
+        ),
+    )
+
+    assert asyncio.run(worker.tick_schedule()) == 4
+    assert asyncio.run(worker.tick_run()) == 2
+
+    assert calls == [
+        (
+            "schedule",
+            {"max_assets": 7, "years": 3, "prices_only": True},
+        ),
+        ("run", {"domain": "all", "max_jobs": 2}),
+    ]
+    status = worker.status()
+    assert status["last_schedule_count"] == 4
+    assert status["last_completed_count"] == 2
+    assert status["last_error"] is None
+
+
+def test_ingestion_background_errors_are_captured(tmp_path, monkeypatch):
+    def fail_schedule(self, **kwargs):
+        raise RuntimeError("provider missing")
+
+    monkeypatch.setattr(CommandApiService, "schedule_due_routine_ingestion_jobs", fail_schedule)
+
+    worker = IngestionBackgroundWorker(
+        tmp_path / "api.db",
+        Lock(),
+        IngestionBackgroundConfig(enabled=True),
+    )
+
+    assert asyncio.run(worker.tick_schedule()) == 0
+    assert worker.status()["last_error"] == "provider missing"
 
 
 def test_retry_failed_ingestion_jobs_requeues_bounded_failures(tmp_path):

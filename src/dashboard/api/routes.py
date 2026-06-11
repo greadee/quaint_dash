@@ -22,6 +22,7 @@ from dashboard.api.models import (
     BrokerUserResponse,
     ComparisonResponse,
     IngestionJobResponse,
+    IngestionBackgroundStatusResponse,
     IngestionRetryFailedRequest,
     IngestionRunRequest,
     IngestionScheduleRequest,
@@ -260,6 +261,11 @@ def ingestion_jobs(
     conn=Depends(get_connection),
 ):
     return CommandApiService(conn).ingestion_jobs(job_status, domain, limit)
+
+
+@router.get("/ingestion/background/status", response_model=IngestionBackgroundStatusResponse)
+def ingestion_background_status(request: Request):
+    return request.app.state.ingestion_background_worker.status()
 
 
 @router.post("/ingestion/schedule", response_model=ActionResult)
