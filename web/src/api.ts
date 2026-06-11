@@ -369,6 +369,29 @@ export type IngestionBackgroundStatus = {
   years: number;
   prices_only: boolean;
 };
+export type IngestionRequirementStatus = {
+  key: string;
+  label: string;
+  ready: boolean;
+  detail: string;
+  row_count: number;
+  latest_date: string | null;
+  open_jobs: number;
+  last_error: string | null;
+};
+export type IngestionAssetReadiness = {
+  asset_id: string;
+  symbol: string;
+  asset_type: string | null;
+  ready: boolean;
+  missing: string[];
+  requirements: IngestionRequirementStatus[];
+};
+export type IngestionReadiness = {
+  items: IngestionAssetReadiness[];
+  total: number;
+  ready_count: number;
+};
 export type ActionResult = { status: string; result: Record<string, unknown> };
 export type BrokerPortalPayload = { user_key: string; broker?: string | null; reconnect?: string | null };
 export type IngestionSchedulePayload = {
@@ -528,6 +551,7 @@ export const api = {
     return request<IngestionJob[]>(`/ingestion/jobs?${params.toString()}`);
   },
   ingestionBackgroundStatus: () => request<IngestionBackgroundStatus>("/ingestion/background/status"),
+  ingestionReadiness: () => request<IngestionReadiness>("/ingestion/readiness"),
   scheduleIngestion: (payload: IngestionSchedulePayload) =>
     request<ActionResult>("/ingestion/schedule", { method: "POST", body: JSON.stringify(payload) }),
   runIngestion: (payload: IngestionRunPayload) =>

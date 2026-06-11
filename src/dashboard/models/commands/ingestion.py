@@ -18,6 +18,22 @@ def _price_history_service(conn):
     return storage.PriceHistoryIngestionService(conn)
 
 
+def _scoped_ingestible_asset_ids(
+    conn,
+    asset_id: str | None = None,
+    asset_types: tuple[str, ...] | None = None,
+) -> list[str]:
+    asset_ids = TickerUniverseRepository(conn).ingestible_asset_ids(
+        include_watchlist=True,
+        asset_types=asset_types,
+    )
+    if asset_id is None:
+        return asset_ids
+
+    normalized = asset_id.upper().strip()
+    return [normalized] if normalized in set(asset_ids) else []
+
+
 class IngestionCommands:
     def enqueue_market_backfill(
         self,
@@ -144,23 +160,66 @@ class IngestionCommands:
 
         if asset_id is not None and asset_id.lower() == "all":
             asset_id = None
+        asset_id = asset_id.upper().strip() if asset_id else None
 
         if pipeline == "all":
             total = 0
             total += self.schedule_due_price_history_backfills(
                 max_assets=max_assets,
                 years=years,
+                asset_id=asset_id,
             )
-            total += self.enqueue_market_refresh(
-                asset_id=None,
+            total += self.schedule_due_market_refreshes(
+                max_assets=max_assets,
+                asset_id=asset_id,
                 include_dividends=include_dividends,
                 include_splits=include_splits,
             )
-            total += self.schedule_due_corporate_calendar_refresh()
-            total += self.schedule_due_corporate_fundamental_updates(max_assets=max_assets)
-            total += self.schedule_due_fundamental_backfills(max_assets=max_assets)
-            total += self.schedule_due_fundamental_refreshes(max_assets=max_assets)
+            if asset_id is None:
+                total += self.schedule_due_corporate_calendar_refresh()
+                total += self.schedule_due_corporate_fundamental_updates(max_assets=max_assets)
+            total += self.schedule_due_fundamental_backfills(
+                max_assets=max_assets,
+                asset_id=asset_id,
+            )
+            total += self.schedule_due_fundamental_refreshes(
+                max_assets=max_assets,
+                asset_id=asset_id,
+            )
             return total
+
+        if pipeline == "market":
+            total = 0
+            total += self.schedule_due_price_history_backfills(
+                max_assets=max_assets,
+                years=years,
+                asset_id=asset_id,
+            )
+            total += self.schedule_due_market_refreshes(
+                max_assets=max_assets,
+                asset_id=asset_id,
+                include_dividends=include_dividends,
+                include_splits=include_splits,
+            )
+            return total
+
+        if pipeline == "corporate":
+            total = 0
+            if asset_id is None:
+                total += self.schedule_due_corporate_calendar_refresh()
+                total += self.schedule_due_corporate_fundamental_updates(max_assets=max_assets)
+            total += self.schedule_due_fundamental_backfills(
+                max_assets=max_assets,
+                asset_id=asset_id,
+            )
+            total += self.schedule_due_fundamental_refreshes(
+                max_assets=max_assets,
+                asset_id=asset_id,
+            )
+            return total
+
+        if pipeline == "sentiment":
+            return self.schedule_due_sentiment_snapshot_refreshes(max_assets=max_assets)
 
         if pipeline == "price-backfill":
             return self.enqueue_market_backfill(
@@ -174,6 +233,7 @@ class IngestionCommands:
             return self.schedule_due_price_history_backfills(
                 max_assets=max_assets,
                 years=years,
+                asset_id=asset_id,
             )
 
         if pipeline == "price-refresh":
@@ -190,10 +250,16 @@ class IngestionCommands:
             return self.schedule_due_corporate_fundamental_updates(max_assets=max_assets)
 
         if pipeline == "fundamentals-backfill":
-            return self.schedule_due_fundamental_backfills(max_assets=max_assets)
+            return self.schedule_due_fundamental_backfills(
+                max_assets=max_assets,
+                asset_id=asset_id,
+            )
 
         if pipeline == "fundamentals-refresh":
-            return self.schedule_due_fundamental_refreshes(max_assets=max_assets)
+            return self.schedule_due_fundamental_refreshes(
+                max_assets=max_assets,
+                asset_id=asset_id,
+            )
 
         if pipeline == "metadata":
             return self.refresh_due_asset_metadata(max_assets=max_assets)
@@ -480,8 +546,13 @@ class IngestionCommands:
         synced = importer.import_asset_ids(asset_ids)
         return len(synced)
 
-    def schedule_due_price_history_backfills(self, max_assets: int = 3, years: int = 10) -> int:
-        asset_ids = TickerUniverseRepository(self.conn).ingestible_asset_ids()
+    def schedule_due_price_history_backfills(
+        self,
+        max_assets: int = 3,
+        years: int = 10,
+        asset_id: str | None = None,
+    ) -> int:
+        asset_ids = _scoped_ingestible_asset_ids(self.conn, asset_id=asset_id)
         if not asset_ids:
             return 0
 
@@ -533,10 +604,11 @@ class IngestionCommands:
     def schedule_due_market_refreshes(
         self,
         max_assets: int = 25,
+        asset_id: str | None = None,
         include_dividends: bool = True,
         include_splits: bool = True,
     ) -> int:
-        asset_ids = TickerUniverseRepository(self.conn).ingestible_asset_ids()
+        asset_ids = _scoped_ingestible_asset_ids(self.conn, asset_id=asset_id)
         if not asset_ids:
             return 0
 
@@ -672,6 +744,7 @@ class IngestionCommands:
     def schedule_due_fundamental_backfills(
         self,
         max_assets: int = 25,
+        asset_id: str | None = None,
     ) -> int:
         """
         Schedule historical financial-statement backfills for subscribed assets.
@@ -684,12 +757,14 @@ class IngestionCommands:
         return len(
             service.schedule_due_fundamental_subscription_backfills(
                 max_assets=max_assets,
+                asset_id=asset_id,
             )
         )
 
     def schedule_due_fundamental_refreshes(
         self,
         max_assets: int = 25,
+        asset_id: str | None = None,
     ) -> int:
         """
         Schedule recurring financial-statement refreshes for subscribed assets.
@@ -702,6 +777,7 @@ class IngestionCommands:
         return len(
             service.schedule_due_fundamental_subscription_refreshes(
                 max_assets=max_assets,
+                asset_id=asset_id,
             )
         )
 

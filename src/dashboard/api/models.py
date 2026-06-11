@@ -493,6 +493,32 @@ class IngestionBackgroundStatusResponse(BaseModel):
     prices_only: bool
 
 
+class IngestionRequirementStatus(BaseModel):
+    key: str
+    label: str
+    ready: bool
+    detail: str
+    row_count: int = 0
+    latest_date: date | None = None
+    open_jobs: int = 0
+    last_error: str | None = None
+
+
+class IngestionAssetReadiness(BaseModel):
+    asset_id: str
+    symbol: str
+    asset_type: str | None = None
+    ready: bool
+    missing: list[str] = Field(default_factory=list)
+    requirements: list[IngestionRequirementStatus] = Field(default_factory=list)
+
+
+class IngestionReadinessResponse(BaseModel):
+    items: list[IngestionAssetReadiness]
+    total: int
+    ready_count: int
+
+
 class IngestionScheduleRequest(BaseModel):
     pipeline: str = "all"
     asset_id: str | None = None

@@ -502,3 +502,68 @@ def test_overview_updates_include_movers_and_news(tmp_path):
     assert payload["price_movers"][0]["change_percent"] == 0.25
     assert payload["news"][0]["title"] == "Apple updates guidance"
     assert payload["news"][0]["symbol"] == "AAPL"
+
+
+def test_overview_updates_returns_all_price_movers(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    for index in range(9):
+        asset_id = f"T{index}"
+        db.conn.execute(
+            "INSERT INTO asset(asset_id, symbol, asset_type, ccy, name) VALUES (?, ?, 'stock', 'USD', ?)",
+            [asset_id, asset_id, f"Ticker {index}"],
+        )
+        db.conn.execute(
+            """
+            INSERT INTO txn(portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id)
+            VALUES (1, '2026-01-02 10:00:00', 'buy', ?, 1, 100, 'USD', 0, 1)
+            """,
+            [asset_id],
+        )
+        db.conn.execute(
+            """
+            INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+            VALUES
+                (?, '2026-01-02', 100, 100, 'test'),
+                (?, '2026-01-03', ?, ?, 'test')
+            """,
+            [asset_id, asset_id, 101 + index, 101 + index],
+        )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/overview/updates")
+
+    assert response.status_code == 200
+    assert response.json()["mover_count"] == 9
+    assert len(response.json()["price_movers"]) == 9
+
+
+def test_portfolio_positions_normalize_object_like_currency_code(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name)
+        VALUES ('CADHOLD', 'CADHOLD', 'stock', '{''CODE'': ''CAD'', ''NAME'': ''CANADIAN DOLLAR''}', 'CAD Holding')
+        """
+    )
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO txn(portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id)
+        VALUES (1, '2026-01-02 10:00:00', 'buy', 'CADHOLD', 1, 100, 'CAD', 0, 1)
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/portfolios/1/positions")
+
+    assert response.status_code == 200
+    assert response.json()[0]["currency"] == "CAD"

@@ -18,6 +18,7 @@ import {
   RefreshCw,
   Save,
   Search,
+  Settings,
   ShieldCheck,
   Trash2,
   WalletCards,
@@ -36,18 +37,55 @@ import {
   type BenchmarkIndexSummary,
   type BenchmarkPricePoint,
   type ComparisonAsset,
+  type IngestionReadiness,
   type IngestionBackgroundStatus,
   type Position,
 } from "./api";
 
-const money = (value: number | null | undefined, currency = "CAD") =>
-  value == null
-    ? "Unavailable"
-    : new Intl.NumberFormat("en-CA", { style: "currency", currency, maximumFractionDigits: 0 }).format(value);
 const percent = (value: number | null | undefined) =>
   value == null ? "Unavailable" : `${(value * 100).toFixed(1)}%`;
 const number = (value: number | null | undefined, digits = 2) =>
   value == null ? "Unavailable" : value.toFixed(digits);
+const cleanCurrency = (value: string | null | undefined, fallback = "CAD") => {
+  if (!value) return fallback;
+  const direct = value.trim().toUpperCase();
+  if (/^[A-Z]{3}$/.test(direct)) return direct;
+  const match = direct.match(/['"]?CODE['"]?\s*:\s*['"]?([A-Z]{3})['"]?/);
+  return match?.[1] ?? fallback;
+};
+const formatMoney = (value: number | null | undefined, currency = "CAD") =>
+  value == null
+    ? "Unavailable"
+    : new Intl.NumberFormat("en-CA", {
+      style: "currency",
+      currency: cleanCurrency(currency),
+      maximumFractionDigits: 0,
+    }).format(value);
+const money = formatMoney;
+type ThemeMode = "light" | "dark";
+type MoverDefault = "8" | "all";
+type AppSettings = {
+  theme: ThemeMode;
+  moverDefault: MoverDefault;
+  density: "comfortable" | "compact";
+  featureColor: boolean;
+};
+const defaultAppSettings: AppSettings = {
+  theme: "light",
+  moverDefault: "8",
+  density: "comfortable",
+  featureColor: true,
+};
+const loadAppSettings = (): AppSettings => {
+  try {
+    const raw = window.localStorage.getItem("quaint_dash_app_settings");
+    if (!raw) return defaultAppSettings;
+    const parsed = JSON.parse(raw) as Partial<AppSettings>;
+    return { ...defaultAppSettings, ...parsed };
+  } catch {
+    return defaultAppSettings;
+  }
+};
 const friendlyBrokerError = (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
   const lower = message.toLowerCase();
@@ -65,9 +103,20 @@ const friendlyBrokerError = (error: unknown) => {
 
 export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [settings, setSettings] = useState<AppSettings>(loadAppSettings);
   const location = useLocation();
+  const updateSettings = (next: Partial<AppSettings>) => {
+    setSettings((current) => {
+      const updated = { ...current, ...next };
+      window.localStorage.setItem("quaint_dash_app_settings", JSON.stringify(updated));
+      return updated;
+    });
+  };
+  useEffect(() => {
+    document.documentElement.dataset.theme = settings.theme;
+  }, [settings.theme]);
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${settings.density === "compact" ? "density-compact" : ""} ${settings.featureColor ? "" : "feature-muted"}`}>
       <aside className={menuOpen ? "sidebar sidebar-open" : "sidebar"}>
         <div className="brand"><ChartNoAxesCombined size={21} /><span>Quaint Dash</span></div>
         <button className="mobile-close" onClick={() => setMenuOpen(false)}><X /></button>
@@ -78,6 +127,7 @@ export default function App() {
           <NavLink to="/benchmarks"><Search />Benchmarks</NavLink>
           <NavLink to="/brokers"><Building2 />Brokers</NavLink>
           <NavLink to="/operations"><Database />Operations</NavLink>
+          <NavLink to="/settings"><Settings />Settings</NavLink>
         </nav>
         <div className="sidebar-note"><span className="status-dot" />Local API connected</div>
       </aside>
@@ -89,13 +139,14 @@ export default function App() {
         </header>
         <RouteErrorBoundary key={location.pathname}>
           <Routes>
-            <Route path="/" element={<OverviewPage />} />
+            <Route path="/" element={<OverviewPage moverDefault={settings.moverDefault} />} />
             <Route path="/portfolios" element={<PortfoliosPage />} />
             <Route path="/compare" element={<ComparePage />} />
             <Route path="/benchmarks" element={<BenchmarkBrowserPage />} />
             <Route path="/asset/:assetId" element={<AssetPage />} />
             <Route path="/brokers" element={<BrokersPage />} />
             <Route path="/operations" element={<OperationsPage />} />
+            <Route path="/settings" element={<SettingsPage settings={settings} onChange={updateSettings} />} />
           </Routes>
         </RouteErrorBoundary>
       </main>
@@ -118,7 +169,8 @@ class RouteErrorBoundary extends Component<{ children: ReactNode }, { error: Err
   }
 }
 
-function OverviewPage() {
+function OverviewPage({ moverDefault }: { moverDefault: MoverDefault }) {
+  const [showAllMovers, setShowAllMovers] = useState(moverDefault === "all");
   const updates = useQuery({ queryKey: ["overview-updates"], queryFn: api.overviewUpdates });
   const portfolios = useQuery({ queryKey: ["portfolios"], queryFn: api.portfolios });
   const brokers = useQuery({ queryKey: ["broker-accounts"], queryFn: api.brokerAccounts });
@@ -127,6 +179,12 @@ function OverviewPage() {
   const mappedAccounts = brokers.data?.filter((account) => account.portfolio_id != null).length ?? 0;
   const failedJobs = jobs.data?.length ?? 0;
   const topMover = updates.data?.price_movers[0];
+  const movers = updates.data?.price_movers ?? [];
+  const visibleMovers = showAllMovers ? movers : movers.slice(0, 8);
+
+  useEffect(() => {
+    setShowAllMovers(moverDefault === "all");
+  }, [moverDefault]);
 
   return <div className="page">
     <div className="page-title">
@@ -141,8 +199,14 @@ function OverviewPage() {
     </section>
     <section className="update-grid">
       <section className="card">
-        <div className="card-heading"><div><p className="eyebrow">Price movers</p><h2>Holdings moving most</h2></div><span>{updates.data?.mover_count ?? 0} tracked</span></div>
-        {updates.isLoading ? <Loading compact /> : updates.data?.price_movers.length ? <div className="mover-list">{updates.data.price_movers.map((item) => <Link to={`/asset/${item.asset_id}`} className="mover-row" key={item.asset_id}><div><strong>{item.symbol}</strong><span>{item.name ?? "Held asset"}</span></div><b className={(item.change_percent ?? 0) >= 0 ? "positive" : "negative"}>{percent(item.change_percent)}</b><span>{money(item.market_value)}</span></Link>)}</div> : <EmptyRow text="No price movers yet. Add price history for held assets to light this up." />}
+        <div className="card-heading">
+          <div><p className="eyebrow">Price movers</p><h2>Holdings moving most</h2></div>
+          <div className="card-tools">
+            <span>{updates.data?.mover_count ?? 0} tracked</span>
+            {movers.length > 8 ? <button onClick={() => setShowAllMovers((value) => !value)}>{showAllMovers ? "Show 8" : "See all"}</button> : null}
+          </div>
+        </div>
+        {updates.isLoading ? <Loading compact /> : movers.length ? <div className="mover-list">{visibleMovers.map((item) => <Link to={`/asset/${item.asset_id}`} className="mover-row" key={item.asset_id}><div className="mover-asset"><strong>{item.symbol}</strong><span>{item.name ?? "Held asset"}</span></div><b className={(item.change_percent ?? 0) >= 0 ? "positive" : "negative"}>{percent(item.change_percent)}</b><span>{money(item.market_value)}</span></Link>)}</div> : <EmptyRow text="No price movers yet. Add price history for held assets to light this up." />}
       </section>
       <section className="card">
         <div className="card-heading"><div><p className="eyebrow">Market notes</p><h2>News affecting holdings</h2></div><span>{updates.data?.news_count ?? 0} items</span></div>
@@ -405,10 +469,14 @@ function ComparePage() {
   const [params] = useSearchParams();
   const initialLeft = params.get("left")?.toUpperCase() ?? "NVDA";
   const [left, setLeft] = useState(initialLeft);
-  const [right, setRight] = useState("");
-  const [benchmark, setBenchmark] = useState("");
+  const [right, setRight] = useState(params.get("right")?.toUpperCase() ?? "");
+  const [benchmark, setBenchmark] = useState(params.get("benchmark")?.toUpperCase() ?? "");
   const [benchmarkTouched, setBenchmarkTouched] = useState(false);
-  const [submitted, setSubmitted] = useState({ left: "", right: "", benchmark: "" });
+  const [submitted, setSubmitted] = useState({
+    left: initialLeft,
+    right: params.get("right")?.toUpperCase() ?? "",
+    benchmark: params.get("benchmark")?.toUpperCase() ?? "",
+  });
   const leftBenchmarkAssociations = useQuery({
     queryKey: ["asset-benchmark-associations", left.trim().toUpperCase()],
     queryFn: () => api.assetBenchmarkAssociations(left.trim().toUpperCase()),
@@ -451,16 +519,7 @@ function ComparePage() {
         <CompareAssetCard asset={data.left} label="Left" />
         {data.right ? <CompareAssetCard asset={data.right} label="Right" /> : <section className="card"><EmptyRow text="Add a right ticker to compare two companies side by side." /></section>}
       </section>
-      <section className="card">
-        <div className="card-heading"><div><p className="eyebrow">Valuation context</p><h2>{data.left.symbol} relative view</h2></div><span>local fundamentals</span></div>
-        <div className="comparison-table">
-          <ComparisonRow label="Current P/E" left={ratio(data.left.fundamentals.pe_ratio)} right={data.right ? ratio(data.right.fundamentals.pe_ratio) : "No peer"} />
-          <ComparisonRow label="Historical P/E avg" left={ratio(data.left.valuation.historical_pe_average)} right={data.right ? ratio(data.right.valuation.historical_pe_average) : "No peer"} />
-          <ComparisonRow label="Vs own history" left={gapLabel(data.left.valuation.historical_pe_discount, "history")} right={data.right ? gapLabel(data.right.valuation.historical_pe_discount, "history") : "No peer"} />
-          <ComparisonRow label="Vs sector" left={gapLabel(data.left.valuation.sector_pe_premium, "sector")} right={data.right ? gapLabel(data.right.valuation.sector_pe_premium, "sector") : "No peer"} />
-          <ComparisonRow label="Vs industry" left={gapLabel(data.left.valuation.industry_pe_premium, "industry")} right={data.right ? gapLabel(data.right.valuation.industry_pe_premium, "industry") : "No peer"} />
-        </div>
-      </section>
+      <CompareMetricMatrix left={data.left} right={data.right} />
       <section className="compare-grid">
         <section className="card">
           <div className="card-heading"><div><p className="eyebrow">Insights</p><h2>Plain English readout</h2></div><span>{data.insights.length} notes</span></div>
@@ -496,6 +555,12 @@ function CompareAssetCard({ asset, label }: { asset: ComparisonAsset; label: str
       <ComparisonRow label="EPS" left={ratio(asset.fundamentals.eps)} />
       <ComparisonRow label="P/E" left={ratio(asset.fundamentals.pe_ratio)} />
       <ComparisonRow label="Price/sales" left={ratio(asset.fundamentals.price_to_sales)} />
+      <ComparisonRow label="Historical P/E avg" left={ratio(asset.valuation.historical_pe_average)} />
+      <ComparisonRow label="Sector P/E avg" left={ratio(asset.valuation.sector_pe_average)} />
+      <ComparisonRow label="Industry P/E avg" left={ratio(asset.valuation.industry_pe_average)} />
+      <ComparisonRow label="Vs own history" left={gapLabel(asset.valuation.historical_pe_discount, "history")} />
+      <ComparisonRow label="Vs sector" left={gapLabel(asset.valuation.sector_pe_premium, "sector")} />
+      <ComparisonRow label="Vs industry" left={gapLabel(asset.valuation.industry_pe_premium, "industry")} />
       <ComparisonRow label="1 day return" left={percent(asset.returns.return_1d)} />
       <ComparisonRow label="5 day return" left={percent(asset.returns.return_5d)} />
       <ComparisonRow label="21 day return" left={percent(asset.returns.return_21d)} />
@@ -504,10 +569,88 @@ function CompareAssetCard({ asset, label }: { asset: ComparisonAsset; label: str
   </section>;
 }
 
+function CompareMetricMatrix({ left, right }: { left: ComparisonAsset; right: ComparisonAsset | null }) {
+  const rows = [
+    { group: "Market", label: "Latest price", left: money(left.latest_price, left.currency), right: right ? money(right.latest_price, right.currency) : "No peer", delta: valueDelta(left.latest_price, right?.latest_price, "money") },
+    { group: "Market", label: "Market cap", left: money(left.market_cap, left.currency), right: right ? money(right.market_cap, right.currency) : "No peer", delta: valueDelta(left.market_cap, right?.market_cap, "money") },
+    { group: "Market", label: "Beta", left: number(left.market_beta), right: right ? number(right.market_beta) : "No peer", delta: valueDelta(left.market_beta, right?.market_beta, "number") },
+    { group: "Fundamentals", label: "Revenue", left: money(left.fundamentals.revenue, left.currency), right: right ? money(right.fundamentals.revenue, right.currency) : "No peer", delta: valueDelta(left.fundamentals.revenue, right?.fundamentals.revenue, "money") },
+    { group: "Fundamentals", label: "Net income", left: money(left.fundamentals.net_income, left.currency), right: right ? money(right.fundamentals.net_income, right.currency) : "No peer", delta: valueDelta(left.fundamentals.net_income, right?.fundamentals.net_income, "money") },
+    { group: "Fundamentals", label: "EPS", left: ratio(left.fundamentals.eps), right: right ? ratio(right.fundamentals.eps) : "No peer", delta: valueDelta(left.fundamentals.eps, right?.fundamentals.eps, "number") },
+    { group: "Valuation", label: "P/E", left: ratio(left.fundamentals.pe_ratio), right: right ? ratio(right.fundamentals.pe_ratio) : "No peer", delta: valueDelta(left.fundamentals.pe_ratio, right?.fundamentals.pe_ratio, "number") },
+    { group: "Valuation", label: "Price/sales", left: ratio(left.fundamentals.price_to_sales), right: right ? ratio(right.fundamentals.price_to_sales) : "No peer", delta: valueDelta(left.fundamentals.price_to_sales, right?.fundamentals.price_to_sales, "number") },
+    { group: "Valuation", label: "Vs history", left: gapLabel(left.valuation.historical_pe_discount, "history"), right: right ? gapLabel(right.valuation.historical_pe_discount, "history") : "No peer", delta: percentDelta(left.valuation.historical_pe_discount, right?.valuation.historical_pe_discount) },
+    { group: "Valuation", label: "Vs sector", left: gapLabel(left.valuation.sector_pe_premium, "sector"), right: right ? gapLabel(right.valuation.sector_pe_premium, "sector") : "No peer", delta: percentDelta(left.valuation.sector_pe_premium, right?.valuation.sector_pe_premium) },
+    { group: "Returns", label: "1 day", left: percent(left.returns.return_1d), right: right ? percent(right.returns.return_1d) : "No peer", delta: percentDelta(left.returns.return_1d, right?.returns.return_1d) },
+    { group: "Returns", label: "5 day", left: percent(left.returns.return_5d), right: right ? percent(right.returns.return_5d) : "No peer", delta: percentDelta(left.returns.return_5d, right?.returns.return_5d) },
+    { group: "Returns", label: "21 day", left: percent(left.returns.return_21d), right: right ? percent(right.returns.return_21d) : "No peer", delta: percentDelta(left.returns.return_21d, right?.returns.return_21d) },
+    { group: "Returns", label: "252 day", left: percent(left.returns.return_252d), right: right ? percent(right.returns.return_252d) : "No peer", delta: percentDelta(left.returns.return_252d, right?.returns.return_252d) },
+  ];
+  return <section className="card compare-matrix-card">
+    <div className="card-heading"><div><p className="eyebrow">Company metrics</p><h2>{right ? `${left.symbol} vs ${right.symbol}` : `${left.symbol} full metric view`}</h2></div><span>{right ? "left / right / spread" : "left ticker only"}</span></div>
+    <div className="comparison-matrix">
+      <div className="comparison-matrix-head"><span>Metric</span><strong>{left.symbol}</strong><strong>{right?.symbol ?? "Peer"}</strong><strong>Spread</strong></div>
+      {rows.map((row) => <div className="comparison-matrix-row" key={`${row.group}-${row.label}`}>
+        <span><em>{row.group}</em>{row.label}</span>
+        <b>{row.left}</b>
+        <b>{row.right}</b>
+        <strong className={row.delta.className}>{row.delta.label}</strong>
+      </div>)}
+    </div>
+  </section>;
+}
+
 function ComparisonRow({ label, left, right }: { label: string; left: string; right?: string }) {
   return <div className="comparison-row"><span>{label}</span><strong>{left}</strong>{right != null ? <b>{right}</b> : null}</div>;
 }
+
+function SettingsPage({ settings, onChange }: { settings: AppSettings; onChange: (next: Partial<AppSettings>) => void }) {
+  return <div className="page">
+    <div className="page-title">
+      <div><p className="eyebrow">Workspace preferences</p><h1>Settings</h1><p className="page-subtitle">Control visual tone, default list behavior, and compactness for repeated dashboard work.</p></div>
+    </div>
+    <section className="settings-grid">
+      <article className="card settings-card">
+        <div><p className="eyebrow">Appearance</p><h2>Theme</h2></div>
+        <div className="segmented-control" role="group" aria-label="Theme">
+          <button className={settings.theme === "light" ? "selected" : ""} onClick={() => onChange({ theme: "light" })}>Light</button>
+          <button className={settings.theme === "dark" ? "selected" : ""} onClick={() => onChange({ theme: "dark" })}>Dark</button>
+        </div>
+        <p>Both themes stay monochrome: the light theme is gray-first, and the dark theme leans black and charcoal.</p>
+      </article>
+      <article className="card settings-card">
+        <div><p className="eyebrow">Overview</p><h2>Movers list</h2></div>
+        <label className="setting-row"><span>Default holdings shown</span><select value={settings.moverDefault} onChange={(event) => onChange({ moverDefault: event.target.value as MoverDefault })}><option value="8">8 holdings</option><option value="all">All holdings</option></select></label>
+        <p>The Overview page always allows switching between the compact eight-row view and the full mover list.</p>
+      </article>
+      <article className="card settings-card">
+        <div><p className="eyebrow">Data surfaces</p><h2>Density</h2></div>
+        <div className="segmented-control" role="group" aria-label="Density">
+          <button className={settings.density === "comfortable" ? "selected" : ""} onClick={() => onChange({ density: "comfortable" })}>Comfortable</button>
+          <button className={settings.density === "compact" ? "selected" : ""} onClick={() => onChange({ density: "compact" })}>Compact</button>
+        </div>
+        <p>Compact mode trims repeated table and card spacing without changing the information shown.</p>
+      </article>
+      <article className="card settings-card">
+        <div><p className="eyebrow">Feature color</p><h2>Accents</h2></div>
+        <label className="toggle-row"><input type="checkbox" checked={settings.featureColor} onChange={(event) => onChange({ featureColor: event.target.checked })} /><span>Use color for feature icons and semantic states</span></label>
+        <p>Turn this off for a stricter monochrome workspace. Warnings and losses remain visually distinct through contrast.</p>
+      </article>
+    </section>
+  </div>;
+}
 const ratio = (value: number | null | undefined) => value == null ? "Unavailable" : value.toFixed(2);
+const valueDelta = (left: number | null | undefined, right: number | null | undefined, format: "money" | "number") => {
+  if (left == null || right == null) return { label: "Unavailable", className: "" };
+  const delta = left - right;
+  const label = format === "money" ? money(delta) : number(delta);
+  return { label, className: delta >= 0 ? "positive" : "negative" };
+};
+const percentDelta = (left: number | null | undefined, right: number | null | undefined) => {
+  if (left == null || right == null) return { label: "Unavailable", className: "" };
+  const delta = left - right;
+  return { label: percent(delta), className: delta >= 0 ? "positive" : "negative" };
+};
 const weightToRatio = (value: number | null | undefined) => value == null ? null : value > 1 ? value / 100 : value;
 const weightLabel = (value: number | null | undefined) => value == null ? "Unavailable" : value > 1 ? `${value.toFixed(1)}%` : percent(value);
 const gapLabel = (value: number | null | undefined, label: string) => {
@@ -1135,6 +1278,7 @@ function OperationsPage() {
   const [runMaxJobs, setRunMaxJobs] = useState("1");
   const [retryMaxJobs, setRetryMaxJobs] = useState("25");
   const [message, setMessage] = useState("");
+  type ScheduleOverride = { pipeline?: string; assetId?: string; maxAssets?: string; years?: string; pricesOnly?: boolean };
   const jobs = useQuery({
     queryKey: ["jobs", status, domain, jobLimit],
     queryFn: () => api.ingestionJobs(status, domain, boundedInt(jobLimit, 100, 1, 500)),
@@ -1143,17 +1287,22 @@ function OperationsPage() {
     queryKey: ["ingestion-background-status"],
     queryFn: api.ingestionBackgroundStatus,
   });
+  const readiness = useQuery({
+    queryKey: ["ingestion-readiness"],
+    queryFn: api.ingestionReadiness,
+  });
   const schedule = useMutation({
-    mutationFn: () => api.scheduleIngestion({
-      pipeline,
-      asset_id: assetId.trim() || null,
-      max_assets: boundedInt(maxAssets, 25, 1, 100),
-      years: boundedInt(years, 10, 1, 30),
-      prices_only: pricesOnly,
+    mutationFn: (override?: ScheduleOverride) => api.scheduleIngestion({
+      pipeline: override?.pipeline ?? pipeline,
+      asset_id: (override?.assetId ?? assetId.trim()) || null,
+      max_assets: boundedInt(override?.maxAssets ?? maxAssets, 25, 1, 100),
+      years: boundedInt(override?.years ?? years, 10, 1, 30),
+      prices_only: override?.pricesOnly ?? pricesOnly,
     }),
     onSuccess: (result) => {
       setMessage(`Scheduled: ${formatActionResult(result.result)}`);
       client.invalidateQueries({ queryKey: ["jobs"] });
+      client.invalidateQueries({ queryKey: ["ingestion-readiness"] });
     },
   });
   const run = useMutation({
@@ -1164,6 +1313,7 @@ function OperationsPage() {
     onSuccess: (result) => {
       setMessage(`Run finished: ${formatActionResult(result.result)}`);
       client.invalidateQueries({ queryKey: ["jobs"] });
+      client.invalidateQueries({ queryKey: ["ingestion-readiness"] });
     },
   });
   const retry = useMutation({
@@ -1174,12 +1324,19 @@ function OperationsPage() {
     onSuccess: (result) => {
       setMessage(`Retry queued: ${formatActionResult(result.result)}`);
       client.invalidateQueries({ queryKey: ["jobs"] });
+      client.invalidateQueries({ queryKey: ["ingestion-readiness"] });
     },
   });
   const isBusy = schedule.isPending || run.isPending || retry.isPending;
   const actionError = schedule.error ?? run.error ?? retry.error;
-  return <div className="page"><div className="page-title"><div><p className="eyebrow">Data health</p><h1>Operations</h1><p className="page-subtitle">Background due work keeps routine data moving. Manual controls remain here for backfills, retries, provider-sensitive refreshes, and explicit runs.</p></div><div className="actions"><button onClick={() => { jobs.refetch(); background.refetch(); }} disabled={jobs.isFetching || background.isFetching}><RefreshCw size={17}/>Refresh</button><button className="primary" onClick={() => window.confirm("Run pending ingestion jobs with these options?") && run.mutate()} disabled={isBusy}><RefreshCw size={17}/>Run jobs</button></div></div>
+  const scheduleAsset = (selectedAssetId: string) => {
+    setPipeline("all");
+    setAssetId(selectedAssetId);
+    schedule.mutate({ pipeline: "all", assetId: selectedAssetId, maxAssets: "1" });
+  };
+  return <div className="page"><div className="page-title"><div><p className="eyebrow">Data health</p><h1>Operations</h1><p className="page-subtitle">Background due work keeps routine data moving. Manual controls remain here for backfills, retries, provider-sensitive refreshes, and explicit runs.</p></div><div className="actions"><button onClick={() => { jobs.refetch(); background.refetch(); readiness.refetch(); }} disabled={jobs.isFetching || background.isFetching || readiness.isFetching}><RefreshCw size={17}/>Refresh</button><button className="primary" onClick={() => window.confirm("Run pending ingestion jobs with these options?") && run.mutate()} disabled={isBusy}><RefreshCw size={17}/>Run jobs</button></div></div>
     <IngestionBackgroundCard status={background.data} isLoading={background.isLoading} error={background.error} />
+    <IngestionReadinessCard readiness={readiness.data} isLoading={readiness.isLoading} error={readiness.error} onScheduleAsset={scheduleAsset} isBusy={isBusy} />
     <section className="card operations-control">
       <div className="card-heading"><div><p className="eyebrow">Manual controls</p><h2>Ingestion actions</h2></div><span>{isBusy ? "working" : "ready"}</span></div>
       <div className="operations-grid">
@@ -1192,7 +1349,7 @@ function OperationsPage() {
             <label>Years<input type="number" min="1" max="30" value={years} onChange={(event) => setYears(event.target.value)} /></label>
             <label className="check-row"><input type="checkbox" checked={pricesOnly} onChange={(event) => setPricesOnly(event.target.checked)} />Prices only</label>
           </div>
-          <button onClick={() => window.confirm("Schedule ingestion jobs with these options?") && schedule.mutate()} disabled={isBusy}>Schedule</button>
+          <button onClick={() => window.confirm("Schedule ingestion jobs with these options?") && schedule.mutate({})} disabled={isBusy}>Schedule</button>
         </div>
         <div className="control-panel">
           <strong>Run pending jobs</strong>
@@ -1262,6 +1419,50 @@ function IngestionBackgroundCard({
         </div>
       </div>
     )}
+  </section>;
+}
+
+function IngestionReadinessCard({
+  readiness,
+  isLoading,
+  error,
+  onScheduleAsset,
+  isBusy,
+}: {
+  readiness?: IngestionReadiness;
+  isLoading: boolean;
+  error: Error | null;
+  onScheduleAsset: (assetId: string) => void;
+  isBusy: boolean;
+}) {
+  const missingItems = readiness?.items.filter((item) => !item.ready) ?? [];
+  return <section className="card operations-readiness">
+    <div className="card-heading">
+      <div><p className="eyebrow">Portfolio tickers</p><h2>Projection input readiness</h2></div>
+      <span>{isLoading ? "loading" : `${readiness?.ready_count ?? 0}/${readiness?.total ?? 0} ready`}</span>
+    </div>
+    {error ? <ErrorPanel error={error} /> : isLoading ? <Loading compact /> : readiness?.items.length ? (
+      <div className="readiness-list">
+        {missingItems.slice(0, 6).map((item) => <article className="readiness-row" key={item.asset_id}>
+          <div><strong>{item.symbol}</strong><span>{item.asset_type ?? "asset"}</span></div>
+          <div className="readiness-detail">
+            <p>{item.missing.slice(0, 4).join(", ")}</p>
+            <div>
+              {item.requirements.filter((requirement) => !requirement.ready).slice(0, 4).map((requirement) => (
+                <span className="readiness-chip" key={requirement.key}>
+                  {requirement.label}: {requirement.detail}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div className="readiness-actions">
+            <span className="pill failed">{item.missing.length} missing</span>
+            <button onClick={() => onScheduleAsset(item.asset_id)} disabled={isBusy}>Schedule</button>
+          </div>
+        </article>)}
+        {!missingItems.length ? <div className="empty-row">All portfolio tickers have the required projection and valuation inputs.</div> : null}
+      </div>
+    ) : <EmptyRow text="No active portfolio or watchlist tickers found." />}
   </section>;
 }
 

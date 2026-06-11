@@ -1,5 +1,5 @@
 import asyncio
-from datetime import date
+from datetime import date, timedelta
 from threading import Lock
 
 from fastapi.testclient import TestClient
@@ -348,6 +348,76 @@ def test_ingestion_background_errors_are_captured(tmp_path, monkeypatch):
 
     assert asyncio.run(worker.tick_schedule()) == 0
     assert worker.status()["last_error"] == "provider missing"
+
+
+def test_ingestion_readiness_reports_portfolio_ticker_metric_inputs(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    start = date(2025, 1, 1)
+
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, shares_outstanding)
+        VALUES
+            ('AAPL', 'AAPL', 'stock', 'USD', 1000000),
+            ('MSFT', 'MSFT', 'stock', 'USD', NULL)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES
+            (1, 'AAPL', TRUE, 'position'),
+            (1, 'MSFT', TRUE, 'position')
+        """
+    )
+    for index in range(252):
+        price_date = start + timedelta(days=index)
+        db.conn.execute(
+            """
+            INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+            VALUES ('AAPL', ?, 100, 100, 'test')
+            """,
+            [price_date],
+        )
+    db.conn.execute(
+        """
+        INSERT INTO asset_sync_state(
+            asset_id, domain, dataset, backfill_status, last_successful_date, last_successful_at
+        )
+        VALUES
+            ('AAPL', 'market', 'dividends', 'done', DATE '2026-01-01', now()),
+            ('AAPL', 'market', 'splits', 'done', DATE '2026-01-01', now())
+        """
+    )
+    for statement_type in ["income", "balance", "cashflow"]:
+        db.conn.execute(
+            """
+            INSERT INTO financial_statement(
+                asset_id, statement_type, year, quarter, period_end_date, report_date, data_json, source
+            )
+            VALUES ('AAPL', ?, 2026, 1, DATE '2026-03-31', DATE '2026-04-15', '{}', 'test')
+            """,
+            [statement_type],
+        )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/ingestion/readiness")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 2
+    assert payload["ready_count"] == 1
+
+    by_asset = {item["asset_id"]: item for item in payload["items"]}
+    assert by_asset["AAPL"]["ready"] is True
+    assert by_asset["AAPL"]["missing"] == []
+    assert by_asset["MSFT"]["ready"] is False
+    assert "One-year price history" in by_asset["MSFT"]["missing"]
+    assert "Cash flow statements" in by_asset["MSFT"]["missing"]
 
 
 def test_retry_failed_ingestion_jobs_requeues_bounded_failures(tmp_path):

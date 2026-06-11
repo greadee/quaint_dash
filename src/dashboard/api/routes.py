@@ -36,6 +36,7 @@ from dashboard.api.models import (
     ComparisonResponse,
     IngestionJobResponse,
     IngestionBackgroundStatusResponse,
+    IngestionReadinessResponse,
     IngestionRetryFailedRequest,
     IngestionRunRequest,
     IngestionScheduleRequest,
@@ -425,6 +426,16 @@ def ingestion_jobs(
 @router.get("/ingestion/background/status", response_model=IngestionBackgroundStatusResponse)
 def ingestion_background_status(request: Request):
     return request.app.state.ingestion_background_worker.status()
+
+
+@router.get("/ingestion/readiness", response_model=IngestionReadinessResponse)
+def ingestion_readiness(conn=Depends(get_connection)):
+    items = CommandApiService(conn).ingestion_readiness()
+    return IngestionReadinessResponse(
+        items=items,
+        total=len(items),
+        ready_count=sum(1 for item in items if item.ready),
+    )
 
 
 @router.post("/ingestion/schedule", response_model=ActionResult)

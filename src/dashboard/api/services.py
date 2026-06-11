@@ -3,6 +3,7 @@
 from dataclasses import asdict
 from datetime import date, timedelta
 import json
+import re
 from typing import Any
 
 from dashboard.api.models import (
@@ -32,6 +33,7 @@ from dashboard.api.models import (
     ComparisonResponse,
     ComparisonReturns,
     IngestionJobResponse,
+    IngestionAssetReadiness,
     NewsItemResponse,
     OverviewUpdatesResponse,
     Page,
@@ -41,6 +43,7 @@ from dashboard.api.models import (
     PositionSummary,
     PricePointResponse,
     PriceMoverResponse,
+    IngestionRequirementStatus,
     TransactionSummary,
     ValuationContext,
 )
@@ -57,6 +60,7 @@ from dashboard.ingestion.indices.index_service_factory import (
     create_index_ingestion_service,
     create_index_scheduler,
 )
+from dashboard.ingestion.ticker_universe import TickerUniverseRepository
 from dashboard.models.commands import BrokerCommands, IngestionCommands
 
 
@@ -1367,7 +1371,7 @@ class PortfolioApiService:
             sector=classification["sector"],
             industry=classification["industry"],
             country=classification["country"],
-            currency=row[7],
+            currency=_valid_currency(row[7]) or "CAD",
             quantity=float(row[9]),
             book_cost=float(row[10]),
             latest_price=_float_or_none(row[11]),
@@ -1521,7 +1525,7 @@ class PortfolioApiService:
                     sector=classification["sector"],
                     industry=classification["industry"],
                     country=classification["country"],
-                    currency=row[9],
+                    currency=_valid_currency(row[9]) or "CAD",
                     quantity=float(row[11]),
                     book_cost=book_cost,
                     latest_price=_float_or_none(row[13]),
@@ -1751,7 +1755,6 @@ class PortfolioApiService:
                 market_value
             FROM valued
             ORDER BY ABS(COALESCE(change_percent, 0)) DESC, market_value DESC NULLS LAST
-            LIMIT 8
             """
         ).fetchall()
         news_rows = self.conn.execute(
@@ -2369,6 +2372,224 @@ class CommandApiService(BrokerCommands, IngestionCommands):
             for row in rows
         ]
 
+    def ingestion_readiness(self) -> list[IngestionAssetReadiness]:
+        asset_ids = TickerUniverseRepository(self.conn).ingestible_asset_ids(
+            include_watchlist=True
+        )
+        if not asset_ids:
+            return []
+
+        placeholders = ", ".join("?" for _ in asset_ids)
+        rows = self.conn.execute(
+            f"""
+            SELECT asset_id, COALESCE(symbol, asset_id) AS symbol, asset_type
+            FROM asset
+            WHERE asset_id IN ({placeholders})
+            ORDER BY asset_id
+            """,
+            asset_ids,
+        ).fetchall()
+
+        items: list[IngestionAssetReadiness] = []
+        for asset_id, symbol, asset_type in rows:
+            requirements = [
+                self._price_history_requirement(asset_id),
+                self._market_coverage_requirement(
+                    asset_id=asset_id,
+                    dataset="dividends",
+                    table_name="dividend_event",
+                    date_column="ex_date",
+                    label="Dividend coverage",
+                ),
+                self._market_coverage_requirement(
+                    asset_id=asset_id,
+                    dataset="splits",
+                    table_name="split_event",
+                    date_column="ex_date",
+                    label="Split coverage",
+                ),
+                self._shares_outstanding_requirement(asset_id),
+                self._financial_statement_requirement(asset_id, "income", "Income statements"),
+                self._financial_statement_requirement(asset_id, "balance", "Balance sheets"),
+                self._financial_statement_requirement(asset_id, "cashflow", "Cash flow statements"),
+            ]
+            missing = [item.label for item in requirements if not item.ready]
+            items.append(
+                IngestionAssetReadiness(
+                    asset_id=asset_id,
+                    symbol=symbol,
+                    asset_type=asset_type,
+                    ready=not missing,
+                    missing=missing,
+                    requirements=requirements,
+                )
+            )
+        return items
+
+    def _price_history_requirement(self, asset_id: str) -> IngestionRequirementStatus:
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*), MAX(date)
+            FROM asset_quote_daily
+            WHERE asset_id = ?
+              AND COALESCE(adj_close, close) IS NOT NULL
+            """,
+            [asset_id],
+        ).fetchone()
+        row_count = int(row[0])
+        latest_date = row[1]
+        open_jobs = self._open_job_count(asset_id, "market", "price_daily")
+        last_error = self._sync_last_error(asset_id, "market", "price_daily")
+        ready = row_count >= 252
+        detail = f"{row_count} usable daily prices"
+        if not ready and open_jobs:
+            detail += f"; {open_jobs} open job(s)"
+        return IngestionRequirementStatus(
+            key="price_history",
+            label="One-year price history",
+            ready=ready,
+            detail=detail,
+            row_count=row_count,
+            latest_date=latest_date,
+            open_jobs=open_jobs,
+            last_error=last_error,
+        )
+
+    def _market_coverage_requirement(
+        self,
+        *,
+        asset_id: str,
+        dataset: str,
+        table_name: str,
+        date_column: str,
+        label: str,
+    ) -> IngestionRequirementStatus:
+        row = self.conn.execute(
+            f"""
+            SELECT COUNT(*), MAX({date_column})
+            FROM {table_name}
+            WHERE asset_id = ?
+            """,
+            [asset_id],
+        ).fetchone()
+        row_count = int(row[0])
+        latest_date = row[1]
+        open_jobs = self._open_job_count(asset_id, "market", dataset)
+        sync_done = self._sync_has_success(asset_id, "market", dataset)
+        last_error = self._sync_last_error(asset_id, "market", dataset)
+        ready = row_count > 0 or sync_done or open_jobs > 0
+        if row_count:
+            detail = f"{row_count} stored event(s)"
+        elif sync_done:
+            detail = "coverage checked; no events stored"
+        elif open_jobs:
+            detail = f"{open_jobs} open job(s)"
+        else:
+            detail = "coverage has not been checked"
+        return IngestionRequirementStatus(
+            key=dataset,
+            label=label,
+            ready=ready,
+            detail=detail,
+            row_count=row_count,
+            latest_date=latest_date,
+            open_jobs=open_jobs,
+            last_error=last_error,
+        )
+
+    def _shares_outstanding_requirement(self, asset_id: str) -> IngestionRequirementStatus:
+        row = self.conn.execute(
+            """
+            SELECT shares_outstanding
+            FROM asset
+            WHERE asset_id = ?
+            """,
+            [asset_id],
+        ).fetchone()
+        value = _float_or_none(row[0]) if row else None
+        ready = value is not None and value > 0
+        return IngestionRequirementStatus(
+            key="shares_outstanding",
+            label="Shares outstanding",
+            ready=ready,
+            detail=f"{value:,.0f} shares" if ready else "missing from asset metadata",
+            row_count=1 if ready else 0,
+        )
+
+    def _financial_statement_requirement(
+        self,
+        asset_id: str,
+        statement_type: str,
+        label: str,
+    ) -> IngestionRequirementStatus:
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*), MAX(period_end_date)
+            FROM financial_statement
+            WHERE asset_id = ?
+              AND statement_type = ?
+            """,
+            [asset_id, statement_type],
+        ).fetchone()
+        row_count = int(row[0])
+        latest_date = row[1]
+        open_jobs = self._open_job_count(asset_id, "corporate", "financial_statements")
+        last_error = self._sync_last_error(asset_id, "corporate", "financial_statements")
+        ready = row_count > 0
+        detail = f"{row_count} statement(s)" if ready else "no stored statements"
+        if not ready and open_jobs:
+            detail += f"; {open_jobs} open job(s)"
+        return IngestionRequirementStatus(
+            key=f"{statement_type}_statements",
+            label=label,
+            ready=ready,
+            detail=detail,
+            row_count=row_count,
+            latest_date=latest_date,
+            open_jobs=open_jobs,
+            last_error=last_error,
+        )
+
+    def _open_job_count(self, asset_id: str, domain: str, dataset: str) -> int:
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM ingestion_job
+            WHERE asset_id = ?
+              AND domain = ?
+              AND dataset = ?
+              AND status IN ('pending', 'running')
+            """,
+            [asset_id, domain, dataset],
+        ).fetchone()
+        return int(row[0])
+
+    def _sync_has_success(self, asset_id: str, domain: str, dataset: str) -> bool:
+        row = self.conn.execute(
+            """
+            SELECT last_successful_date, last_successful_at
+            FROM asset_sync_state
+            WHERE asset_id = ?
+              AND domain = ?
+              AND dataset = ?
+            """,
+            [asset_id, domain, dataset],
+        ).fetchone()
+        return bool(row and (row[0] is not None or row[1] is not None))
+
+    def _sync_last_error(self, asset_id: str, domain: str, dataset: str) -> str | None:
+        row = self.conn.execute(
+            """
+            SELECT last_error
+            FROM asset_sync_state
+            WHERE asset_id = ?
+              AND domain = ?
+              AND dataset = ?
+            """,
+            [asset_id, domain, dataset],
+        ).fetchone()
+        return row[0] if row and row[0] else None
+
     def retry_failed_ingestion_jobs(self, domain: str | None, max_jobs: int) -> int:
         where = ["status = 'failed'"]
         params: list[object] = []
@@ -2586,4 +2807,7 @@ def _valid_currency(value: str | None) -> str | None:
     if value is None:
         return None
     text = str(value).strip().upper()
+    match = re.search(r"['\"]?CODE['\"]?\s*:\s*['\"]?([A-Z]{3})['\"]?", text)
+    if match:
+        return match.group(1)
     return text if len(text) == 3 and text.isalpha() else None

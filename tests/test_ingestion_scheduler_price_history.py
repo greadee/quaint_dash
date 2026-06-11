@@ -272,6 +272,43 @@ def test_price_history_scheduler_does_not_duplicate_pending_jobs(manager):
     assert n_jobs == 3
 
 
+def test_market_scheduler_can_target_one_portfolio_ticker(manager):
+    insert_asset(manager, "AAPL", ccy="USD")
+    insert_asset(manager, "MSFT", ccy="USD")
+    manager.conn.execute(
+        """
+        INSERT INTO portfolio(portfolio_id, portfolio_name)
+        VALUES (1, 'Core')
+        """
+    )
+    manager.conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES
+            (1, 'AAPL', TRUE, 'position'),
+            (1, 'MSFT', TRUE, 'position')
+        """
+    )
+
+    n_jobs = manager.schedule_ingestion_jobs(
+        pipeline="market",
+        asset_id="AAPL",
+        max_assets=10,
+        years=1,
+    )
+
+    rows = manager.conn.execute(
+        """
+        SELECT DISTINCT asset_id
+        FROM ingestion_job
+        ORDER BY asset_id
+        """
+    ).fetchall()
+
+    assert n_jobs == 6
+    assert rows == [("AAPL",)]
+
+
 def test_price_history_scheduler_processes_one_backfill_job(manager, monkeypatch):
     """
     Scheduler can enqueue jobs, then run one queued price history backfill job.

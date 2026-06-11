@@ -519,6 +519,84 @@ def test_scheduler_fundamental_backfill_queues_only_active_subscribed_universe_a
     assert requested_at is not None
 
 
+def test_scheduler_fundamental_backfill_auto_subscribes_active_universe_assets():
+    conn = make_conn()
+    ensure_fundamental_phase1_schema(conn)
+    service = CorporateCalendarIngestionService(conn, provider=FakeCorporateProvider())
+
+    conn.execute(
+        """
+        CREATE TABLE portfolio_ticker (
+            portfolio_id BIGINT,
+            asset_id TEXT,
+            is_active BOOLEAN,
+            source TEXT,
+            created_at TIMESTAMP DEFAULT now(),
+            updated_at TIMESTAMP DEFAULT now(),
+            PRIMARY KEY(portfolio_id, asset_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'AAPL', TRUE, 'position')
+        """
+    )
+
+    job_ids = service.schedule_due_fundamental_subscription_backfills(max_assets=10)
+
+    subscription = conn.execute(
+        """
+        SELECT is_active, subscription_source, last_backfill_requested_at
+        FROM fundamental_subscription
+        WHERE asset_id = 'AAPL'
+        """
+    ).fetchone()
+    job = conn.execute(
+        """
+        SELECT asset_id, job_type, dataset, status
+        FROM ingestion_job
+        WHERE dataset = 'financial_statements'
+        """
+    ).fetchone()
+
+    assert len(job_ids) == 1
+    assert subscription[0] is True
+    assert subscription[1] == "ticker_universe"
+    assert subscription[2] is not None
+    assert job == ("AAPL", "backfill", "financial_statements", "pending")
+
+
+def test_scheduler_fundamental_backfill_can_target_one_universe_asset():
+    conn = make_conn()
+    ensure_fundamental_phase1_schema(conn)
+    service = CorporateCalendarIngestionService(conn, provider=FakeCorporateProvider())
+
+    conn.execute(
+        """
+        INSERT INTO asset(asset_id, asset_type, ccy, track)
+        VALUES ('MSFT', 'stock', 'USD', TRUE)
+        """
+    )
+
+    job_ids = service.schedule_due_fundamental_subscription_backfills(
+        max_assets=10,
+        asset_id="MSFT",
+    )
+
+    rows = conn.execute(
+        """
+        SELECT asset_id, job_type, dataset
+        FROM ingestion_job
+        ORDER BY asset_id
+        """
+    ).fetchall()
+
+    assert len(job_ids) == 1
+    assert rows == [("MSFT", "backfill", "financial_statements")]
+
+
 def test_scheduler_fundamental_backfill_does_not_duplicate_open_jobs():
     conn = make_conn()
     ensure_fundamental_phase1_schema(conn)

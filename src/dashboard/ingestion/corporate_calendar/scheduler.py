@@ -148,6 +148,7 @@ class CorporateCalendarScheduler:
     def schedule_due_fundamental_subscription_refreshes(
         self,
         max_assets: int = 25,
+        asset_id: str | None = None,
     ) -> list[int]:
         """
         Enqueue recurring financial statement refresh jobs for subscribed assets.
@@ -165,6 +166,7 @@ class CorporateCalendarScheduler:
         existing financial statement ingestion path.
         """
         ensure_fundamental_phase1_schema(self.conn)
+        self._ensure_active_universe_subscriptions()
 
         now = datetime.now()
         today = date.today()
@@ -173,6 +175,9 @@ class CorporateCalendarScheduler:
             include_watchlist=True,
             asset_types=("stock", "adr"),
         )
+        if asset_id is not None:
+            normalized = asset_id.upper().strip()
+            asset_ids = [normalized] if normalized in set(asset_ids) else []
         if not asset_ids:
             return []
 
@@ -228,6 +233,7 @@ class CorporateCalendarScheduler:
     def schedule_due_fundamental_subscription_backfills(
         self,
         max_assets: int = 25,
+        asset_id: str | None = None,
     ) -> list[int]:
         """
         Enqueue one historical financial-statement backfill for subscribed assets.
@@ -237,11 +243,15 @@ class CorporateCalendarScheduler:
         - refresh keeps already-subscribed assets current over time
         """
         ensure_fundamental_phase1_schema(self.conn)
+        self._ensure_active_universe_subscriptions()
 
         asset_ids = self.ticker_universe.ingestible_asset_ids(
             include_watchlist=True,
             asset_types=("stock", "adr"),
         )
+        if asset_id is not None:
+            normalized = asset_id.upper().strip()
+            asset_ids = [normalized] if normalized in set(asset_ids) else []
         if not asset_ids:
             return []
 
@@ -282,6 +292,57 @@ class CorporateCalendarScheduler:
             self.repo.mark_fundamental_subscription_backfill_requested(asset_id)
 
         return job_ids
+
+    def _ensure_active_universe_subscriptions(self) -> int:
+        """
+        Keep fundamental ingestion subscribed to the current ticker universe.
+
+        Portfolio and watchlist membership are the source of truth for which
+        stock-like assets need valuation inputs. Subscriptions still remain the
+        scheduling control table, but missing rows should not silently block
+        statement backfills or recurring refreshes.
+        """
+        asset_ids = self.ticker_universe.ingestible_asset_ids(
+            include_watchlist=True,
+            asset_types=("stock", "adr"),
+        )
+        if not asset_ids:
+            return 0
+
+        now = datetime.now()
+        rows = [
+            (
+                asset_id,
+                True,
+                DEFAULT_FUNDAMENTAL_REFRESH_INTERVAL_DAYS,
+                now,
+                "ticker_universe",
+                now,
+                now,
+            )
+            for asset_id in asset_ids
+        ]
+        self.conn.executemany(
+            """
+            INSERT INTO fundamental_subscription (
+                asset_id,
+                is_active,
+                refresh_interval_days,
+                next_refresh_at,
+                subscription_source,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (asset_id)
+            DO UPDATE SET
+                next_refresh_at = COALESCE(fundamental_subscription.next_refresh_at, excluded.next_refresh_at),
+                updated_at = excluded.updated_at
+            WHERE fundamental_subscription.is_active = TRUE
+            """,
+            rows,
+        )
+        return len(rows)
 
     def _mark_subscription_refresh_scheduled(
         self,

@@ -115,6 +115,7 @@ class CorporateCalendarIngestionService:
     def schedule_due_fundamental_subscription_refreshes(
         self,
         max_assets: int = 25,
+        asset_id: str | None = None,
     ) -> list[int]:
         """
         Scheduler entry point for recurring subscribed fundamentals refreshes.
@@ -123,11 +124,13 @@ class CorporateCalendarIngestionService:
 
         return scheduler.schedule_due_fundamental_subscription_refreshes(
             max_assets=max_assets,
+            asset_id=asset_id,
         )
 
     def schedule_due_fundamental_subscription_backfills(
         self,
         max_assets: int = 25,
+        asset_id: str | None = None,
     ) -> list[int]:
         """
         Scheduler entry point for subscribed fundamentals historical backfills.
@@ -136,4 +139,5 @@ class CorporateCalendarIngestionService:
 
         return scheduler.schedule_due_fundamental_subscription_backfills(
             max_assets=max_assets,
+            asset_id=asset_id,
         )
