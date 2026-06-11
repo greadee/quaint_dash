@@ -24,7 +24,14 @@ import {
 } from "lucide-react";
 import { Link, NavLink, Route, Routes, useLocation, useParams, useSearchParams } from "react-router-dom";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { api, type AssetActivity, type AssetHolding, type ComparisonAsset, type Position } from "./api";
+import {
+  api,
+  type AssetActivity,
+  type AssetHolding,
+  type ComparisonAsset,
+  type IngestionBackgroundStatus,
+  type Position,
+} from "./api";
 
 const money = (value: number | null | undefined, currency = "CAD") =>
   value == null
@@ -824,6 +831,10 @@ function OperationsPage() {
     queryKey: ["jobs", status, domain, jobLimit],
     queryFn: () => api.ingestionJobs(status, domain, boundedInt(jobLimit, 100, 1, 500)),
   });
+  const background = useQuery({
+    queryKey: ["ingestion-background-status"],
+    queryFn: api.ingestionBackgroundStatus,
+  });
   const schedule = useMutation({
     mutationFn: () => api.scheduleIngestion({
       pipeline,
@@ -859,9 +870,10 @@ function OperationsPage() {
   });
   const isBusy = schedule.isPending || run.isPending || retry.isPending;
   const actionError = schedule.error ?? run.error ?? retry.error;
-  return <div className="page"><div className="page-title"><div><p className="eyebrow">Data health</p><h1>Operations</h1><p className="page-subtitle">Schedule, retry, and run ingestion work through the same request options exposed by the backend.</p></div><div className="actions"><button onClick={() => jobs.refetch()} disabled={jobs.isFetching}><RefreshCw size={17}/>Refresh</button><button className="primary" onClick={() => window.confirm("Run pending ingestion jobs with these options?") && run.mutate()} disabled={isBusy}><RefreshCw size={17}/>Run jobs</button></div></div>
+  return <div className="page"><div className="page-title"><div><p className="eyebrow">Data health</p><h1>Operations</h1><p className="page-subtitle">Background due work keeps routine data moving. Manual controls remain here for backfills, retries, provider-sensitive refreshes, and explicit runs.</p></div><div className="actions"><button onClick={() => { jobs.refetch(); background.refetch(); }} disabled={jobs.isFetching || background.isFetching}><RefreshCw size={17}/>Refresh</button><button className="primary" onClick={() => window.confirm("Run pending ingestion jobs with these options?") && run.mutate()} disabled={isBusy}><RefreshCw size={17}/>Run jobs</button></div></div>
+    <IngestionBackgroundCard status={background.data} isLoading={background.isLoading} error={background.error} />
     <section className="card operations-control">
-      <div className="card-heading"><div><p className="eyebrow">Backend controls</p><h2>Ingestion actions</h2></div><span>{isBusy ? "working" : "ready"}</span></div>
+      <div className="card-heading"><div><p className="eyebrow">Manual controls</p><h2>Ingestion actions</h2></div><span>{isBusy ? "working" : "ready"}</span></div>
       <div className="operations-grid">
         <div className="control-panel">
           <strong>Schedule jobs</strong>
@@ -912,6 +924,37 @@ function OperationsPage() {
       {!jobs.isLoading && !jobs.data?.length ? <EmptyRow text="No ingestion jobs match the current filters." /> : null}
     </section>
   </div>;
+}
+
+function IngestionBackgroundCard({
+  status,
+  isLoading,
+  error,
+}: {
+  status?: IngestionBackgroundStatus;
+  isLoading: boolean;
+  error: Error | null;
+}) {
+  const stateLabel = status?.enabled ? (status.running ? "running" : "enabled") : "disabled";
+  return <section className="card operations-background">
+    <div className="card-heading">
+      <div><p className="eyebrow">Background due work</p><h2>Routine ingestion worker</h2></div>
+      <span className={`pill ${status?.running ? "running" : status?.enabled ? "done" : ""}`}>{isLoading ? "loading" : stateLabel}</span>
+    </div>
+    {error ? <ErrorPanel error={error} /> : (
+      <div className="background-status-grid">
+        <Signal label="Last scheduled" value={isLoading ? "Loading" : formatCount(status?.last_schedule_count, "job")} />
+        <Signal label="Last completed" value={isLoading ? "Loading" : formatCount(status?.last_completed_count, "job")} />
+        <Signal label="Schedule cadence" value={status ? formatDuration(status.schedule_interval_seconds) : "Unavailable"} />
+        <Signal label="Run cadence" value={status ? `${formatDuration(status.run_interval_seconds)} / ${status.max_jobs_per_tick} job cap` : "Unavailable"} />
+        <div className="background-status-note">
+          <strong>{status?.enabled ? "Routine maintenance is configured." : "Routine maintenance is off."}</strong>
+          <span>{status ? backgroundStatusDetail(status) : "Status has not loaded yet."}</span>
+          {status?.last_error ? <em>{status.last_error}</em> : null}
+        </div>
+      </div>
+    )}
+  </section>;
 }
 
 function Metric({ icon, label, value, detail, positive }: { icon: React.ReactNode; label: string; value: string; detail?: string; positive?: boolean }) {
@@ -1194,6 +1237,24 @@ function formatActionResult(result: Record<string, unknown>): string {
   const entries = Object.entries(result);
   if (!entries.length) return "ok";
   return entries.map(([key, value]) => `${key.replace(/_/g, " ")} ${String(value)}`).join(", ");
+}
+function formatCount(value: number | null | undefined, noun: string): string {
+  if (value == null) return "Not run yet";
+  return `${value} ${noun}${value === 1 ? "" : "s"}`;
+}
+function formatDuration(seconds: number): string {
+  if (seconds % 3600 === 0) return `${seconds / 3600}h`;
+  if (seconds % 60 === 0) return `${seconds / 60}m`;
+  return `${seconds}s`;
+}
+function formatTimestamp(value: string | null | undefined): string {
+  return value ? new Date(value).toLocaleString() : "never";
+}
+function backgroundStatusDetail(status: IngestionBackgroundStatus): string {
+  const schedule = `Scheduled ${formatTimestamp(status.last_schedule_at)}`;
+  const run = `ran ${formatTimestamp(status.last_run_at)}`;
+  const scope = `${status.max_assets_per_schedule} assets, ${status.years} years, ${status.prices_only ? "prices only" : "prices/dividends/splits"}`;
+  return `${schedule}; ${run}. Scope: ${scope}.`;
 }
 function dateRange(start?: string | null, end?: string | null): string {
   if (start && end) return `${new Date(start).toLocaleDateString()} - ${new Date(end).toLocaleDateString()}`;

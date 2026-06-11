@@ -204,6 +204,21 @@ export type IngestionJob = {
   created_at: string;
   updated_at: string;
 };
+export type IngestionBackgroundStatus = {
+  enabled: boolean;
+  running: boolean;
+  last_schedule_at: string | null;
+  last_schedule_count: number | null;
+  last_run_at: string | null;
+  last_completed_count: number | null;
+  last_error: string | null;
+  schedule_interval_seconds: number;
+  run_interval_seconds: number;
+  max_jobs_per_tick: number;
+  max_assets_per_schedule: number;
+  years: number;
+  prices_only: boolean;
+};
 export type ActionResult = { status: string; result: Record<string, unknown> };
 export type BrokerPortalPayload = { user_key: string; broker?: string | null; reconnect?: string | null };
 export type IngestionSchedulePayload = {
@@ -307,6 +322,7 @@ export const api = {
     if (domain) params.set("domain", domain);
     return request<IngestionJob[]>(`/ingestion/jobs?${params.toString()}`);
   },
+  ingestionBackgroundStatus: () => request<IngestionBackgroundStatus>("/ingestion/background/status"),
   scheduleIngestion: (payload: IngestionSchedulePayload) =>
     request<ActionResult>("/ingestion/schedule", { method: "POST", body: JSON.stringify(payload) }),
   runIngestion: (payload: IngestionRunPayload) =>
