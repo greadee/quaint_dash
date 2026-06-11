@@ -440,7 +440,11 @@ function CompareAssetCard({ asset, label }: { asset: ComparisonAsset; label: str
       <ComparisonRow label="Net income" left={money(asset.fundamentals.net_income, asset.currency)} />
       <ComparisonRow label="EPS" left={ratio(asset.fundamentals.eps)} />
       <ComparisonRow label="P/E" left={ratio(asset.fundamentals.pe_ratio)} />
+      <ComparisonRow label="Price/sales" left={ratio(asset.fundamentals.price_to_sales)} />
       <ComparisonRow label="1 day return" left={percent(asset.returns.return_1d)} />
+      <ComparisonRow label="5 day return" left={percent(asset.returns.return_5d)} />
+      <ComparisonRow label="21 day return" left={percent(asset.returns.return_21d)} />
+      <ComparisonRow label="252 day return" left={percent(asset.returns.return_252d)} />
     </div>
   </section>;
 }
@@ -553,7 +557,12 @@ function AssetPage() {
       benchmark={analyticsBenchmark}
       onBenchmarkChange={setAnalyticsBenchmark}
     />
-    <section className="detail-grid"><div className="card"><p className="eyebrow">Classification</p><h2>{asset.data?.industry ?? "Not classified"}</h2><p>{asset.data?.country ?? "Country unavailable"} - {asset.data?.currency}</p></div><div className="card"><p className="eyebrow">Business profile</p><p>{asset.data?.description ?? "No company description has been ingested yet."}</p></div></section>
+    <section className="detail-grid">
+      <div className="card"><p className="eyebrow">Classification</p><h2>{asset.data?.industry ?? "Not classified"}</h2><p>{[asset.data?.sector, asset.data?.asset_type, asset.data?.asset_subtype].filter(Boolean).join(" - ") || "Classification unavailable"}</p></div>
+      <div className="card"><p className="eyebrow">Listing</p><h2>{asset.data?.exchange_code ?? "Exchange unknown"}</h2><p>{[asset.data?.country, asset.data?.region, asset.data?.currency].filter(Boolean).join(" - ") || "Geography unavailable"}</p></div>
+      <div className="card"><p className="eyebrow">Scale</p><h2>{asset.data?.size ?? "Size unknown"}</h2><p>Market cap {money(asset.data?.market_cap, asset.data?.currency)} - Shares {number(asset.data?.shares_outstanding, 0)} - Beta {number(asset.data?.market_beta)}</p></div>
+      <div className="card"><p className="eyebrow">Business profile</p><p>{asset.data?.description ?? "No company description has been ingested yet."}</p></div>
+    </section>
   </div>;
 }
 

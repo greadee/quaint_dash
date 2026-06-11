@@ -60,12 +60,20 @@ export type Asset = {
   symbol: string;
   is_cdr: boolean;
   underlying_asset_id: string | null;
+  exchange_code: string | null;
+  asset_type: string | null;
+  asset_subtype: string | null;
   name: string | null;
   description: string | null;
   sector: string | null;
   industry: string | null;
   country: string | null;
+  region: string | null;
+  size: string | null;
   currency: string;
+  market_cap: number | null;
+  shares_outstanding: number | null;
+  market_beta: number | null;
   latest_price: number | null;
 };
 
