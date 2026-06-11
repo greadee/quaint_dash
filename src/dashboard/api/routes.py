@@ -8,9 +8,11 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from dashboard.api.dependencies import get_connection
 from dashboard.api.models import (
     ActionResult,
+    AssetBenchmarkAssociationResponse,
     AssetActivitySummary,
     AssetDetail,
     AssetHoldingSummary,
+    AssetSearchResult,
     BenchmarkBulkRefreshRequest,
     BenchmarkConstituent,
     BenchmarkDailyMetric,
@@ -106,6 +108,11 @@ def list_benchmarks(
 @router.get("/benchmarks/defaults/asset/{asset_id}", response_model=BenchmarkDefaultResponse)
 def asset_default_benchmark(asset_id: str, conn=Depends(get_connection)):
     return BenchmarkApiService(conn).default_for_asset(asset_id)
+
+
+@router.get("/benchmarks/associations/asset/{asset_id}", response_model=AssetBenchmarkAssociationResponse)
+def asset_benchmark_associations(asset_id: str, conn=Depends(get_connection)):
+    return BenchmarkApiService(conn).associations_for_asset(asset_id)
 
 
 @router.get("/benchmarks/defaults/portfolio/{portfolio_id}", response_model=BenchmarkDefaultResponse)
@@ -300,6 +307,16 @@ def asset_activity(
     conn=Depends(get_connection),
 ):
     return PortfolioApiService(conn).list_asset_activity(asset_id, limit, offset)
+
+
+@router.get("/assets", response_model=list[AssetSearchResult])
+def search_assets(
+    q: str | None = Query(default=None, min_length=1, max_length=100),
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    conn=Depends(get_connection),
+):
+    return AssetApiService(conn).search_assets(q=q, limit=limit, offset=offset)
 
 
 @router.get("/assets/{asset_id}", response_model=AssetDetail)

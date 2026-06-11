@@ -9,6 +9,9 @@ from dashboard.api.models import (
     AssetDetail,
     AssetActivitySummary,
     AssetHoldingSummary,
+    AssetBenchmarkAssociationResponse,
+    AssetSearchResult,
+    BenchmarkAssociation,
     BrokerAccountResponse,
     BrokerConnectionResponse,
     BrokerUserResponse,
@@ -42,7 +45,11 @@ from dashboard.api.models import (
     ValuationContext,
 )
 from dashboard.analytics import AnalyticsEngine, AnalyticsRepository, analytics_report_payload
-from dashboard.analytics.models import PositionAnalytics
+from dashboard.analytics.models import (
+    DEFAULT_BENCHMARK_BY_COUNTRY,
+    DEFAULT_BENCHMARK_BY_CURRENCY,
+    PositionAnalytics,
+)
 from dashboard.brokers.repository import BrokerSyncRepository
 from dashboard.brokers.models import BrokerUser
 from dashboard.brokers.snaptrade import SNAPTRADE_PROVIDER
@@ -545,6 +552,51 @@ class BenchmarkApiService:
             fallback_used=benchmark is None,
         )
 
+    def associations_for_asset(self, asset_id: str) -> AssetBenchmarkAssociationResponse:
+        asset = AssetApiService(self.conn).get_asset(asset_id)
+        asset_result = AssetApiService(self.conn)._asset_search_result(asset)
+        suggestions: list[tuple[str, str | None, str, float]] = [
+            (
+                "core",
+                AnalyticsRepository(self.conn).default_benchmark_for_asset(asset.asset_id)
+                or _core_benchmark_candidate(asset.country, asset.currency),
+                "country/currency default",
+                0.85,
+            ),
+            (
+                "sector",
+                _sector_benchmark_candidate(asset.sector),
+                f"sector match: {asset.sector}",
+                0.75,
+            ),
+            (
+                "industry",
+                _industry_benchmark_candidate(asset.industry),
+                f"industry match: {asset.industry}",
+                0.7,
+            ),
+        ]
+        associations: list[BenchmarkAssociation] = []
+        seen: set[str] = set()
+        for role, candidate, reason, confidence in suggestions:
+            if not candidate or candidate in seen:
+                continue
+            summary = self._active_summary(candidate)
+            if summary is None:
+                continue
+            seen.add(candidate)
+            associations.append(
+                BenchmarkAssociation(
+                    role=role,
+                    benchmark_index_id=summary.index_id,
+                    index_name=summary.index_name,
+                    index_category=summary.index_category,
+                    reason=reason,
+                    confidence=confidence,
+                )
+            )
+        return AssetBenchmarkAssociationResponse(asset=asset_result, associations=associations)
+
     def default_for_portfolio(self, portfolio_id: int) -> BenchmarkDefaultResponse:
         PortfolioApiService(self.conn).get_portfolio(portfolio_id)
         repo = AnalyticsRepository(self.conn)
@@ -737,6 +789,10 @@ class BenchmarkApiService:
                 return row
         return None
 
+    def _active_summary(self, index_id: str) -> BenchmarkIndexSummary | None:
+        summary = self._get_summary(index_id)
+        return summary if summary and summary.is_active else None
+
     def _require_benchmark(self, index_id: str) -> None:
         if self._get_summary(index_id) is None:
             raise LookupError(f"Benchmark not found: {index_id}")
@@ -901,6 +957,36 @@ _KNOWN_CDR_UNDERLYING_NAMES = {
 _CDR_SYMBOL_ALIASES = {
     "NOWS": "NOW",
 }
+
+_SECTOR_BENCHMARK_BY_KEY = {
+    "communication services": "SEC_COMM",
+    "communications": "SEC_COMM",
+    "consumer cyclical": "SEC_CONS_DISC",
+    "consumer discretionary": "SEC_CONS_DISC",
+    "consumer defensive": "SEC_CONS_STAP",
+    "consumer staples": "SEC_CONS_STAP",
+    "energy": "SEC_ENERGY",
+    "financial services": "SEC_FINANCIALS",
+    "financials": "SEC_FINANCIALS",
+    "health care": "SEC_HEALTHCARE",
+    "healthcare": "SEC_HEALTHCARE",
+    "industrials": "SEC_INDUSTRIALS",
+    "industrial": "SEC_INDUSTRIALS",
+    "information technology": "SEC_TECH",
+    "technology": "SEC_TECH",
+    "basic materials": "SEC_MATERIALS",
+    "materials": "SEC_MATERIALS",
+    "real estate": "SEC_REAL_ESTATE",
+    "utilities": "SEC_UTILITIES",
+}
+
+_INDUSTRY_BENCHMARK_KEYWORDS = (
+    (("semiconductor", "semiconductors"), "IND_SEMICONDUCTORS"),
+    (("software", "application software", "infrastructure software"), "IND_SOFTWARE"),
+    (("biotechnology", "biotech"), "IND_BIOTECH"),
+    (("medical device", "medical devices", "medical instruments", "medical instruments & supplies"), "IND_MEDICAL_DEVICES"),
+    (("aerospace", "defense", "aerospace and defense"), "IND_AEROSPACE_DEFENSE"),
+)
 
 
 class PortfolioApiService:
@@ -1759,6 +1845,52 @@ class AssetApiService:
     def __init__(self, conn) -> None:
         self.conn = conn
 
+    def search_assets(
+        self,
+        q: str | None = None,
+        limit: int = 25,
+        offset: int = 0,
+    ) -> list[AssetSearchResult]:
+        where = []
+        params: list[Any] = []
+        if q:
+            like = f"%{q.strip().lower()}%"
+            where.append(
+                "("
+                "LOWER(a.asset_id) LIKE ? OR LOWER(COALESCE(a.symbol, '')) LIKE ? OR "
+                "LOWER(COALESCE(a.name, '')) LIKE ? OR LOWER(COALESCE(a.sector, '')) LIKE ? OR "
+                "LOWER(COALESCE(a.industry, '')) LIKE ?"
+                ")"
+            )
+            params.extend([like, like, like, like, like])
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        rows = self.conn.execute(
+            f"""
+            SELECT
+                {_ENRICHED_ASSET_SELECT},
+                (
+                    SELECT COALESCE(q.adj_close, q.close)
+                    FROM asset_quote_daily q
+                    WHERE q.asset_id = a.asset_id
+                    ORDER BY q.date DESC
+                    LIMIT 1
+                )
+            FROM asset a
+            {_ENRICHED_ASSET_JOIN}
+            {where_sql}
+            ORDER BY
+                CASE
+                    WHEN LOWER(a.asset_id) = LOWER(?) THEN 0
+                    WHEN LOWER(COALESCE(a.symbol, '')) = LOWER(?) THEN 1
+                    ELSE 2
+                END,
+                a.asset_id
+            LIMIT ? OFFSET ?
+            """,
+            [*params, q or "", q or "", limit, offset],
+        ).fetchall()
+        return [self._asset_search_result_from_row(row) for row in rows]
+
     def get_asset(self, asset_id: str) -> AssetDetail:
         asset_id = asset_id.upper().strip()
         row = self.conn.execute(
@@ -1843,6 +1975,40 @@ class AssetApiService:
             benchmark_index_id=benchmark_index_id,
         )
         return analytics_report_payload(report)
+
+    def _asset_search_result(self, asset: AssetDetail) -> AssetSearchResult:
+        return AssetSearchResult(
+            asset_id=asset.asset_id,
+            symbol=asset.symbol,
+            name=asset.name,
+            asset_type=asset.asset_type,
+            sector=asset.sector,
+            industry=asset.industry,
+            country=asset.country,
+            currency=asset.currency,
+            latest_price=asset.latest_price,
+        )
+
+    def _asset_search_result_from_row(self, row) -> AssetSearchResult:
+        classification = _cdr_classification_override(
+            asset_id=row[0],
+            symbol=row[1],
+            name=row[6],
+            sector=row[8],
+            industry=row[9],
+            country=row[10],
+        )
+        return AssetSearchResult(
+            asset_id=row[0],
+            symbol=row[1],
+            name=row[6],
+            asset_type=row[3],
+            sector=classification["sector"],
+            industry=classification["industry"],
+            country=classification["country"],
+            currency=row[5],
+            latest_price=_float_or_none(row[16]),
+        )
 
 
 class ComparisonApiService:
@@ -2320,6 +2486,37 @@ def _known_underlying_asset_detail(asset_id: str) -> AssetDetail | None:
         market_beta=None,
         latest_price=None,
     )
+
+
+def _core_benchmark_candidate(country: str | None, currency: str | None) -> str | None:
+    country_key = _normalized_lookup_key(country)
+    currency_key = _normalized_lookup_key(currency)
+    if country_key and country_key in DEFAULT_BENCHMARK_BY_COUNTRY:
+        return DEFAULT_BENCHMARK_BY_COUNTRY[country_key]
+    if currency_key and currency_key in DEFAULT_BENCHMARK_BY_CURRENCY:
+        return DEFAULT_BENCHMARK_BY_CURRENCY[currency_key]
+    return None
+
+
+def _sector_benchmark_candidate(sector: str | None) -> str | None:
+    return _SECTOR_BENCHMARK_BY_KEY.get(_normalized_lookup_key(sector))
+
+
+def _industry_benchmark_candidate(industry: str | None) -> str | None:
+    normalized = _normalized_lookup_key(industry)
+    if not normalized:
+        return None
+    for keywords, benchmark_id in _INDUSTRY_BENCHMARK_KEYWORDS:
+        if any(keyword in normalized for keyword in keywords):
+            return benchmark_id
+    return None
+
+
+def _normalized_lookup_key(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = " ".join(str(value).replace("&", "and").replace("-", " ").lower().split())
+    return normalized or None
 
 
 def _json_dict(value) -> dict[str, Any]:

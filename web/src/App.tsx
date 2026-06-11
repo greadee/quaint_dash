@@ -29,6 +29,8 @@ import {
   api,
   type AssetActivity,
   type AssetHolding,
+  type AssetSearchResult,
+  type BenchmarkAssociation,
   type BenchmarkDefaultResponse,
   type BenchmarkExposure,
   type BenchmarkIndexSummary,
@@ -405,12 +407,28 @@ function ComparePage() {
   const [left, setLeft] = useState(initialLeft);
   const [right, setRight] = useState("");
   const [benchmark, setBenchmark] = useState("");
+  const [benchmarkTouched, setBenchmarkTouched] = useState(false);
   const [submitted, setSubmitted] = useState({ left: "", right: "", benchmark: "" });
+  const leftBenchmarkAssociations = useQuery({
+    queryKey: ["asset-benchmark-associations", left.trim().toUpperCase()],
+    queryFn: () => api.assetBenchmarkAssociations(left.trim().toUpperCase()),
+    enabled: Boolean(left.trim()),
+    retry: false,
+  });
   const comparison = useQuery({
     queryKey: ["comparison", submitted],
     queryFn: () => api.comparison(submitted.left, submitted.right || undefined, submitted.benchmark || undefined),
     enabled: Boolean(submitted.left.trim()),
   });
+  const setBenchmarkFromUser = (value: string) => {
+    setBenchmarkTouched(true);
+    setBenchmark(value);
+  };
+  useEffect(() => {
+    if (benchmarkTouched || benchmark.trim()) return;
+    const core = leftBenchmarkAssociations.data?.associations.find((item) => item.role === "core");
+    if (core) setBenchmark(core.benchmark_index_id);
+  }, [benchmark, benchmarkTouched, leftBenchmarkAssociations.data]);
   const data = comparison.data;
   return <div className="page">
     <div className="page-title">
@@ -418,9 +436,13 @@ function ComparePage() {
     </div>
     <section className="card compare-control">
       <form onSubmit={(event) => { event.preventDefault(); setSubmitted({ left: left.trim().toUpperCase(), right: right.trim().toUpperCase(), benchmark: benchmark.trim().toUpperCase() }); }}>
-        <label>Left ticker<input value={left} onChange={(event) => setLeft(event.target.value)} placeholder="NVDA" /></label>
-        <label>Right ticker<input value={right} onChange={(event) => setRight(event.target.value)} placeholder="MSFT" /></label>
-        <BenchmarkPicker value={benchmark} onChange={setBenchmark} />
+        <TickerPicker label="Left ticker" value={left} onChange={(value) => { setLeft(value); setBenchmarkTouched(false); setBenchmark(""); }} />
+        <TickerPicker label="Right ticker" value={right} onChange={setRight} />
+        <BenchmarkPicker
+          value={benchmark}
+          onChange={setBenchmarkFromUser}
+          associations={leftBenchmarkAssociations.data?.associations}
+        />
         <button className="primary" disabled={!left.trim() || comparison.isFetching}><BarChart3 size={17}/>Compare</button>
       </form>
     </section>
@@ -700,14 +722,50 @@ function BenchmarkExposureBars({ exposures }: { exposures: BenchmarkExposure[] }
   })}</div>;
 }
 
+function TickerPicker({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const query = search.trim() || value.trim();
+  const assets = useQuery({
+    queryKey: ["asset-picker", query],
+    queryFn: () => api.assets(query, 8),
+    enabled: Boolean(query),
+  });
+  const selectAsset = (asset: AssetSearchResult) => {
+    onChange(asset.asset_id);
+    setSearch("");
+  };
+  return <div className="ticker-picker">
+    <label>{label}<input value={value} onChange={(event) => onChange(event.target.value.toUpperCase())} placeholder="NVDA" /></label>
+    <label>Find ticker<input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search assets" /></label>
+    {assets.data?.length ? <div className="ticker-picker-results">
+      {assets.data.slice(0, 5).map((item) => (
+        <button type="button" key={item.asset_id} onClick={() => selectAsset(item)}>
+          <strong>{item.symbol}</strong>
+          <span>{[item.name, item.sector, item.industry].filter(Boolean).join(" - ")}</span>
+        </button>
+      ))}
+    </div> : null}
+  </div>;
+}
+
 function BenchmarkPicker({
   value,
   onChange,
   defaultBenchmark,
+  associations,
 }: {
   value: string;
   onChange: (value: string) => void;
   defaultBenchmark?: BenchmarkDefaultResponse;
+  associations?: BenchmarkAssociation[];
 }) {
   const [search, setSearch] = useState("");
   const benchmarks = useQuery({
@@ -721,6 +779,19 @@ function BenchmarkPicker({
       {defaultBenchmark?.benchmark_index_id ? <button type="button" onClick={() => onChange(defaultBenchmark.benchmark_index_id ?? "")}>Use default</button> : null}
       {value ? <button type="button" onClick={() => onChange("")}>Clear</button> : null}
     </div>
+    {associations?.length ? <div className="benchmark-associations">
+      {associations.map((item) => (
+        <button
+          type="button"
+          key={`${item.role}-${item.benchmark_index_id}`}
+          className={value === item.benchmark_index_id ? "selected-row" : ""}
+          onClick={() => onChange(item.benchmark_index_id)}
+        >
+          <strong>{item.role}</strong>
+          <span>{item.benchmark_index_id}</span>
+        </button>
+      ))}
+    </div> : null}
     {benchmarks.data?.length ? <div className="benchmark-picker-results">
       {benchmarks.data.slice(0, 5).map((item) => <button type="button" key={item.index_id} onClick={() => onChange(item.index_id)}><strong>{item.index_id}</strong><span>{item.index_name} - {item.currency}</span></button>)}
     </div> : null}
@@ -752,6 +823,12 @@ function AssetPage() {
     queryKey: ["asset-default-benchmark", assetId],
     queryFn: () => api.assetDefaultBenchmark(assetId),
     enabled: Boolean(assetId),
+  });
+  const benchmarkAssociations = useQuery({
+    queryKey: ["asset-benchmark-associations", assetId],
+    queryFn: () => api.assetBenchmarkAssociations(assetId),
+    enabled: Boolean(assetId),
+    retry: false,
   });
   const deletePosition = useMutation({
     mutationFn: ({ portfolioId, holdingAssetId }: { portfolioId: number; holdingAssetId: string }) =>
@@ -806,6 +883,7 @@ function AssetPage() {
       benchmark={analyticsBenchmark}
       onBenchmarkChange={setAnalyticsBenchmark}
       defaultBenchmark={defaultBenchmark.data}
+      associations={benchmarkAssociations.data?.associations}
     />
     <section className="detail-grid">
       <div className="card"><p className="eyebrow">Classification</p><h2>{asset.data?.industry ?? "Not classified"}</h2><p>{[asset.data?.sector, asset.data?.asset_type, asset.data?.asset_subtype].filter(Boolean).join(" - ") || "Classification unavailable"}</p></div>
@@ -1323,12 +1401,14 @@ function AssetAnalyticsPanel({
   benchmark,
   onBenchmarkChange,
   defaultBenchmark,
+  associations,
 }: {
   payload?: Record<string, unknown>;
   isLoading: boolean;
   benchmark: string;
   onBenchmarkChange: (value: string) => void;
   defaultBenchmark?: BenchmarkDefaultResponse;
+  associations?: BenchmarkAssociation[];
 }) {
   const report = payload?.report as AnyRecord | undefined;
   const risk = record(report?.risk);
@@ -1371,7 +1451,7 @@ function AssetAnalyticsPanel({
     <div className="card-heading">
       <div><p className="eyebrow">Phase 3 analytics</p><h2>Asset signals</h2></div>
       <div className="card-tools">
-        <BenchmarkPicker value={benchmark} onChange={onBenchmarkChange} defaultBenchmark={defaultBenchmark} />
+        <BenchmarkPicker value={benchmark} onChange={onBenchmarkChange} defaultBenchmark={defaultBenchmark} associations={associations} />
         <span>{payload?.schema_version as string ?? "loading"}</span>
       </div>
     </div>

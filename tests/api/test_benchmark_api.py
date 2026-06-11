@@ -25,6 +25,8 @@ def _seed_benchmark(conn) -> None:
         )
         VALUES
             ('SP500', 'S&P 500', 'S&P', 'core_geo', 'North America', 'US', 'USD', TRUE, TRUE, 'Large cap US'),
+            ('SEC_TECH', 'Information Technology Sector', 'Select Sector SPDR', 'sector', 'United States', 'US', 'USD', FALSE, TRUE, 'Technology sector'),
+            ('IND_SEMICONDUCTORS', 'Semiconductors Industry', 'iShares', 'industry', 'Global', NULL, 'USD', FALSE, TRUE, 'Semiconductor industry'),
             ('TECH', 'Technology Select', 'Sector', 'sector', 'North America', 'US', 'USD', FALSE, TRUE, 'Technology')
         """
     )
@@ -244,6 +246,42 @@ def test_default_benchmark_endpoints_use_analytics_defaults(tmp_path):
     assert asset_response.json()["benchmark_index_id"] == "SP500"
     assert portfolio_response.status_code == 200
     assert portfolio_response.json()["benchmark_index_id"] == "SP500"
+
+
+def test_asset_search_and_benchmark_association_suggests_core_sector_and_industry(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    _seed_benchmark(db.conn)
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name, sector, industry, country)
+        VALUES ('NVDA', 'NVDA', 'stock', 'USD', 'NVIDIA Corporation', 'Technology', 'Semiconductors', 'US')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+        VALUES ('NVDA', '2026-01-02', 120, 120, 'test')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        search = client.get("/api/v1/assets?q=nvd")
+        associations = client.get("/api/v1/benchmarks/associations/asset/NVDA")
+
+    assert search.status_code == 200
+    assert search.json()[0]["asset_id"] == "NVDA"
+    assert associations.status_code == 200
+    payload = associations.json()
+    assert payload["asset"]["symbol"] == "NVDA"
+    by_role = {item["role"]: item["benchmark_index_id"] for item in payload["associations"]}
+    assert by_role == {
+        "core": "SP500",
+        "sector": "SEC_TECH",
+        "industry": "IND_SEMICONDUCTORS",
+    }
 
 
 def test_seed_and_refresh_use_index_service_paths(tmp_path, monkeypatch):

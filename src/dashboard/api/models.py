@@ -136,6 +136,18 @@ class AssetDetail(BaseModel):
     latest_price: float | None
 
 
+class AssetSearchResult(BaseModel):
+    asset_id: str
+    symbol: str
+    name: str | None
+    asset_type: str | None
+    sector: str | None
+    industry: str | None
+    country: str | None
+    currency: str
+    latest_price: float | None = None
+
+
 class PricePointResponse(BaseModel):
     date: date
     close: float
@@ -355,6 +367,20 @@ class BenchmarkDefaultResponse(BaseModel):
     benchmark_index_id: str | None = None
     reason: str
     fallback_used: bool
+
+
+class BenchmarkAssociation(BaseModel):
+    role: str
+    benchmark_index_id: str
+    index_name: str
+    index_category: str
+    reason: str
+    confidence: float
+
+
+class AssetBenchmarkAssociationResponse(BaseModel):
+    asset: AssetSearchResult
+    associations: list[BenchmarkAssociation] = Field(default_factory=list)
 
 
 class BenchmarkSeedRequest(BaseModel):

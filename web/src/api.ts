@@ -77,6 +77,18 @@ export type Asset = {
   latest_price: number | null;
 };
 
+export type AssetSearchResult = {
+  asset_id: string;
+  symbol: string;
+  name: string | null;
+  asset_type: string | null;
+  sector: string | null;
+  industry: string | null;
+  country: string | null;
+  currency: string;
+  latest_price: number | null;
+};
+
 export type PricePoint = { date: string; close: number };
 export type PriceMover = {
   asset_id: string;
@@ -259,6 +271,18 @@ export type BenchmarkDefaultResponse = {
   benchmark_index_id: string | null;
   reason: string;
   fallback_used: boolean;
+};
+export type BenchmarkAssociation = {
+  role: string;
+  benchmark_index_id: string;
+  index_name: string;
+  index_category: string;
+  reason: string;
+  confidence: number;
+};
+export type AssetBenchmarkAssociationResponse = {
+  asset: AssetSearchResult;
+  associations: BenchmarkAssociation[];
 };
 export type BenchmarkFilters = {
   q?: string;
@@ -446,7 +470,14 @@ export const api = {
   deletePortfolio: (id: number) => request(`/portfolios/${id}`, { method: "DELETE" }),
   deletePosition: (portfolioId: number, assetId: string) =>
     request(`/portfolios/${portfolioId}/positions/${assetId}`, { method: "DELETE" }),
+  assets: (q?: string, limit = 25) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (q?.trim()) params.set("q", q.trim());
+    return request<AssetSearchResult[]>(`/assets?${params.toString()}`);
+  },
   asset: (id: string) => request<Asset>(`/assets/${id}`),
+  assetBenchmarkAssociations: (assetId: string) =>
+    request<AssetBenchmarkAssociationResponse>(`/benchmarks/associations/asset/${encodeURIComponent(assetId)}`),
   assetHoldings: (id: string) => request<AssetHolding[]>(`/assets/${id}/holdings`),
   assetActivity: (id: string, limit = 20, offset = 0) =>
     request<Page<AssetActivity>>(`/assets/${id}/activity?limit=${limit}&offset=${offset}`),
