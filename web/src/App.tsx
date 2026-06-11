@@ -159,6 +159,9 @@ function PortfoliosPage() {
   const [groupBy, setGroupBy] = useState<TrancheDimension>("sector");
   const [newName, setNewName] = useState("");
   const [renameName, setRenameName] = useState("");
+  const [analyticsBenchmark, setAnalyticsBenchmark] = useState("");
+  const [transactionLimit, setTransactionLimit] = useState("8");
+  const [transactionOffset, setTransactionOffset] = useState(0);
   const isAggregate = selectedId === "all";
   const aggregate = useQuery({
     queryKey: ["portfolio-aggregate"],
@@ -167,6 +170,8 @@ function PortfoliosPage() {
   });
   const selectedPortfolio = portfolios.data?.find((item) => item.portfolio_id === selectedId) ?? portfolios.data?.[0];
   const selected = isAggregate ? aggregate.data : selectedPortfolio;
+  const selectedTransactionKey = isAggregate ? "all" : selected?.portfolio_id;
+  const selectedRenameName = !isAggregate && selected ? selected.name : "";
   const selectPortfolio = (value: number | "all") => {
     setSelectedId(value);
     window.localStorage.setItem("quaint_dash_portfolio_tab", String(value));
@@ -182,13 +187,23 @@ function PortfoliosPage() {
     enabled: Boolean(selected),
   });
   const transactions = useQuery({
-    queryKey: ["transactions", isAggregate ? "all" : selected?.portfolio_id],
-    queryFn: () => isAggregate ? api.aggregateTransactions() : api.transactions(selected!.portfolio_id),
+    queryKey: [
+      "transactions",
+      selectedTransactionKey,
+      transactionLimit,
+      transactionOffset,
+    ],
+    queryFn: () => {
+      const limit = boundedInt(transactionLimit, 8, 1, 200);
+      return isAggregate
+        ? api.aggregateTransactions(limit, transactionOffset)
+        : api.transactions(selected!.portfolio_id, limit, transactionOffset);
+    },
     enabled: Boolean(selected),
   });
   const analytics = useQuery({
-    queryKey: ["portfolio-analytics", selected?.portfolio_id],
-    queryFn: () => api.portfolioAnalytics(selected!.portfolio_id),
+    queryKey: ["portfolio-analytics", selected?.portfolio_id, analyticsBenchmark],
+    queryFn: () => api.portfolioAnalytics(selected!.portfolio_id, analyticsBenchmark.trim().toUpperCase() || undefined),
     enabled: Boolean(selected) && !isAggregate,
   });
   const create = useMutation({
@@ -225,8 +240,11 @@ function PortfoliosPage() {
     },
   });
   useEffect(() => {
-    setRenameName(!isAggregate && selected ? selected.name : "");
-  }, [isAggregate, selected?.portfolio_id, selected?.name]);
+    setRenameName(selectedRenameName);
+  }, [selectedRenameName]);
+  useEffect(() => {
+    setTransactionOffset(0);
+  }, [selectedTransactionKey, transactionLimit]);
 
   if (portfolios.isLoading) return <Loading />;
   if (portfolios.error) return <ErrorPanel error={portfolios.error} />;
@@ -285,19 +303,40 @@ function PortfoliosPage() {
         <Metric icon={<Activity />} label="Active holdings" value={String(selected.position_count)} />
       </section>
       <section className="insight-grid">
-        {isAggregate ? <AggregatePanel /> : <AnalyticsPanel payload={analytics.data} isLoading={analytics.isLoading} />}
+        {isAggregate ? <AggregatePanel /> : (
+          <AnalyticsPanel
+            payload={analytics.data}
+            isLoading={analytics.isLoading}
+            benchmark={analyticsBenchmark}
+            onBenchmarkChange={setAnalyticsBenchmark}
+          />
+        )}
         <section className="card">
-          <div className="card-heading"><div><p className="eyebrow">Recent ledger activity</p><h2>Transactions</h2></div><span>{transactions.data?.total ?? 0} total</span></div>
-          {transactions.isLoading ? <Loading compact /> : transactions.data?.items.length ? (
-            <div className="mini-list">
-              {transactions.data.items.map((item) => (
-                <article key={item.transaction_id}>
-                  <div><strong>{item.transaction_type}</strong><span>{new Date(item.timestamp).toLocaleDateString()}</span></div>
-                  <span>{item.asset_id ?? item.currency ?? "cash"}</span>
-                  <b>{item.cash_amount != null ? money(item.cash_amount, item.currency ?? selected.base_ccy) : number(item.quantity, 4)}</b>
-                </article>
-              ))}
+          <div className="card-heading">
+            <div><p className="eyebrow">Recent ledger activity</p><h2>Transactions</h2></div>
+            <div className="card-tools">
+              <label>Rows<select value={transactionLimit} onChange={(event) => setTransactionLimit(event.target.value)}><option value="8">8</option><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></label>
+              <span>{transactions.data?.total ?? 0} total</span>
             </div>
+          </div>
+          {transactions.isLoading ? <Loading compact /> : transactions.data?.items.length ? (
+            <>
+              <div className="mini-list">
+                {transactions.data.items.map((item) => (
+                  <article key={item.transaction_id}>
+                    <div><strong>{item.transaction_type}</strong><span>{new Date(item.timestamp).toLocaleDateString()}</span></div>
+                    <span>{item.asset_id ?? item.currency ?? "cash"}</span>
+                    <b>{item.cash_amount != null ? money(item.cash_amount, item.currency ?? selected.base_ccy) : number(item.quantity, 4)}</b>
+                  </article>
+                ))}
+              </div>
+              <Pager
+                total={transactions.data.total}
+                limit={transactions.data.limit}
+                offset={transactions.data.offset}
+                onChange={setTransactionOffset}
+              />
+            </>
           ) : <EmptyRow text="No transactions recorded yet." />}
         </section>
       </section>
@@ -443,11 +482,24 @@ function groupPositions(positions: Position[], dimension: TrancheDimension) {
 function AssetPage() {
   const client = useQueryClient();
   const { assetId = "" } = useParams();
+  const [priceLimit, setPriceLimit] = useState("365");
+  const [activityLimit, setActivityLimit] = useState("20");
+  const [activityOffset, setActivityOffset] = useState(0);
+  const [analyticsBenchmark, setAnalyticsBenchmark] = useState("");
   const asset = useQuery({ queryKey: ["asset", assetId], queryFn: () => api.asset(assetId) });
   const holdings = useQuery({ queryKey: ["asset-holdings", assetId], queryFn: () => api.assetHoldings(assetId) });
-  const activity = useQuery({ queryKey: ["asset-activity", assetId], queryFn: () => api.assetActivity(assetId) });
-  const prices = useQuery({ queryKey: ["prices", assetId], queryFn: () => api.prices(assetId) });
-  const analytics = useQuery({ queryKey: ["asset-analytics", assetId], queryFn: () => api.assetAnalytics(assetId) });
+  const activity = useQuery({
+    queryKey: ["asset-activity", assetId, activityLimit, activityOffset],
+    queryFn: () => api.assetActivity(assetId, boundedInt(activityLimit, 20, 1, 200), activityOffset),
+  });
+  const prices = useQuery({
+    queryKey: ["prices", assetId, priceLimit],
+    queryFn: () => api.prices(assetId, boundedInt(priceLimit, 365, 1, 5000)),
+  });
+  const analytics = useQuery({
+    queryKey: ["asset-analytics", assetId, analyticsBenchmark],
+    queryFn: () => api.assetAnalytics(assetId, analyticsBenchmark.trim().toUpperCase() || undefined),
+  });
   const deletePosition = useMutation({
     mutationFn: ({ portfolioId, holdingAssetId }: { portfolioId: number; holdingAssetId: string }) =>
       api.deletePosition(portfolioId, holdingAssetId),
@@ -462,6 +514,9 @@ function AssetPage() {
     },
   });
   const underlyingAssetId = asset.data?.underlying_asset_id;
+  useEffect(() => {
+    setActivityOffset(0);
+  }, [assetId, activityLimit]);
   const deleteHolding = (holding: AssetHolding) => {
     const warning = holding.broker_linked
       ? `Delete ${holding.symbol} from ${holding.portfolio_name}? This holding is linked to a brokerage account, so the portfolio will fall out of sync with the brokerage account.`
@@ -474,35 +529,80 @@ function AssetPage() {
   if (asset.error) return <ErrorPanel error={asset.error} />;
   return <div className="page">
     <div className="page-title"><div><p className="eyebrow">{asset.data?.sector ?? "Asset detail"}</p><h1>{asset.data?.symbol} <small>{asset.data?.name}</small></h1></div><div className="actions">{underlyingAssetId ? <Link className="button-link" to={`/asset/${underlyingAssetId}`}><Activity size={17}/>Underlying chart</Link> : null}<Link className="button-link" to={`/compare?left=${asset.data?.asset_id ?? assetId}`}><BarChart3 size={17}/>Compare</Link><strong className="asset-price">{money(asset.data?.latest_price, asset.data?.currency)}</strong></div></div>
-    <section className="card chart-card"><div className="card-heading"><div><p className="eyebrow">Last 365 observations</p><h2>Price history</h2></div></div>
+    <section className="card chart-card">
+      <div className="card-heading">
+        <div><p className="eyebrow">Price observations</p><h2>Price history</h2></div>
+        <div className="card-tools"><label>Rows<select value={priceLimit} onChange={(event) => setPriceLimit(event.target.value)}><option value="90">90</option><option value="365">365</option><option value="1000">1000</option><option value="5000">5000</option></select></label></div>
+      </div>
       <div className="chart"><ResponsiveContainer width="100%" height="100%"><AreaChart data={prices.data}><defs><linearGradient id="price" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#5da78b" stopOpacity={0.4}/><stop offset="100%" stopColor="#5da78b" stopOpacity={0}/></linearGradient></defs><XAxis dataKey="date" hide/><YAxis hide domain={["dataMin", "dataMax"]}/><Tooltip/><Area type="monotone" dataKey="close" stroke="#5da78b" fill="url(#price)" strokeWidth={2}/></AreaChart></ResponsiveContainer></div>
     </section>
     <AssetHoldingsPanel holdings={holdings.data ?? []} isLoading={holdings.isLoading} isDeleting={deletePosition.isPending} onDelete={deleteHolding} />
-    <AssetActivityPanel activity={activity.data?.items ?? []} total={activity.data?.total ?? 0} isLoading={activity.isLoading} />
-    <AssetAnalyticsPanel payload={analytics.data} isLoading={analytics.isLoading} />
+    <AssetActivityPanel
+      activity={activity.data?.items ?? []}
+      total={activity.data?.total ?? 0}
+      limit={activity.data?.limit ?? boundedInt(activityLimit, 20, 1, 200)}
+      offset={activity.data?.offset ?? activityOffset}
+      isLoading={activity.isLoading}
+      selectedLimit={activityLimit}
+      onLimitChange={setActivityLimit}
+      onPageChange={setActivityOffset}
+    />
+    <AssetAnalyticsPanel
+      payload={analytics.data}
+      isLoading={analytics.isLoading}
+      benchmark={analyticsBenchmark}
+      onBenchmarkChange={setAnalyticsBenchmark}
+    />
     <section className="detail-grid"><div className="card"><p className="eyebrow">Classification</p><h2>{asset.data?.industry ?? "Not classified"}</h2><p>{asset.data?.country ?? "Country unavailable"} - {asset.data?.currency}</p></div><div className="card"><p className="eyebrow">Business profile</p><p>{asset.data?.description ?? "No company description has been ingested yet."}</p></div></section>
   </div>;
 }
 
-function AssetActivityPanel({ activity, total, isLoading }: { activity: AssetActivity[]; total: number; isLoading: boolean }) {
+function AssetActivityPanel({
+  activity,
+  total,
+  limit,
+  offset,
+  isLoading,
+  selectedLimit,
+  onLimitChange,
+  onPageChange,
+}: {
+  activity: AssetActivity[];
+  total: number;
+  limit: number;
+  offset: number;
+  isLoading: boolean;
+  selectedLimit: string;
+  onLimitChange: (value: string) => void;
+  onPageChange: (value: number) => void;
+}) {
   return <section className="card asset-activity-card">
-    <div className="card-heading"><div><p className="eyebrow">Brokerage activity</p><h2>Activity for this asset</h2></div><span>{total} item{total === 1 ? "" : "s"}</span></div>
-    {isLoading ? <Loading compact /> : activity.length ? (
-      <div className="asset-activity-list">
-        {activity.map((item) => {
-          const key = item.provider_transaction_id ?? item.transaction_id ?? `${item.timestamp}-${item.transaction_type}`;
-          const currency = item.currency ?? "CAD";
-          const amount = item.cash_amount != null ? money(Math.abs(item.cash_amount), currency) : item.price != null && item.quantity != null ? money(Math.abs(item.quantity * item.price), currency) : "Unavailable";
-          return <article key={key}>
-            <div>
-              <strong>{item.transaction_type}</strong>
-              <span>{new Date(item.timestamp).toLocaleDateString()} - {item.portfolio_name ?? item.provider_account_id ?? item.source}</span>
-            </div>
-            <span>{number(item.quantity, 4)} @ {money(item.price, currency)}</span>
-            <b>{amount}</b>
-          </article>;
-        })}
+    <div className="card-heading">
+      <div><p className="eyebrow">Brokerage activity</p><h2>Activity for this asset</h2></div>
+      <div className="card-tools">
+        <label>Rows<select value={selectedLimit} onChange={(event) => onLimitChange(event.target.value)}><option value="10">10</option><option value="20">20</option><option value="50">50</option><option value="100">100</option></select></label>
+        <span>{total} item{total === 1 ? "" : "s"}</span>
       </div>
+    </div>
+    {isLoading ? <Loading compact /> : activity.length ? (
+      <>
+        <div className="asset-activity-list">
+          {activity.map((item) => {
+            const key = item.provider_transaction_id ?? item.transaction_id ?? `${item.timestamp}-${item.transaction_type}`;
+            const currency = item.currency ?? "CAD";
+            const amount = item.cash_amount != null ? money(Math.abs(item.cash_amount), currency) : item.price != null && item.quantity != null ? money(Math.abs(item.quantity * item.price), currency) : "Unavailable";
+            return <article key={key}>
+              <div>
+                <strong>{item.transaction_type}</strong>
+                <span>{new Date(item.timestamp).toLocaleDateString()} - {item.portfolio_name ?? item.provider_account_id ?? item.source}</span>
+              </div>
+              <span>{number(item.quantity, 4)} @ {money(item.price, currency)}</span>
+              <b>{amount}</b>
+            </article>;
+          })}
+        </div>
+        <Pager total={total} limit={limit} offset={offset} onChange={onPageChange} />
+      </>
     ) : <EmptyRow text="No broker or local activity has been recorded for this asset yet." />}
   </section>;
 }
@@ -784,7 +884,30 @@ function OperationsPage() {
 function Metric({ icon, label, value, detail, positive }: { icon: React.ReactNode; label: string; value: string; detail?: string; positive?: boolean }) {
   return <article className="metric card"><div className="metric-icon">{icon}</div><p>{label}</p><strong>{value}</strong>{detail && <span className={positive ? "positive" : "negative"}>{detail}</span>}</article>;
 }
-function AnalyticsPanel({ payload, isLoading }: { payload?: Record<string, unknown>; isLoading: boolean }) {
+function Pager({ total, limit, offset, onChange }: { total: number; limit: number; offset: number; onChange: (offset: number) => void }) {
+  const nextOffset = offset + limit;
+  const previousOffset = Math.max(offset - limit, 0);
+  const start = total ? offset + 1 : 0;
+  const end = Math.min(offset + limit, total);
+  return <div className="pager">
+    <span>{start}-{end} of {total}</span>
+    <div className="actions">
+      <button onClick={() => onChange(previousOffset)} disabled={offset <= 0}>Previous</button>
+      <button onClick={() => onChange(nextOffset)} disabled={nextOffset >= total}>Next</button>
+    </div>
+  </div>;
+}
+function AnalyticsPanel({
+  payload,
+  isLoading,
+  benchmark,
+  onBenchmarkChange,
+}: {
+  payload?: Record<string, unknown>;
+  isLoading: boolean;
+  benchmark: string;
+  onBenchmarkChange: (value: string) => void;
+}) {
   const report = payload?.report as AnyRecord | undefined;
   const performance = record(report?.performance);
   const risk = record(report?.risk);
@@ -821,7 +944,13 @@ function AnalyticsPanel({ payload, isLoading }: { payload?: Record<string, unkno
     },
   ];
   return <section className="card">
-    <div className="card-heading"><div><p className="eyebrow">Phase 3 analytics</p><h2>Portfolio signals</h2></div><span>{payload?.schema_version as string ?? "loading"}</span></div>
+    <div className="card-heading">
+      <div><p className="eyebrow">Phase 3 analytics</p><h2>Portfolio signals</h2></div>
+      <div className="card-tools">
+        <label>Benchmark<input value={benchmark} onChange={(event) => onBenchmarkChange(event.target.value.toUpperCase())} placeholder="default" /></label>
+        <span>{payload?.schema_version as string ?? "loading"}</span>
+      </div>
+    </div>
     {isLoading ? <Loading compact /> : (
       <div className="analytics-stack">
         <div className="signal-grid deep">
@@ -880,7 +1009,17 @@ function Signal({ label, value }: { label: string; value: string }) {
   return <div className="signal"><span>{label}</span><strong>{value}</strong></div>;
 }
 
-function AssetAnalyticsPanel({ payload, isLoading }: { payload?: Record<string, unknown>; isLoading: boolean }) {
+function AssetAnalyticsPanel({
+  payload,
+  isLoading,
+  benchmark,
+  onBenchmarkChange,
+}: {
+  payload?: Record<string, unknown>;
+  isLoading: boolean;
+  benchmark: string;
+  onBenchmarkChange: (value: string) => void;
+}) {
   const report = payload?.report as AnyRecord | undefined;
   const risk = record(report?.risk);
   const relative = record(report?.relative);
@@ -919,7 +1058,13 @@ function AssetAnalyticsPanel({ payload, isLoading }: { payload?: Record<string, 
     },
   ];
   return <section className="card asset-analytics-card">
-    <div className="card-heading"><div><p className="eyebrow">Phase 3 analytics</p><h2>Asset signals</h2></div><span>{payload?.schema_version as string ?? "loading"}</span></div>
+    <div className="card-heading">
+      <div><p className="eyebrow">Phase 3 analytics</p><h2>Asset signals</h2></div>
+      <div className="card-tools">
+        <label>Benchmark<input value={benchmark} onChange={(event) => onBenchmarkChange(event.target.value.toUpperCase())} placeholder="default" /></label>
+        <span>{payload?.schema_version as string ?? "loading"}</span>
+      </div>
+    </div>
     {isLoading ? <Loading compact /> : (
       <div className="analytics-stack">
         <div className="signal-grid deep">

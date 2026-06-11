@@ -231,9 +231,16 @@ export const api = {
   aggregatePortfolio: () => request<Portfolio>("/portfolios/aggregate/overview"),
   positions: (id: number) => request<Position[]>(`/portfolios/${id}/positions`),
   aggregatePositions: () => request<Position[]>("/portfolios/aggregate/positions"),
-  transactions: (id: number) => request<Page<Transaction>>(`/portfolios/${id}/transactions?limit=8`),
-  aggregateTransactions: () => request<Page<Transaction>>("/portfolios/aggregate/transactions?limit=8"),
-  portfolioAnalytics: (id: number) => request<Record<string, unknown>>(`/portfolios/${id}/analytics`),
+  transactions: (id: number, limit = 8, offset = 0) =>
+    request<Page<Transaction>>(`/portfolios/${id}/transactions?limit=${limit}&offset=${offset}`),
+  aggregateTransactions: (limit = 8, offset = 0) =>
+    request<Page<Transaction>>(`/portfolios/aggregate/transactions?limit=${limit}&offset=${offset}`),
+  portfolioAnalytics: (id: number, benchmarkIndexId?: string) => {
+    const params = new URLSearchParams();
+    if (benchmarkIndexId) params.set("benchmark_index_id", benchmarkIndexId);
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    return request<Record<string, unknown>>(`/portfolios/${id}/analytics${suffix}`);
+  },
   createPortfolio: (name: string) =>
     request<Portfolio>("/portfolios", { method: "POST", body: JSON.stringify({ name }) }),
   updatePortfolio: (id: number, name: string) =>
@@ -243,9 +250,15 @@ export const api = {
     request(`/portfolios/${portfolioId}/positions/${assetId}`, { method: "DELETE" }),
   asset: (id: string) => request<Asset>(`/assets/${id}`),
   assetHoldings: (id: string) => request<AssetHolding[]>(`/assets/${id}/holdings`),
-  assetActivity: (id: string) => request<Page<AssetActivity>>(`/assets/${id}/activity?limit=20`),
-  prices: (id: string) => request<PricePoint[]>(`/assets/${id}/prices?limit=365`),
-  assetAnalytics: (id: string) => request<Record<string, unknown>>(`/assets/${id}/analytics`),
+  assetActivity: (id: string, limit = 20, offset = 0) =>
+    request<Page<AssetActivity>>(`/assets/${id}/activity?limit=${limit}&offset=${offset}`),
+  prices: (id: string, limit = 365) => request<PricePoint[]>(`/assets/${id}/prices?limit=${limit}`),
+  assetAnalytics: (id: string, benchmarkIndexId?: string) => {
+    const params = new URLSearchParams();
+    if (benchmarkIndexId) params.set("benchmark_index_id", benchmarkIndexId);
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    return request<Record<string, unknown>>(`/assets/${id}/analytics${suffix}`);
+  },
   brokerConnections: () => request<BrokerConnection[]>("/brokers/connections"),
   brokerAccounts: () => request<BrokerAccount[]>("/brokers/accounts"),
   registerBrokerUser: (userKey: string) =>
