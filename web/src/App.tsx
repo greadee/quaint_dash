@@ -337,7 +337,7 @@ function PortfoliosPage() {
               <div className="mini-list">
                 {transactions.data.items.map((item) => (
                   <article key={item.transaction_id}>
-                    <div><strong>{item.transaction_type}</strong><span>{new Date(item.timestamp).toLocaleDateString()}</span></div>
+                    <div><strong>{item.transaction_type}</strong><span>{new Date(item.timestamp).toLocaleDateString()}{item.fee_amount ? ` - Fee ${money(item.fee_amount, item.currency ?? selected.base_ccy)}` : ""}</span></div>
                     <span>{item.asset_id ?? item.currency ?? "cash"}</span>
                     <b>{item.cash_amount != null ? money(item.cash_amount, item.currency ?? selected.base_ccy) : number(item.quantity, 4)}</b>
                   </article>
