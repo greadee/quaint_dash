@@ -292,8 +292,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ portfolio_id: portfolioId ?? null }),
     }),
-  ingestionJobs: (status?: string, domain?: string) => {
-    const params = new URLSearchParams({ limit: "100" });
+  ingestionJobs: (status?: string, domain?: string, limit = 100) => {
+    const params = new URLSearchParams({ limit: String(limit) });
     if (status) params.set("status", status);
     if (domain) params.set("domain", domain);
     return request<IngestionJob[]>(`/ingestion/jobs?${params.toString()}`);

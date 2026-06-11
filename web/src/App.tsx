@@ -788,6 +788,7 @@ function OperationsPage() {
   const client = useQueryClient();
   const [status, setStatus] = useState("");
   const [domain, setDomain] = useState("");
+  const [jobLimit, setJobLimit] = useState("100");
   const [pipeline, setPipeline] = useState("all");
   const [assetId, setAssetId] = useState("");
   const [maxAssets, setMaxAssets] = useState("25");
@@ -797,7 +798,10 @@ function OperationsPage() {
   const [runMaxJobs, setRunMaxJobs] = useState("1");
   const [retryMaxJobs, setRetryMaxJobs] = useState("25");
   const [message, setMessage] = useState("");
-  const jobs = useQuery({ queryKey: ["jobs", status, domain], queryFn: () => api.ingestionJobs(status, domain) });
+  const jobs = useQuery({
+    queryKey: ["jobs", status, domain, jobLimit],
+    queryFn: () => api.ingestionJobs(status, domain, boundedInt(jobLimit, 100, 1, 500)),
+  });
   const schedule = useMutation({
     mutationFn: () => api.scheduleIngestion({
       pipeline,
@@ -868,7 +872,14 @@ function OperationsPage() {
       {message ? <p className="action-message">{message}</p> : null}
       {actionError ? <ErrorPanel error={actionError} /> : null}
     </section>
-    <section className="card"><div className="card-heading"><h2>Ingestion jobs</h2><span>{jobs.data?.length ?? 0} shown</span></div>
+    <section className="card">
+      <div className="card-heading">
+        <h2>Ingestion jobs</h2>
+        <div className="card-tools">
+          <label>Rows<select value={jobLimit} onChange={(event) => setJobLimit(event.target.value)}><option value="25">25</option><option value="100">100</option><option value="250">250</option><option value="500">500</option></select></label>
+          <span>{jobs.data?.length ?? 0} shown</span>
+        </div>
+      </div>
       <div className="filter-row">
         <label>Status<select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">Any</option><option value="pending">Pending</option><option value="running">Running</option><option value="done">Done</option><option value="failed">Failed</option></select></label>
         <label>Domain<select value={domain} onChange={(event) => setDomain(event.target.value)}><option value="">Any</option><option value="market">Market</option><option value="corporate">Corporate</option><option value="sentiment">Sentiment</option></select></label>
