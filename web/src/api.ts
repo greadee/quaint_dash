@@ -250,8 +250,8 @@ export const api = {
     const suffix = params.toString() ? `?${params.toString()}` : "";
     return request<Record<string, unknown>>(`/portfolios/${id}/analytics${suffix}`);
   },
-  createPortfolio: (name: string) =>
-    request<Portfolio>("/portfolios", { method: "POST", body: JSON.stringify({ name }) }),
+  createPortfolio: (name: string, baseCcy = "CAD") =>
+    request<Portfolio>("/portfolios", { method: "POST", body: JSON.stringify({ name, base_ccy: baseCcy }) }),
   updatePortfolio: (id: number, name: string) =>
     request<Portfolio>(`/portfolios/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
   deletePortfolio: (id: number) => request(`/portfolios/${id}`, { method: "DELETE" }),

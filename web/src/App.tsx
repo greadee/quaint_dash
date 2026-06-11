@@ -158,6 +158,7 @@ function PortfoliosPage() {
   const [selectedId, setSelectedId] = useState<number | "all" | null>(() => portfolioSelectionFromParam(params.get("portfolio") ?? window.localStorage.getItem("quaint_dash_portfolio_tab")));
   const [groupBy, setGroupBy] = useState<TrancheDimension>("sector");
   const [newName, setNewName] = useState("");
+  const [newBaseCcy, setNewBaseCcy] = useState("CAD");
   const [renameName, setRenameName] = useState("");
   const [analyticsBenchmark, setAnalyticsBenchmark] = useState("");
   const [transactionLimit, setTransactionLimit] = useState("8");
@@ -207,7 +208,7 @@ function PortfoliosPage() {
     enabled: Boolean(selected) && !isAggregate,
   });
   const create = useMutation({
-    mutationFn: api.createPortfolio,
+    mutationFn: ({ name, baseCcy }: { name: string; baseCcy: string }) => api.createPortfolio(name, baseCcy),
     onSuccess: (item) => {
       setNewName("");
       selectPortfolio(item.portfolio_id);
@@ -254,8 +255,9 @@ function PortfoliosPage() {
         <WalletCards size={42} />
         <h1>Create your first portfolio</h1>
         <p>Start with a named portfolio, then import transactions through the CLI or a linked broker.</p>
-        <form onSubmit={(event) => { event.preventDefault(); create.mutate(newName); }}>
+        <form onSubmit={(event) => { event.preventDefault(); create.mutate({ name: newName.trim(), baseCcy: newBaseCcy }); }}>
           <input value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="Long-term investments" />
+          <select value={newBaseCcy} onChange={(event) => setNewBaseCcy(event.target.value)} aria-label="Base currency"><option value="CAD">CAD</option><option value="USD">USD</option></select>
           <button className="primary" disabled={!newName.trim()}><Plus size={17} />Create portfolio</button>
         </form>
       </section>
@@ -280,6 +282,17 @@ function PortfoliosPage() {
             <option value="all">All portfolios</option>
             {portfolios.data?.map((item) => <option key={item.portfolio_id} value={item.portfolio_id}>{item.name}</option>)}
           </select>
+          <form className="rename-form" onSubmit={(event) => {
+            event.preventDefault();
+            if (newName.trim()) {
+              create.mutate({ name: newName.trim(), baseCcy: newBaseCcy });
+            }
+          }}>
+            <Plus size={15} />
+            <input value={newName} onChange={(event) => setNewName(event.target.value)} aria-label="New portfolio name" placeholder="New portfolio" />
+            <select value={newBaseCcy} onChange={(event) => setNewBaseCcy(event.target.value)} aria-label="New portfolio base currency"><option value="CAD">CAD</option><option value="USD">USD</option></select>
+            <button className="primary" disabled={!newName.trim() || create.isPending}>Add</button>
+          </form>
           {!isAggregate ? (
             <form className="rename-form" onSubmit={(event) => {
               event.preventDefault();
