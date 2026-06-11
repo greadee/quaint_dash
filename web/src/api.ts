@@ -173,6 +173,7 @@ export type Transaction = {
 };
 export type Page<T> = { items: T[]; total: number; limit: number; offset: number };
 export type BrokerAccount = {
+  provider: string;
   provider_account_id: string;
   provider_connection_id: string;
   account_name: string | null;
