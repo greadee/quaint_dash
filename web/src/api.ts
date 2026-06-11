@@ -152,6 +152,132 @@ export type BenchmarkComparison = {
   return_252d: number | null;
   volatility_252d: number | null;
 };
+export type BenchmarkIndexSummary = {
+  index_id: string;
+  index_name: string;
+  index_family: string;
+  index_category: string;
+  region: string | null;
+  country_code: string | null;
+  currency: string;
+  is_core: boolean;
+  is_active: boolean;
+  notes: string | null;
+  latest_metric_date: string | null;
+  latest_close: number | null;
+  return_1d: number | null;
+  return_21d: number | null;
+  return_252d: number | null;
+  volatility_252d_ann: number | null;
+  latest_composition_date: string | null;
+  constituent_count: number | null;
+  composition_quality: string | null;
+  daily_price_last_success_at: string | null;
+  composition_last_success_at: string | null;
+  last_error: string | null;
+};
+export type BenchmarkSymbol = {
+  provider: string;
+  provider_symbol: string;
+  symbol_purpose: string;
+  is_primary: boolean;
+  is_proxy: boolean;
+};
+export type BenchmarkSyncState = {
+  job_type: string;
+  last_success_at: string | null;
+  last_attempt_at: string | null;
+  last_success_date: string | null;
+  last_error: string | null;
+  updated_at: string | null;
+};
+export type BenchmarkIndexDetail = BenchmarkIndexSummary & {
+  symbols: BenchmarkSymbol[];
+  sync_state: Record<string, BenchmarkSyncState>;
+  available_snapshot_dates: string[];
+  available_price_range: { first_price_date: string | null; last_price_date: string | null };
+  available_metric_range: { first_metric_date: string | null; last_metric_date: string | null };
+};
+export type BenchmarkPricePoint = {
+  date: string;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number;
+  adj_close: number | null;
+  volume: number | null;
+  source: string;
+  source_symbol: string;
+  is_proxy: boolean;
+};
+export type BenchmarkDailyMetric = {
+  metric_date: string;
+  return_1d: number | null;
+  return_5d: number | null;
+  return_21d: number | null;
+  return_63d: number | null;
+  return_126d: number | null;
+  return_252d: number | null;
+  return_ytd: number | null;
+  volatility_21d_ann: number | null;
+  volatility_63d_ann: number | null;
+  volatility_252d_ann: number | null;
+  sma_50: number | null;
+  sma_200: number | null;
+  high_52w: number | null;
+  low_52w: number | null;
+  drawdown_from_52w_high: number | null;
+};
+export type BenchmarkConstituent = {
+  index_id: string;
+  snapshot_date: string;
+  source: string;
+  constituent_symbol: string;
+  constituent_name: string | null;
+  exchange_code: string | null;
+  country_code: string | null;
+  currency: string | null;
+  sector: string | null;
+  industry: string | null;
+  weight_pct: number | null;
+  market_cap: number | null;
+  is_proxy: boolean;
+};
+export type BenchmarkExposure = {
+  index_id: string;
+  snapshot_date: string;
+  dimension_type: string;
+  dimension_value: string;
+  weight_pct: number;
+  source: string;
+  source_type: string;
+  is_proxy: boolean;
+};
+export type BenchmarkDefaultResponse = {
+  subject_type: string;
+  subject_id: string;
+  benchmark_index_id: string | null;
+  reason: string;
+  fallback_used: boolean;
+};
+export type BenchmarkFilters = {
+  q?: string;
+  category?: string;
+  currency?: string;
+  is_core?: boolean;
+  is_active?: boolean;
+  limit?: number;
+  offset?: number;
+};
+export type BenchmarkRefreshPayload = {
+  job_type: "daily_price" | "intraday_price" | "composition" | "metrics" | "relative_metrics";
+  lookback_days?: number;
+  interval?: string;
+  comparison_index_id?: string;
+};
+export type BenchmarkBulkRefreshPayload = BenchmarkRefreshPayload & {
+  category: "core_geo" | "sector" | "industry" | "theme" | "non_core" | "all";
+};
 export type ComparisonResponse = {
   left: ComparisonAsset;
   right: ComparisonAsset | null;
@@ -251,6 +377,54 @@ export const api = {
     if (benchmarkIndexId) params.set("benchmark_index_id", benchmarkIndexId);
     return request<ComparisonResponse>(`/comparison?${params.toString()}`);
   },
+  benchmarks: (filters: BenchmarkFilters = {}) => {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") params.set(key, String(value));
+    });
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    return request<BenchmarkIndexSummary[]>(`/benchmarks${suffix}`);
+  },
+  benchmark: (id: string) => request<BenchmarkIndexDetail>(`/benchmarks/${encodeURIComponent(id)}`),
+  benchmarkPrices: (id: string, params: { limit?: number; start_date?: string; end_date?: string } = {}) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") query.set(key, String(value));
+    });
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return request<BenchmarkPricePoint[]>(`/benchmarks/${encodeURIComponent(id)}/prices${suffix}`);
+  },
+  benchmarkMetrics: (id: string, limit = 365) =>
+    request<BenchmarkDailyMetric[]>(`/benchmarks/${encodeURIComponent(id)}/metrics?limit=${limit}`),
+  benchmarkConstituents: (id: string, params: { limit?: number; offset?: number; snapshot_date?: string; source?: string; sort?: string } = {}) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") query.set(key, String(value));
+    });
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return request<Page<BenchmarkConstituent>>(`/benchmarks/${encodeURIComponent(id)}/constituents${suffix}`);
+  },
+  benchmarkExposures: (id: string, params: { snapshot_date?: string; dimension_type?: string } = {}) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") query.set(key, String(value));
+    });
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return request<BenchmarkExposure[]>(`/benchmarks/${encodeURIComponent(id)}/exposures${suffix}`);
+  },
+  assetDefaultBenchmark: (assetId: string) =>
+    request<BenchmarkDefaultResponse>(`/benchmarks/defaults/asset/${encodeURIComponent(assetId)}`),
+  portfolioDefaultBenchmark: (portfolioId: number) =>
+    request<BenchmarkDefaultResponse>(`/benchmarks/defaults/portfolio/${portfolioId}`),
+  seedBenchmarks: (payload: { scope: "core" | "non_core" | "all" }) =>
+    request<ActionResult>("/benchmarks/seed", { method: "POST", body: JSON.stringify(payload) }),
+  refreshBenchmark: (id: string, payload: BenchmarkRefreshPayload) =>
+    request<ActionResult>(`/benchmarks/${encodeURIComponent(id)}/refresh`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  refreshBenchmarks: (payload: BenchmarkBulkRefreshPayload) =>
+    request<ActionResult>("/benchmarks/refresh", { method: "POST", body: JSON.stringify(payload) }),
   portfolios: () => request<Portfolio[]>("/portfolios"),
   aggregatePortfolio: () => request<Portfolio>("/portfolios/aggregate/overview"),
   positions: (id: number) => request<Position[]>(`/portfolios/${id}/positions`),

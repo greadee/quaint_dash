@@ -17,6 +17,7 @@ import {
   Plus,
   RefreshCw,
   Save,
+  Search,
   ShieldCheck,
   Trash2,
   WalletCards,
@@ -28,6 +29,10 @@ import {
   api,
   type AssetActivity,
   type AssetHolding,
+  type BenchmarkDefaultResponse,
+  type BenchmarkExposure,
+  type BenchmarkIndexSummary,
+  type BenchmarkPricePoint,
   type ComparisonAsset,
   type IngestionBackgroundStatus,
   type Position,
@@ -68,6 +73,7 @@ export default function App() {
           <NavLink to="/" end><LayoutDashboard />Overview</NavLink>
           <NavLink to="/portfolios"><WalletCards />Portfolios</NavLink>
           <NavLink to="/compare"><BarChart3 />Compare</NavLink>
+          <NavLink to="/benchmarks"><Search />Benchmarks</NavLink>
           <NavLink to="/brokers"><Building2 />Brokers</NavLink>
           <NavLink to="/operations"><Database />Operations</NavLink>
         </nav>
@@ -84,6 +90,7 @@ export default function App() {
             <Route path="/" element={<OverviewPage />} />
             <Route path="/portfolios" element={<PortfoliosPage />} />
             <Route path="/compare" element={<ComparePage />} />
+            <Route path="/benchmarks" element={<BenchmarkBrowserPage />} />
             <Route path="/asset/:assetId" element={<AssetPage />} />
             <Route path="/brokers" element={<BrokersPage />} />
             <Route path="/operations" element={<OperationsPage />} />
@@ -214,6 +221,11 @@ function PortfoliosPage() {
     queryFn: () => api.portfolioAnalytics(selected!.portfolio_id, analyticsBenchmark.trim().toUpperCase() || undefined),
     enabled: Boolean(selected) && !isAggregate,
   });
+  const defaultBenchmark = useQuery({
+    queryKey: ["portfolio-default-benchmark", selected?.portfolio_id],
+    queryFn: () => api.portfolioDefaultBenchmark(selected!.portfolio_id),
+    enabled: Boolean(selected) && !isAggregate,
+  });
   const create = useMutation({
     mutationFn: ({ name, baseCcy }: { name: string; baseCcy: string }) => api.createPortfolio(name, baseCcy),
     onSuccess: (item) => {
@@ -329,6 +341,7 @@ function PortfoliosPage() {
             isLoading={analytics.isLoading}
             benchmark={analyticsBenchmark}
             onBenchmarkChange={setAnalyticsBenchmark}
+            defaultBenchmark={defaultBenchmark.data}
           />
         )}
         <section className="card">
@@ -407,7 +420,7 @@ function ComparePage() {
       <form onSubmit={(event) => { event.preventDefault(); setSubmitted({ left: left.trim().toUpperCase(), right: right.trim().toUpperCase(), benchmark: benchmark.trim().toUpperCase() }); }}>
         <label>Left ticker<input value={left} onChange={(event) => setLeft(event.target.value)} placeholder="NVDA" /></label>
         <label>Right ticker<input value={right} onChange={(event) => setRight(event.target.value)} placeholder="MSFT" /></label>
-        <label>Benchmark<input value={benchmark} onChange={(event) => setBenchmark(event.target.value)} placeholder="SP500" /></label>
+        <BenchmarkPicker value={benchmark} onChange={setBenchmark} />
         <button className="primary" disabled={!left.trim() || comparison.isFetching}><BarChart3 size={17}/>Compare</button>
       </form>
     </section>
@@ -473,6 +486,8 @@ function ComparisonRow({ label, left, right }: { label: string; left: string; ri
   return <div className="comparison-row"><span>{label}</span><strong>{left}</strong>{right != null ? <b>{right}</b> : null}</div>;
 }
 const ratio = (value: number | null | undefined) => value == null ? "Unavailable" : value.toFixed(2);
+const weightToRatio = (value: number | null | undefined) => value == null ? null : value > 1 ? value / 100 : value;
+const weightLabel = (value: number | null | undefined) => value == null ? "Unavailable" : value > 1 ? `${value.toFixed(1)}%` : percent(value);
 const gapLabel = (value: number | null | undefined, label: string) => {
   if (value == null) return "Unavailable";
   const direction = value >= 0 ? "above" : "below";
@@ -503,6 +518,215 @@ function groupPositions(positions: Position[], dimension: TrancheDimension) {
     .sort((a, b) => b.marketValue - a.marketValue);
 }
 
+function BenchmarkBrowserPage() {
+  const client = useQueryClient();
+  const [params, setParams] = useSearchParams();
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("");
+  const [currency, setCurrency] = useState("");
+  const [coreOnly, setCoreOnly] = useState(false);
+  const selectedId = params.get("index") ?? "";
+  const benchmarks = useQuery({
+    queryKey: ["benchmarks", query, category, currency, coreOnly],
+    queryFn: () => api.benchmarks({
+      q: query.trim() || undefined,
+      category: category || undefined,
+      currency: currency.trim().toUpperCase() || undefined,
+      is_core: coreOnly ? true : undefined,
+      is_active: true,
+      limit: 100,
+    }),
+  });
+  const firstId = benchmarks.data?.[0]?.index_id ?? "";
+  const activeId = selectedId || firstId;
+  const detail = useQuery({
+    queryKey: ["benchmark-detail", activeId],
+    queryFn: () => api.benchmark(activeId),
+    enabled: Boolean(activeId),
+  });
+  const prices = useQuery({
+    queryKey: ["benchmark-prices", activeId],
+    queryFn: () => api.benchmarkPrices(activeId, { limit: 365 }),
+    enabled: Boolean(activeId),
+  });
+  const metrics = useQuery({
+    queryKey: ["benchmark-metrics", activeId],
+    queryFn: () => api.benchmarkMetrics(activeId, 120),
+    enabled: Boolean(activeId),
+  });
+  const exposures = useQuery({
+    queryKey: ["benchmark-exposures", activeId],
+    queryFn: () => api.benchmarkExposures(activeId),
+    enabled: Boolean(activeId),
+  });
+  const constituents = useQuery({
+    queryKey: ["benchmark-constituents", activeId],
+    queryFn: () => api.benchmarkConstituents(activeId, { limit: 10 }),
+    enabled: Boolean(activeId),
+  });
+  const seed = useMutation({
+    mutationFn: api.seedBenchmarks,
+    onSuccess: () => client.invalidateQueries({ queryKey: ["benchmarks"] }),
+  });
+  const refreshOne = useMutation({
+    mutationFn: ({ id, jobType }: { id: string; jobType: "daily_price" | "composition" | "metrics" }) =>
+      api.refreshBenchmark(id, { job_type: jobType }),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: ["benchmarks"] });
+      client.invalidateQueries({ queryKey: ["benchmark-detail"] });
+      client.invalidateQueries({ queryKey: ["benchmark-prices"] });
+      client.invalidateQueries({ queryKey: ["benchmark-metrics"] });
+      client.invalidateQueries({ queryKey: ["benchmark-exposures"] });
+      client.invalidateQueries({ queryKey: ["benchmark-constituents"] });
+    },
+  });
+  const refreshBroad = useMutation({
+    mutationFn: () => api.refreshBenchmarks({ category: "core_geo", job_type: "daily_price", lookback_days: 10 }),
+    onSuccess: () => client.invalidateQueries({ queryKey: ["benchmarks"] }),
+  });
+  const selectBenchmark = (id: string) => {
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      next.set("index", id);
+      return next;
+    }, { replace: true });
+  };
+  const latestMetric = metrics.data?.at(-1);
+
+  return <div className="page">
+    <div className="page-title">
+      <div><p className="eyebrow">Benchmark index browser</p><h1>Benchmarks</h1><p className="page-subtitle">Browse seeded indexes, inspect price and composition coverage, and run explicit refresh actions.</p></div>
+      <div className="actions">
+        <button disabled={seed.isPending} onClick={() => seed.mutate({ scope: "core" })}><Database size={16}/>Seed core</button>
+        <button disabled={refreshBroad.isPending} onClick={() => window.confirm("Refresh daily prices for all core benchmarks?") && refreshBroad.mutate()}><RefreshCw size={16}/>Core daily</button>
+      </div>
+    </div>
+    <section className="card benchmark-layout">
+      <div className="benchmark-list-panel">
+        <div className="benchmark-filters">
+          <label>Search<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="SP500" /></label>
+          <label>Category<select value={category} onChange={(event) => setCategory(event.target.value)}><option value="">All</option><option value="core_geo">Core geo</option><option value="sector">Sector</option><option value="industry">Industry</option><option value="theme">Theme</option></select></label>
+          <label>Currency<input value={currency} onChange={(event) => setCurrency(event.target.value.toUpperCase())} placeholder="USD" /></label>
+          <label className="check-row compact"><input type="checkbox" checked={coreOnly} onChange={(event) => setCoreOnly(event.target.checked)} />Core</label>
+        </div>
+        {benchmarks.isLoading ? <Loading compact /> : benchmarks.data?.length ? <div className="benchmark-table">
+          <table>
+            <thead><tr><th>Index</th><th>Category</th><th>Return</th><th>Data</th></tr></thead>
+            <tbody>{benchmarks.data.map((item) => <tr key={item.index_id} className={activeId === item.index_id ? "selected-row" : ""} onClick={() => selectBenchmark(item.index_id)}>
+              <td><button className="link-button" onClick={(event) => { event.stopPropagation(); selectBenchmark(item.index_id); }}>{item.index_id}</button><span>{item.index_name}</span></td>
+              <td>{item.index_category}<span>{item.currency}</span></td>
+              <td>{percent(item.return_252d)}<span>{percent(item.volatility_252d_ann)} vol</span></td>
+              <td><BenchmarkQuality item={item} /></td>
+            </tr>)}</tbody>
+          </table>
+        </div> : <EmptyRow text="No benchmarks match the current filters." />}
+      </div>
+      <div className="benchmark-detail-panel">
+        {!activeId ? <EmptyRow text="Select a benchmark to inspect details." /> : detail.error ? <ErrorPanel error={detail.error} /> : detail.isLoading ? <Loading compact /> : detail.data ? <>
+          <div className="card-heading benchmark-detail-heading">
+            <div><p className="eyebrow">{detail.data.index_category}</p><h2>{detail.data.index_name}</h2></div>
+            <span>{detail.data.index_id}</span>
+          </div>
+          <div className="benchmark-summary-grid">
+            <Signal label="Latest close" value={money(detail.data.latest_close, detail.data.currency)} />
+            <Signal label="1 day" value={percent(detail.data.return_1d)} />
+            <Signal label="252 days" value={percent(detail.data.return_252d)} />
+            <Signal label="Volatility" value={percent(detail.data.volatility_252d_ann)} />
+          </div>
+          <div className="benchmark-chart"><BenchmarkPriceChart prices={prices.data ?? []} /></div>
+          <div className="benchmark-actions">
+            <button disabled={refreshOne.isPending} onClick={() => refreshOne.mutate({ id: detail.data.index_id, jobType: "daily_price" })}><RefreshCw size={16}/>Prices</button>
+            <button disabled={refreshOne.isPending} onClick={() => refreshOne.mutate({ id: detail.data.index_id, jobType: "metrics" })}><Activity size={16}/>Metrics</button>
+            <button disabled={refreshOne.isPending} onClick={() => window.confirm(`Refresh composition for ${detail.data.index_id}?`) && refreshOne.mutate({ id: detail.data.index_id, jobType: "composition" })}><Database size={16}/>Composition</button>
+          </div>
+          <div className="benchmark-data-grid">
+            <AnalyticsBlock title="Metric range">
+              <MetricLine label="Latest metric" value={detail.data.latest_metric_date ?? "Unavailable"} />
+              <MetricLine label="5 day return" value={percent(latestMetric?.return_5d)} />
+              <MetricLine label="YTD return" value={percent(latestMetric?.return_ytd)} />
+              <MetricLine label="52w drawdown" value={percent(latestMetric?.drawdown_from_52w_high)} />
+            </AnalyticsBlock>
+            <AnalyticsBlock title="Composition">
+              <MetricLine label="Snapshot" value={detail.data.latest_composition_date ?? "Unavailable"} />
+              <MetricLine label="Constituents" value={String(detail.data.constituent_count ?? "Unavailable")} />
+              <MetricLine label="Quality" value={detail.data.composition_quality ?? "Unavailable"} />
+              <MetricLine label="Symbols" value={String(detail.data.symbols.length)} />
+            </AnalyticsBlock>
+            <AnalyticsBlock title="Sync state">
+              {Object.values(detail.data.sync_state).length ? Object.values(detail.data.sync_state).slice(0, 4).map((item) => <MetricLine key={item.job_type} label={item.job_type} value={item.last_error ? "error" : item.last_success_date ?? "pending"} />) : <span className="muted-copy">No sync state yet.</span>}
+            </AnalyticsBlock>
+          </div>
+          <div className="benchmark-data-grid wide">
+            <AnalyticsBlock title="Exposures">
+              <BenchmarkExposureBars exposures={exposures.data ?? []} />
+            </AnalyticsBlock>
+            <AnalyticsBlock title="Top constituents">
+              {constituents.data?.items.length ? constituents.data.items.map((item) => <MetricLine key={item.constituent_symbol} label={item.constituent_symbol} value={percent(weightToRatio(item.weight_pct))} />) : <span className="muted-copy">No constituents available.</span>}
+            </AnalyticsBlock>
+          </div>
+          {detail.data.last_error ? <div className="benchmark-error">{detail.data.last_error}</div> : null}
+        </> : null}
+      </div>
+    </section>
+  </div>;
+}
+
+function BenchmarkQuality({ item }: { item: BenchmarkIndexSummary }) {
+  const stale = item.latest_metric_date ? (Date.now() - new Date(item.latest_metric_date).getTime()) / 86400000 > 14 : true;
+  const label = item.last_error ? "error" : !item.latest_close ? "no price" : !item.latest_composition_date ? "no composition" : item.composition_quality === "proxy" ? "proxy" : stale ? "stale" : "ready";
+  const tone = item.last_error ? "failed" : label === "ready" ? "done" : "running";
+  return <span className={`pill ${tone}`}>{label}</span>;
+}
+
+function BenchmarkPriceChart({ prices }: { prices: BenchmarkPricePoint[] }) {
+  if (!prices.length) return <EmptyRow text="No price history has been ingested for this benchmark." />;
+  return <ResponsiveContainer width="100%" height="100%">
+    <AreaChart data={prices}>
+      <defs><linearGradient id="benchmarkPrice" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#497d8f" stopOpacity={0.35}/><stop offset="100%" stopColor="#497d8f" stopOpacity={0}/></linearGradient></defs>
+      <XAxis dataKey="date" hide />
+      <YAxis hide domain={["dataMin", "dataMax"]} />
+      <Tooltip />
+      <Area type="monotone" dataKey="close" stroke="#497d8f" fill="url(#benchmarkPrice)" strokeWidth={2} />
+    </AreaChart>
+  </ResponsiveContainer>;
+}
+
+function BenchmarkExposureBars({ exposures }: { exposures: BenchmarkExposure[] }) {
+  const shown = exposures.filter((item) => item.dimension_type === "sector").slice(0, 6);
+  if (!shown.length) return <span className="muted-copy">No exposure snapshot available.</span>;
+  return <div className="exposure-bars">{shown.map((item) => {
+    const width = Math.max(2, Math.min(100, item.weight_pct));
+    return <div key={`${item.dimension_type}-${item.dimension_value}`}><p><span>{item.dimension_value}</span><b>{weightLabel(item.weight_pct)}</b></p><div className="bar"><span style={{ width: `${width}%` }} /></div></div>;
+  })}</div>;
+}
+
+function BenchmarkPicker({
+  value,
+  onChange,
+  defaultBenchmark,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  defaultBenchmark?: BenchmarkDefaultResponse;
+}) {
+  const [search, setSearch] = useState("");
+  const benchmarks = useQuery({
+    queryKey: ["benchmark-picker", search],
+    queryFn: () => api.benchmarks({ q: search.trim() || undefined, limit: 8 }),
+  });
+  return <div className="benchmark-picker">
+    <label>Benchmark<input value={value} onChange={(event) => onChange(event.target.value.toUpperCase())} placeholder={defaultBenchmark?.benchmark_index_id ?? "SP500"} /></label>
+    <label>Find index<input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search indexes" /></label>
+    <div className="benchmark-picker-actions">
+      {defaultBenchmark?.benchmark_index_id ? <button type="button" onClick={() => onChange(defaultBenchmark.benchmark_index_id ?? "")}>Use default</button> : null}
+      {value ? <button type="button" onClick={() => onChange("")}>Clear</button> : null}
+    </div>
+    {benchmarks.data?.length ? <div className="benchmark-picker-results">
+      {benchmarks.data.slice(0, 5).map((item) => <button type="button" key={item.index_id} onClick={() => onChange(item.index_id)}><strong>{item.index_id}</strong><span>{item.index_name} - {item.currency}</span></button>)}
+    </div> : null}
+  </div>;
+}
+
 function AssetPage() {
   const client = useQueryClient();
   const { assetId = "" } = useParams();
@@ -523,6 +747,11 @@ function AssetPage() {
   const analytics = useQuery({
     queryKey: ["asset-analytics", assetId, analyticsBenchmark],
     queryFn: () => api.assetAnalytics(assetId, analyticsBenchmark.trim().toUpperCase() || undefined),
+  });
+  const defaultBenchmark = useQuery({
+    queryKey: ["asset-default-benchmark", assetId],
+    queryFn: () => api.assetDefaultBenchmark(assetId),
+    enabled: Boolean(assetId),
   });
   const deletePosition = useMutation({
     mutationFn: ({ portfolioId, holdingAssetId }: { portfolioId: number; holdingAssetId: string }) =>
@@ -576,6 +805,7 @@ function AssetPage() {
       isLoading={analytics.isLoading}
       benchmark={analyticsBenchmark}
       onBenchmarkChange={setAnalyticsBenchmark}
+      defaultBenchmark={defaultBenchmark.data}
     />
     <section className="detail-grid">
       <div className="card"><p className="eyebrow">Classification</p><h2>{asset.data?.industry ?? "Not classified"}</h2><p>{[asset.data?.sector, asset.data?.asset_type, asset.data?.asset_subtype].filter(Boolean).join(" - ") || "Classification unavailable"}</p></div>
@@ -978,11 +1208,13 @@ function AnalyticsPanel({
   isLoading,
   benchmark,
   onBenchmarkChange,
+  defaultBenchmark,
 }: {
   payload?: Record<string, unknown>;
   isLoading: boolean;
   benchmark: string;
   onBenchmarkChange: (value: string) => void;
+  defaultBenchmark?: BenchmarkDefaultResponse;
 }) {
   const report = payload?.report as AnyRecord | undefined;
   const performance = record(report?.performance);
@@ -1023,7 +1255,7 @@ function AnalyticsPanel({
     <div className="card-heading">
       <div><p className="eyebrow">Phase 3 analytics</p><h2>Portfolio signals</h2></div>
       <div className="card-tools">
-        <label>Benchmark<input value={benchmark} onChange={(event) => onBenchmarkChange(event.target.value.toUpperCase())} placeholder="default" /></label>
+        <BenchmarkPicker value={benchmark} onChange={onBenchmarkChange} defaultBenchmark={defaultBenchmark} />
         <span>{payload?.schema_version as string ?? "loading"}</span>
       </div>
     </div>
@@ -1090,11 +1322,13 @@ function AssetAnalyticsPanel({
   isLoading,
   benchmark,
   onBenchmarkChange,
+  defaultBenchmark,
 }: {
   payload?: Record<string, unknown>;
   isLoading: boolean;
   benchmark: string;
   onBenchmarkChange: (value: string) => void;
+  defaultBenchmark?: BenchmarkDefaultResponse;
 }) {
   const report = payload?.report as AnyRecord | undefined;
   const risk = record(report?.risk);
@@ -1137,7 +1371,7 @@ function AssetAnalyticsPanel({
     <div className="card-heading">
       <div><p className="eyebrow">Phase 3 analytics</p><h2>Asset signals</h2></div>
       <div className="card-tools">
-        <label>Benchmark<input value={benchmark} onChange={(event) => onBenchmarkChange(event.target.value.toUpperCase())} placeholder="default" /></label>
+        <BenchmarkPicker value={benchmark} onChange={onBenchmarkChange} defaultBenchmark={defaultBenchmark} />
         <span>{payload?.schema_version as string ?? "loading"}</span>
       </div>
     </div>
