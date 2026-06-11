@@ -1,9 +1,12 @@
 """FastAPI application factory and web entry point."""
 
+import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from threading import Lock
 
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,10 +18,12 @@ from dashboard.api.models import ErrorResponse, HealthResponse
 from dashboard.api.routes import router
 from dashboard.brokers.snaptrade import SnapTradeError
 from dashboard.db.db_conn import DB, init_db
+from dashboard.models.storage import DashboardManager
 
 API_VERSION = "phase5.api.v1"
 DEFAULT_DB_PATH = Path("data/persistent_db.db")
 DEFAULT_WEB_DIST = Path(__file__).resolve().parents[3] / "web" / "dist"
+LOGGER = logging.getLogger(__name__)
 
 
 def create_app(
@@ -31,11 +36,20 @@ def create_app(
     init_db(db)
     db.conn.close()
 
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        try:
+            _run_startup_broker_sync_if_enabled(app.state.db_path)
+        except Exception as exc:
+            LOGGER.warning("Broker sync scheduler skipped during API startup: %s", exc)
+        yield
+
     app = FastAPI(
         title="Quaint Dash API",
         version=API_VERSION,
         docs_url="/api/docs",
         openapi_url="/api/openapi.json",
+        lifespan=lifespan,
     )
     app.state.db_path = resolved_db_path
     app.state.write_lock = Lock()
@@ -138,4 +152,65 @@ def main() -> None:
     """Run the local-first API server."""
     import uvicorn
 
-    uvicorn.run("dashboard.api.app:app", host="127.0.0.1", port=8000, reload=False)
+    host = os.getenv("DASHBOARD_API_HOST", "127.0.0.1")
+    port = _int_env("DASHBOARD_API_PORT", 8000) or 8000
+    uvicorn.run(app, host=host, port=port, reload=False)
+
+
+def _run_startup_broker_sync_if_enabled(db_path: Path) -> None:
+    """Optionally refresh stale broker data when the API server starts."""
+    load_dotenv()
+    if not (
+        _truthy_env("BROKER_SYNC_ON_SERVER_STARTUP")
+        or _truthy_env("BROKER_SYNC_ON_STARTUP")
+    ):
+        return
+
+    max_users = _int_env("BROKER_SYNC_MAX_USERS")
+    min_age_hours = _int_env("BROKER_SYNC_MIN_AGE_HOURS", 24) or 24
+    result = _run_startup_broker_sync(
+        db_path,
+        max_users=max_users,
+        min_age_hours=min_age_hours,
+    )
+
+    if result.users_synced:
+        LOGGER.info(
+            "Broker sync scheduler synced %s user(s), saw %s account(s), %s position(s), and %s transaction(s).",
+            result.users_synced,
+            result.accounts_seen,
+            result.positions_seen,
+            result.transactions_seen,
+        )
+
+
+def _run_startup_broker_sync(
+    db_path: Path,
+    max_users: int | None,
+    min_age_hours: int,
+):
+    db = DB(db_path)
+    try:
+        init_db(db)
+        manager = DashboardManager(db)
+        return manager.broker_snaptrade_sync_due(
+            max_users=max_users,
+            min_age_hours=min_age_hours,
+        )
+    finally:
+        db.conn.close()
+
+
+def _truthy_env(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _int_env(name: str, default: int | None = None) -> int | None:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    return int(value)
+
+
+if __name__ == "__main__":
+    main()

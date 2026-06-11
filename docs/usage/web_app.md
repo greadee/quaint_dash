@@ -15,6 +15,13 @@ dashboard-web
 The API binds to `http://127.0.0.1:8000`. Interactive API documentation is available at
 `http://127.0.0.1:8000/api/docs`.
 
+`dashboard-web` imports `dashboard.api.app:app` and keeps the FastAPI server running until the
+process is stopped. The equivalent module command is:
+
+```powershell
+python -m dashboard.api.app
+```
+
 In a second terminal, install and start the React application:
 
 ```powershell
@@ -40,6 +47,16 @@ dashboard-web
 
 FastAPI serves the compiled application from `web/dist`. Build output and installed Node
 packages are intentionally excluded from Git.
+
+## Startup Sync
+
+Set `BROKER_SYNC_ON_SERVER_STARTUP=true` to run the same stale-user broker sync used by
+`broker snaptrade sync-due` when the backend starts. `BROKER_SYNC_MAX_USERS` and
+`BROKER_SYNC_MIN_AGE_HOURS` control the launch-time sync window.
+
+For always-on local use, keep `dashboard-web` running in a terminal, Windows Terminal profile,
+Task Scheduler task, or service wrapper. The React dev server can be started later; it will proxy
+to the backend when it comes online.
 
 ## Current Boundaries
 

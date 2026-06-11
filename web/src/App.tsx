@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Component, useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
@@ -22,7 +22,7 @@ import {
   WalletCards,
   X,
 } from "lucide-react";
-import { Link, NavLink, Route, Routes, useParams, useSearchParams } from "react-router-dom";
+import { Link, NavLink, Route, Routes, useLocation, useParams, useSearchParams } from "react-router-dom";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, type AssetActivity, type AssetHolding, type ComparisonAsset, type Position } from "./api";
 
@@ -51,6 +51,7 @@ const friendlyBrokerError = (error: unknown) => {
 
 export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const location = useLocation();
   return (
     <div className="app-shell">
       <aside className={menuOpen ? "sidebar sidebar-open" : "sidebar"}>
@@ -71,17 +72,34 @@ export default function App() {
           <div><p className="eyebrow">Personal finance workspace</p><strong>Investment dashboard</strong></div>
           <div className="avatar">CP</div>
         </header>
-        <Routes>
-          <Route path="/" element={<OverviewPage />} />
-          <Route path="/portfolios" element={<PortfoliosPage />} />
-          <Route path="/compare" element={<ComparePage />} />
-          <Route path="/asset/:assetId" element={<AssetPage />} />
-          <Route path="/brokers" element={<BrokersPage />} />
-          <Route path="/operations" element={<OperationsPage />} />
-        </Routes>
+        <RouteErrorBoundary key={location.pathname}>
+          <Routes>
+            <Route path="/" element={<OverviewPage />} />
+            <Route path="/portfolios" element={<PortfoliosPage />} />
+            <Route path="/compare" element={<ComparePage />} />
+            <Route path="/asset/:assetId" element={<AssetPage />} />
+            <Route path="/brokers" element={<BrokersPage />} />
+            <Route path="/operations" element={<OperationsPage />} />
+          </Routes>
+        </RouteErrorBoundary>
       </main>
     </div>
   );
+}
+
+class RouteErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  render() {
+    if (this.state.error) {
+      return <div className="page"><ErrorPanel error={this.state.error} /></div>;
+    }
+    return this.props.children;
+  }
 }
 
 function OverviewPage() {
@@ -135,8 +153,9 @@ function OverviewPage() {
 
 function PortfoliosPage() {
   const client = useQueryClient();
+  const [params, setParams] = useSearchParams();
   const portfolios = useQuery({ queryKey: ["portfolios"], queryFn: api.portfolios });
-  const [selectedId, setSelectedId] = useState<number | "all" | null>(null);
+  const [selectedId, setSelectedId] = useState<number | "all" | null>(() => portfolioSelectionFromParam(params.get("portfolio") ?? window.localStorage.getItem("quaint_dash_portfolio_tab")));
   const [groupBy, setGroupBy] = useState<TrancheDimension>("sector");
   const [newName, setNewName] = useState("");
   const [renameName, setRenameName] = useState("");
@@ -148,6 +167,15 @@ function PortfoliosPage() {
   });
   const selectedPortfolio = portfolios.data?.find((item) => item.portfolio_id === selectedId) ?? portfolios.data?.[0];
   const selected = isAggregate ? aggregate.data : selectedPortfolio;
+  const selectPortfolio = (value: number | "all") => {
+    setSelectedId(value);
+    window.localStorage.setItem("quaint_dash_portfolio_tab", String(value));
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      next.set("portfolio", String(value));
+      return next;
+    }, { replace: true });
+  };
   const positions = useQuery({
     queryKey: ["positions", isAggregate ? "all" : selected?.portfolio_id],
     queryFn: () => isAggregate ? api.aggregatePositions() : api.positions(selected!.portfolio_id),
@@ -167,7 +195,7 @@ function PortfoliosPage() {
     mutationFn: api.createPortfolio,
     onSuccess: (item) => {
       setNewName("");
-      setSelectedId(item.portfolio_id);
+      selectPortfolio(item.portfolio_id);
       client.invalidateQueries({ queryKey: ["portfolios"] });
     },
   });
@@ -183,6 +211,12 @@ function PortfoliosPage() {
     mutationFn: api.deletePortfolio,
     onSuccess: () => {
       setSelectedId(null);
+      window.localStorage.removeItem("quaint_dash_portfolio_tab");
+      setParams((current) => {
+        const next = new URLSearchParams(current);
+        next.delete("portfolio");
+        return next;
+      }, { replace: true });
       client.invalidateQueries({ queryKey: ["portfolios"] });
       client.invalidateQueries({ queryKey: ["portfolio-aggregate"] });
       client.invalidateQueries({ queryKey: ["positions"] });
@@ -224,7 +258,7 @@ function PortfoliosPage() {
       <div className="page-title">
         <div><p className="eyebrow">Portfolio workspace</p><h1>{selected.name}</h1><p className="page-subtitle">Organize one portfolio or all holdings into intuitive tranches by sector, geography, industry, asset type, or currency.</p></div>
         <div className="overview-actions">
-          <select value={isAggregate ? "all" : selected.portfolio_id} onChange={(event) => setSelectedId(event.target.value === "all" ? "all" : Number(event.target.value))}>
+          <select value={isAggregate ? "all" : selected.portfolio_id} onChange={(event) => selectPortfolio(event.target.value === "all" ? "all" : Number(event.target.value))}>
             <option value="all">All portfolios</option>
             {portfolios.data?.map((item) => <option key={item.portfolio_id} value={item.portfolio_id}>{item.name}</option>)}
           </select>
@@ -497,6 +531,9 @@ function BrokersPage() {
   const [userKey, setUserKey] = useState("default");
   const [providerUserId, setProviderUserId] = useState("");
   const [userSecret, setUserSecret] = useState("");
+  const [portalBroker, setPortalBroker] = useState("");
+  const [portalReconnect, setPortalReconnect] = useState("");
+  const [importPortfolioId, setImportPortfolioId] = useState("");
   const [message, setMessage] = useState("");
   const [portalUrl, setPortalUrl] = useState("");
   const portfolios = useQuery({ queryKey: ["portfolios"], queryFn: api.portfolios });
@@ -520,7 +557,11 @@ function BrokersPage() {
     onError: (error) => setMessage(friendlyBrokerError(error)),
   });
   const portal = useMutation({
-    mutationFn: api.brokerPortal,
+    mutationFn: () => api.brokerPortal({
+      user_key: userKey.trim(),
+      broker: portalBroker.trim() || null,
+      reconnect: portalReconnect.trim() || null,
+    }),
     onSuccess: (result) => {
       setPortalUrl(result.url);
       setMessage("Portal URL created. Use the link below if the new tab did not open.");
@@ -549,10 +590,13 @@ function BrokersPage() {
     onError: (error) => setMessage(friendlyBrokerError(error)),
   });
   const importer = useMutation({
-    mutationFn: api.importBrokerTransactions,
+    mutationFn: () => api.importBrokerTransactions(importPortfolioId ? Number(importPortfolioId) : null),
     onSuccess: (result) => {
-      setMessage(`Import finished: ${JSON.stringify(result)}`);
+      setMessage(`Import finished: ${formatActionResult(result.result)}`);
       client.invalidateQueries({ queryKey: ["portfolios"] });
+      client.invalidateQueries({ queryKey: ["portfolio-aggregate"] });
+      client.invalidateQueries({ queryKey: ["positions"] });
+      client.invalidateQueries({ queryKey: ["transactions"] });
       client.invalidateQueries({ queryKey: ["broker-accounts"] });
     },
     onError: (error) => setMessage(friendlyBrokerError(error)),
@@ -594,15 +638,18 @@ function BrokersPage() {
         <label>Connection nickname<input value={userKey} onChange={(event) => setUserKey(event.target.value)} placeholder="default" /></label>
         <div className="actions">
           <button onClick={() => register.mutate(userKey)} disabled={isBusy || !userKeyReady}>Create profile</button>
-          <button className="primary" onClick={() => portal.mutate(userKey)} disabled={isBusy || !userKeyReady}><ExternalLink size={17}/>Open broker portal</button>
+          <button className="primary" onClick={() => portal.mutate()} disabled={isBusy || !userKeyReady}><ExternalLink size={17}/>Open broker portal</button>
           <button onClick={() => sync.mutate(userKey)} disabled={isBusy || !userKeyReady}><RefreshCw size={17}/>Sync after linking</button>
         </div>
       </div>
       {message ? <p className="action-message">{message}</p> : <p className="action-message muted"><ShieldCheck size={16}/>Read-only connection. No trading permissions are requested or stored.</p>}
       {portalUrl ? <a className="portal-link" href={portalUrl} target="_blank" rel="noreferrer">Portal did not open? Click here to continue linking.</a> : null}
       <details className="advanced-broker">
-        <summary>Advanced: I already have SnapTrade user credentials</summary>
+        <summary>Advanced: portal and SnapTrade credentials</summary>
         <div className="advanced-grid">
+          <label>Broker slug<input value={portalBroker} onChange={(event) => setPortalBroker(event.target.value)} placeholder="Optional portal broker slug" /></label>
+          <label>Reconnect connection<input value={portalReconnect} onChange={(event) => setPortalReconnect(event.target.value)} placeholder="Optional connection id" /></label>
+          <span className="inline-help">These optional fields are passed directly to the backend portal request.</span>
           <label>SnapTrade user ID<input value={providerUserId} onChange={(event) => setProviderUserId(event.target.value)} placeholder="Existing SnapTrade userId" /></label>
           <label>User secret<input type="password" value={userSecret} onChange={(event) => setUserSecret(event.target.value)} placeholder="Existing SnapTrade userSecret" /></label>
           <button onClick={() => saveExisting.mutate()} disabled={isBusy || !userKeyReady || !providerUserId.trim() || !userSecret.trim()}>Save existing user</button>
@@ -620,6 +667,8 @@ function BrokersPage() {
           <p><strong>Mapping</strong> sends current holdings into the selected local portfolio.</p>
           <p><strong>Import activity</strong> adds broker transactions when available, without duplicating ones already imported.</p>
           <p><strong>All portfolios</strong> on the overview combines every mapped portfolio into one view.</p>
+          <label className="mapping-label">Import scope<select value={importPortfolioId} onChange={(event) => setImportPortfolioId(event.target.value)} disabled={isBusy || !portfolios.data?.length}><option value="">All mapped portfolios</option>{portfolios.data?.map((portfolio) => <option key={portfolio.portfolio_id} value={portfolio.portfolio_id}>{portfolio.name}</option>)}</select><em>The backend can import every mapped account or just one portfolio.</em></label>
+          <button className="primary" onClick={() => importer.mutate()} disabled={isBusy || !accountCount}><RefreshCw size={17}/>Import selected scope</button>
         </div>
       </div>
     </section>
@@ -639,19 +688,93 @@ function OperationsPage() {
   const client = useQueryClient();
   const [status, setStatus] = useState("");
   const [domain, setDomain] = useState("");
+  const [pipeline, setPipeline] = useState("all");
+  const [assetId, setAssetId] = useState("");
+  const [maxAssets, setMaxAssets] = useState("25");
+  const [years, setYears] = useState("10");
+  const [pricesOnly, setPricesOnly] = useState(false);
+  const [runDomain, setRunDomain] = useState("all");
+  const [runMaxJobs, setRunMaxJobs] = useState("1");
+  const [retryMaxJobs, setRetryMaxJobs] = useState("25");
+  const [message, setMessage] = useState("");
   const jobs = useQuery({ queryKey: ["jobs", status, domain], queryFn: () => api.ingestionJobs(status, domain) });
-  const schedule = useMutation({ mutationFn: api.scheduleIngestion, onSuccess: () => client.invalidateQueries({ queryKey: ["jobs"] }) });
-  const run = useMutation({ mutationFn: api.runIngestion, onSuccess: () => client.invalidateQueries({ queryKey: ["jobs"] }) });
-  const retry = useMutation({ mutationFn: () => api.retryFailedIngestion(domain), onSuccess: () => client.invalidateQueries({ queryKey: ["jobs"] }) });
+  const schedule = useMutation({
+    mutationFn: () => api.scheduleIngestion({
+      pipeline,
+      asset_id: assetId.trim() || null,
+      max_assets: boundedInt(maxAssets, 25, 1, 100),
+      years: boundedInt(years, 10, 1, 30),
+      prices_only: pricesOnly,
+    }),
+    onSuccess: (result) => {
+      setMessage(`Scheduled: ${formatActionResult(result.result)}`);
+      client.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+  const run = useMutation({
+    mutationFn: () => api.runIngestion({
+      domain: runDomain,
+      max_jobs: boundedInt(runMaxJobs, 1, 1, 25),
+    }),
+    onSuccess: (result) => {
+      setMessage(`Run finished: ${formatActionResult(result.result)}`);
+      client.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+  const retry = useMutation({
+    mutationFn: () => api.retryFailedIngestion({
+      domain: domain || null,
+      max_jobs: boundedInt(retryMaxJobs, 25, 1, 100),
+    }),
+    onSuccess: (result) => {
+      setMessage(`Retry queued: ${formatActionResult(result.result)}`);
+      client.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
   const isBusy = schedule.isPending || run.isPending || retry.isPending;
-  return <div className="page"><div className="page-title"><div><p className="eyebrow">Data health</p><h1>Operations</h1></div><div className="actions"><button onClick={() => jobs.refetch()} disabled={jobs.isFetching}><RefreshCw size={17}/>Refresh</button><button onClick={() => window.confirm("Schedule due ingestion jobs now?") && schedule.mutate()} disabled={isBusy}>Schedule due</button><button onClick={() => window.confirm("Move failed jobs back to pending?") && retry.mutate()} disabled={isBusy}>Retry failed</button><button className="primary" onClick={() => window.confirm("Run one pending ingestion job now?") && run.mutate()} disabled={isBusy}><RefreshCw size={17}/>Run next job</button></div></div>
+  const actionError = schedule.error ?? run.error ?? retry.error;
+  return <div className="page"><div className="page-title"><div><p className="eyebrow">Data health</p><h1>Operations</h1><p className="page-subtitle">Schedule, retry, and run ingestion work through the same request options exposed by the backend.</p></div><div className="actions"><button onClick={() => jobs.refetch()} disabled={jobs.isFetching}><RefreshCw size={17}/>Refresh</button><button className="primary" onClick={() => window.confirm("Run pending ingestion jobs with these options?") && run.mutate()} disabled={isBusy}><RefreshCw size={17}/>Run jobs</button></div></div>
+    <section className="card operations-control">
+      <div className="card-heading"><div><p className="eyebrow">Backend controls</p><h2>Ingestion actions</h2></div><span>{isBusy ? "working" : "ready"}</span></div>
+      <div className="operations-grid">
+        <div className="control-panel">
+          <strong>Schedule jobs</strong>
+          <div className="control-fields">
+            <label>Pipeline<select value={pipeline} onChange={(event) => setPipeline(event.target.value)}><option value="all">All</option><option value="market">Market</option><option value="corporate">Corporate</option><option value="sentiment">Sentiment</option></select></label>
+            <label>Asset ID<input value={assetId} onChange={(event) => setAssetId(event.target.value.toUpperCase())} placeholder="Optional ticker" /></label>
+            <label>Max assets<input type="number" min="1" max="100" value={maxAssets} onChange={(event) => setMaxAssets(event.target.value)} /></label>
+            <label>Years<input type="number" min="1" max="30" value={years} onChange={(event) => setYears(event.target.value)} /></label>
+            <label className="check-row"><input type="checkbox" checked={pricesOnly} onChange={(event) => setPricesOnly(event.target.checked)} />Prices only</label>
+          </div>
+          <button onClick={() => window.confirm("Schedule ingestion jobs with these options?") && schedule.mutate()} disabled={isBusy}>Schedule</button>
+        </div>
+        <div className="control-panel">
+          <strong>Run pending jobs</strong>
+          <div className="control-fields two">
+            <label>Domain<select value={runDomain} onChange={(event) => setRunDomain(event.target.value)}><option value="all">All</option><option value="market">Market</option><option value="corporate">Corporate</option><option value="sentiment">Sentiment</option></select></label>
+            <label>Max jobs<input type="number" min="1" max="25" value={runMaxJobs} onChange={(event) => setRunMaxJobs(event.target.value)} /></label>
+          </div>
+          <button className="primary" onClick={() => window.confirm("Run pending ingestion jobs with these options?") && run.mutate()} disabled={isBusy}><RefreshCw size={17}/>Run</button>
+        </div>
+        <div className="control-panel">
+          <strong>Retry failed jobs</strong>
+          <div className="control-fields two">
+            <label>Domain<span>{domain || "Any filtered domain"}</span></label>
+            <label>Max jobs<input type="number" min="1" max="100" value={retryMaxJobs} onChange={(event) => setRetryMaxJobs(event.target.value)} /></label>
+          </div>
+          <button onClick={() => window.confirm("Move failed jobs back to pending with these options?") && retry.mutate()} disabled={isBusy}>Retry failed</button>
+        </div>
+      </div>
+      {message ? <p className="action-message">{message}</p> : null}
+      {actionError ? <ErrorPanel error={actionError} /> : null}
+    </section>
     <section className="card"><div className="card-heading"><h2>Ingestion jobs</h2><span>{jobs.data?.length ?? 0} shown</span></div>
       <div className="filter-row">
         <label>Status<select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">Any</option><option value="pending">Pending</option><option value="running">Running</option><option value="done">Done</option><option value="failed">Failed</option></select></label>
         <label>Domain<select value={domain} onChange={(event) => setDomain(event.target.value)}><option value="">Any</option><option value="market">Market</option><option value="corporate">Corporate</option><option value="sentiment">Sentiment</option></select></label>
       </div>
       {jobs.error ? <ErrorPanel error={jobs.error} /> : jobs.isLoading ? <Loading compact /> : (
-        <div className="table-wrap"><table><thead><tr><th>Asset</th><th>Dataset</th><th>Domain</th><th>Status</th><th>Attempts</th><th>Error</th></tr></thead><tbody>{jobs.data?.map((job) => <tr key={job.job_id}><td>{job.asset_id ?? "Global"}</td><td>{job.dataset}</td><td>{job.domain}</td><td><span className={`pill ${job.status}`}>{job.status}</span></td><td>{job.attempt_count}</td><td className="job-error" title={job.error_message ?? ""}>{job.error_message ?? "-"}</td></tr>)}</tbody></table></div>
+        <div className="table-wrap"><table><thead><tr><th>Asset</th><th>Dataset</th><th>Type</th><th>Domain</th><th>Status</th><th>Priority</th><th>Attempts</th><th>Updated</th><th>Error</th></tr></thead><tbody>{jobs.data?.map((job) => <tr key={job.job_id}><td>{job.asset_id ?? "Global"}</td><td>{job.dataset}</td><td>{job.job_type}</td><td>{job.domain}</td><td><span className={`pill ${job.status}`}>{job.status}</span></td><td>{job.priority}</td><td>{job.attempt_count}</td><td>{new Date(job.updated_at).toLocaleDateString()}</td><td className="job-error" title={job.error_message ?? ""}>{job.error_message ?? "-"}</td></tr>)}</tbody></table></div>
       )}
       {!jobs.isLoading && !jobs.data?.length ? <EmptyRow text="No ingestion jobs match the current filters." /> : null}
     </section>
@@ -673,7 +796,30 @@ function AnalyticsPanel({ payload, isLoading }: { payload?: Record<string, unkno
   const anomalies = arrayOfRecords(aiContext?.anomalies);
   const volatilityContributions = arrayOfRecords(decomposition?.volatility_contributions).slice(0, 4);
   const valuationContributions = arrayOfRecords(valuation?.position_contributions).slice(0, 6);
-  const missing = report?.missing_inputs as string[] | undefined;
+  const healthItems: DataHealthItem[] = [
+    {
+      label: "DCF rollup",
+      detail: "Holding intrinsic value and margin of safety",
+      missing: missingList(valuation?.missing_inputs),
+      ready: num(valuation?.weighted_margin_of_safety) != null || num(valuation?.weighted_pe_ratio) != null,
+    },
+    {
+      label: "Monte Carlo",
+      detail: "Projected value band and expected CAGR",
+      missing: missingList(forecast?.missing_inputs),
+      ready: num(simulation?.expected_value) != null,
+    },
+    {
+      label: "Valuation models",
+      detail: "Multiples, dividend yield, and holding-level forecasts",
+      missing: uniqueStrings([
+        ...missingList(valuation?.missing_inputs),
+        ...missingList(forecast?.missing_inputs),
+        ...missingList(performance?.missing_inputs),
+      ]),
+      ready: num(valuation?.weighted_expected_cagr) != null || num(valuation?.weighted_price_to_free_cash_flow) != null,
+    },
+  ];
   return <section className="card">
     <div className="card-heading"><div><p className="eyebrow">Phase 3 analytics</p><h2>Portfolio signals</h2></div><span>{payload?.schema_version as string ?? "loading"}</span></div>
     {isLoading ? <Loading compact /> : (
@@ -723,9 +869,9 @@ function AnalyticsPanel({ payload, isLoading }: { payload?: Record<string, unkno
             <MetricLine label="Overvalued weight" value={percent(num(valuation?.overvalued_weight))} />
           </AnalyticsBlock>
         </div>
+        <DataHealthPanel items={healthItems} />
         {valuationContributions.length ? <div className="model-table"><table><thead><tr><th>Holding</th><th>Weight</th><th>Expected CAGR</th><th>Margin</th><th>P/E</th><th>P/FCF</th></tr></thead><tbody>{valuationContributions.map((item) => <tr key={String(item.asset_id)}><td>{String(item.asset_id)}</td><td>{percent(num(item.weight))}</td><td>{percent(num(item.expected_cagr))}</td><td>{percent(num(item.margin_of_safety))}</td><td>{number(num(item.pe_ratio))}</td><td>{number(num(item.price_to_free_cash_flow))}</td></tr>)}</tbody></table></div> : null}
         {anomalies.length ? <InsightList items={anomalies.map((item) => `${String(item.severity).toUpperCase()}: ${String(item.message)}`)} /> : null}
-        {missing?.length ? <p className="missing-inputs">Missing inputs: {missing.slice(0, 3).join(", ")}</p> : <p className="missing-inputs good">Analytics inputs look complete for this report.</p>}
       </div>
     )}
   </section>;
@@ -748,9 +894,29 @@ function AssetAnalyticsPanel({ payload, isLoading }: { payload?: Record<string, 
   const dcfScenarios = arrayOfRecords(valuation?.dcf_scenarios);
   const aiContext = record(payload?.ai_context);
   const anomalies = arrayOfRecords(aiContext?.anomalies);
-  const missing = [
-    ...((valuation?.missing_inputs as string[] | undefined) ?? []),
-    ...((forecast?.missing_inputs as string[] | undefined) ?? []),
+  const healthItems: DataHealthItem[] = [
+    {
+      label: "DCF",
+      detail: "Intrinsic value per share and margin of safety",
+      missing: missingList(dcf?.missing_inputs),
+      ready: num(dcf?.intrinsic_value_per_share) != null,
+    },
+    {
+      label: "Monte Carlo",
+      detail: "Forecast range from expected return and volatility",
+      missing: missingList(forecast?.missing_inputs),
+      ready: num(simulation?.expected_value) != null,
+    },
+    {
+      label: "Valuation models",
+      detail: "Fundamental ratios, DCF scenarios, and growth assumptions",
+      missing: uniqueStrings([
+        ...missingList(valuation?.missing_inputs),
+        ...missingList(forecast?.missing_inputs),
+        ...missingList(dividend?.missing_inputs),
+      ]),
+      ready: num(valuation?.pe_ratio) != null || dcfScenarios.some((item) => num(item.intrinsic_value_per_share) != null),
+    },
   ];
   return <section className="card asset-analytics-card">
     <div className="card-heading"><div><p className="eyebrow">Phase 3 analytics</p><h2>Asset signals</h2></div><span>{payload?.schema_version as string ?? "loading"}</span></div>
@@ -812,22 +978,59 @@ function AssetAnalyticsPanel({ payload, isLoading }: { payload?: Record<string, 
             <MetricLine label="Bull CAGR" value={percent(num(simulation?.p90_cagr))} />
           </AnalyticsBlock>
         </div>
+        <DataHealthPanel items={healthItems} />
         {dcfScenarios.length ? <div className="model-table"><table><thead><tr><th>DCF scenario</th><th>Fair value</th><th>Margin</th><th>Growth</th><th>Discount</th><th>Terminal</th></tr></thead><tbody>{dcfScenarios.map((item) => <tr key={String(item.scenario_name)}><td>{String(item.scenario_name)}</td><td>{money(num(item.intrinsic_value_per_share))}</td><td>{percent(num(item.margin_of_safety))}</td><td>{percent(num(item.growth_rate))}</td><td>{percent(num(item.discount_rate))}</td><td>{percent(num(item.terminal_growth_rate))}</td></tr>)}</tbody></table></div> : null}
         {anomalies.length ? <InsightList items={anomalies.map((item) => `${String(item.severity).toUpperCase()}: ${String(item.message)}`)} /> : null}
-        {missing.length ? <p className="missing-inputs">Missing inputs: {Array.from(new Set(missing)).slice(0, 4).join(", ")}</p> : <p className="missing-inputs good">Asset analytics inputs look complete for this report.</p>}
       </div>
     )}
   </section>;
 }
 type AnyRecord = Record<string, unknown>;
+type DataHealthItem = {
+  label: string;
+  detail: string;
+  missing: string[];
+  ready: boolean;
+};
 function record(value: unknown): AnyRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? value as AnyRecord : {};
 }
 function arrayOfRecords(value: unknown): AnyRecord[] {
   return Array.isArray(value) ? value.filter((item): item is AnyRecord => Boolean(item) && typeof item === "object" && !Array.isArray(item)) : [];
 }
+function missingList(value: unknown): string[] {
+  return Array.isArray(value) ? uniqueStrings(value.map((item) => String(item)).filter(Boolean)) : [];
+}
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.map((item) => item.trim()).filter(Boolean)));
+}
 function num(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+function boundedInt(value: string, fallback: number, min: number, max: number): number {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(parsed, min), max);
+}
+function formatActionResult(result: Record<string, unknown>): string {
+  const entries = Object.entries(result);
+  if (!entries.length) return "ok";
+  return entries.map(([key, value]) => `${key.replace(/_/g, " ")} ${String(value)}`).join(", ");
+}
+function DataHealthPanel({ items }: { items: DataHealthItem[] }) {
+  return <div className="data-health-panel">
+    <div className="data-health-heading"><div><p className="eyebrow">Analytics data health</p><strong>Model input readiness</strong></div><span>{items.filter((item) => item.missing.length === 0 && item.ready).length}/{items.length} ready</span></div>
+    <div className="data-health-grid">
+      {items.map((item) => {
+        const status = item.missing.length ? "missing" : item.ready ? "ready" : "weak";
+        return <article className={`data-health-card ${status}`} key={item.label}>
+          <div><strong>{item.label}</strong><span className={`pill ${status === "ready" ? "done" : status === "missing" ? "failed" : "running"}`}>{status}</span></div>
+          <p>{item.detail}</p>
+          {item.missing.length ? <ul>{item.missing.map((missing) => <li key={missing}>{missing}</li>)}</ul> : <em>{item.ready ? "Required inputs are present." : "No explicit missing inputs, but output is still unavailable."}</em>}
+        </article>;
+      })}
+    </div>
+  </div>;
 }
 function AnalyticsBlock({ title, children }: { title: string; children: React.ReactNode }) {
   return <div className="analytics-block"><strong>{title}</strong><div>{children}</div></div>;
@@ -859,3 +1062,10 @@ function AggregatePanel() {
 function Loading({ compact = false }: { compact?: boolean }) { return <div className={compact ? "loading compact" : "loading"}><RefreshCw />Loading dashboard data</div>; }
 function ErrorPanel({ error }: { error: Error }) { return <div className="error-panel"><strong>Unable to load data</strong><span>{error.message}</span></div>; }
 function EmptyRow({ text }: { text: string }) { return <div className="empty-row">{text}</div>; }
+
+function portfolioSelectionFromParam(value: string | null): number | "all" | null {
+  if (value === "all") return "all";
+  if (!value) return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}

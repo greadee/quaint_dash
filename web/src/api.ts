@@ -184,12 +184,28 @@ export type IngestionJob = {
   job_id: number;
   asset_id: string | null;
   domain: string;
+  job_type: string;
   dataset: string;
   status: string;
+  priority: number;
+  requested_start_date: string | null;
+  requested_end_date: string | null;
   attempt_count: number;
   error_message: string | null;
+  created_at: string;
   updated_at: string;
 };
+export type ActionResult = { status: string; result: Record<string, unknown> };
+export type BrokerPortalPayload = { user_key: string; broker?: string | null; reconnect?: string | null };
+export type IngestionSchedulePayload = {
+  pipeline: string;
+  asset_id?: string | null;
+  max_assets: number;
+  years: number;
+  prices_only: boolean;
+};
+export type IngestionRunPayload = { domain: string; max_jobs: number };
+export type IngestionRetryPayload = { domain?: string | null; max_jobs: number };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api/v1${path}`, {
@@ -243,13 +259,13 @@ export const api = {
         user_secret: userSecret,
       }),
     }),
-  brokerPortal: (userKey: string) =>
+  brokerPortal: (payload: BrokerPortalPayload) =>
     request<{ url: string }>("/brokers/snaptrade/portal", {
       method: "POST",
-      body: JSON.stringify({ user_key: userKey }),
+      body: JSON.stringify(payload),
     }),
   brokerSync: (userKey: string) =>
-    request("/brokers/snaptrade/sync", {
+    request<ActionResult>("/brokers/snaptrade/sync", {
       method: "POST",
       body: JSON.stringify({ user_key: userKey }),
     }),
@@ -258,21 +274,24 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ portfolio_id: portfolioId }),
     }),
-  importBrokerTransactions: () =>
-    request("/brokers/import-transactions", { method: "POST", body: JSON.stringify({}) }),
+  importBrokerTransactions: (portfolioId?: number | null) =>
+    request<ActionResult>("/brokers/import-transactions", {
+      method: "POST",
+      body: JSON.stringify({ portfolio_id: portfolioId ?? null }),
+    }),
   ingestionJobs: (status?: string, domain?: string) => {
     const params = new URLSearchParams({ limit: "100" });
     if (status) params.set("status", status);
     if (domain) params.set("domain", domain);
     return request<IngestionJob[]>(`/ingestion/jobs?${params.toString()}`);
   },
-  scheduleIngestion: () =>
-    request("/ingestion/schedule", { method: "POST", body: JSON.stringify({ pipeline: "all" }) }),
-  runIngestion: () =>
-    request("/ingestion/run", { method: "POST", body: JSON.stringify({ domain: "all", max_jobs: 1 }) }),
-  retryFailedIngestion: (domain?: string) =>
-    request("/ingestion/retry-failed", {
+  scheduleIngestion: (payload: IngestionSchedulePayload) =>
+    request<ActionResult>("/ingestion/schedule", { method: "POST", body: JSON.stringify(payload) }),
+  runIngestion: (payload: IngestionRunPayload) =>
+    request<ActionResult>("/ingestion/run", { method: "POST", body: JSON.stringify(payload) }),
+  retryFailedIngestion: (payload: IngestionRetryPayload) =>
+    request<ActionResult>("/ingestion/retry-failed", {
       method: "POST",
-      body: JSON.stringify({ domain: domain || null, max_jobs: 25 }),
+      body: JSON.stringify(payload),
     }),
 };
