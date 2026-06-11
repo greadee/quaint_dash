@@ -1,6 +1,7 @@
 """Application-facing read and write services for the HTTP API."""
 
 from dataclasses import asdict
+from datetime import date, timedelta
 import json
 from typing import Any
 
@@ -11,7 +12,18 @@ from dashboard.api.models import (
     BrokerAccountResponse,
     BrokerConnectionResponse,
     BrokerUserResponse,
+    BenchmarkAvailableMetricRange,
+    BenchmarkAvailablePriceRange,
+    BenchmarkConstituent,
     BenchmarkComparisonProfile,
+    BenchmarkDailyMetric,
+    BenchmarkDefaultResponse,
+    BenchmarkExposure,
+    BenchmarkIndexDetail,
+    BenchmarkIndexSummary,
+    BenchmarkPricePoint,
+    BenchmarkSymbol,
+    BenchmarkSyncState,
     ComparisonAssetProfile,
     ComparisonFundamentals,
     ComparisonResponse,
@@ -30,9 +42,14 @@ from dashboard.api.models import (
     ValuationContext,
 )
 from dashboard.analytics import AnalyticsEngine, AnalyticsRepository, analytics_report_payload
+from dashboard.analytics.models import PositionAnalytics
 from dashboard.brokers.repository import BrokerSyncRepository
 from dashboard.brokers.models import BrokerUser
 from dashboard.brokers.snaptrade import SNAPTRADE_PROVIDER
+from dashboard.ingestion.indices.index_service_factory import (
+    create_index_ingestion_service,
+    create_index_scheduler,
+)
 from dashboard.models.commands import BrokerCommands, IngestionCommands
 
 
@@ -100,6 +117,715 @@ _ENRICHED_ASSET_SELECT = """
     COALESCE(a.shares_outstanding, cdr_underlying.shares_outstanding) AS shares_outstanding,
     COALESCE(a.market_beta, cdr_underlying.market_beta) AS market_beta
 """
+
+
+class BenchmarkApiService:
+    def __init__(self, conn) -> None:
+        self.conn = conn
+
+    def list_benchmarks(
+        self,
+        q: str | None = None,
+        category: str | None = None,
+        region: str | None = None,
+        country_code: str | None = None,
+        currency: str | None = None,
+        is_core: bool | None = None,
+        is_active: bool | None = True,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[BenchmarkIndexSummary]:
+        where = []
+        params: list[Any] = []
+        if q:
+            like = f"%{q.strip().lower()}%"
+            where.append(
+                "("
+                "LOWER(b.index_id) LIKE ? OR LOWER(b.index_name) LIKE ? OR "
+                "LOWER(b.index_family) LIKE ? OR LOWER(COALESCE(b.notes, '')) LIKE ?"
+                ")"
+            )
+            params.extend([like, like, like, like])
+        if category:
+            where.append("b.index_category = ?")
+            params.append(category)
+        if region:
+            where.append("LOWER(COALESCE(b.region, '')) = LOWER(?)")
+            params.append(region)
+        if country_code:
+            where.append("UPPER(COALESCE(b.country_code, '')) = UPPER(?)")
+            params.append(country_code)
+        if currency:
+            where.append("UPPER(b.currency) = UPPER(?)")
+            params.append(currency)
+        if is_core is not None:
+            where.append("b.is_core = ?")
+            params.append(is_core)
+        if is_active is not None:
+            where.append("b.is_active = ?")
+            params.append(is_active)
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        rows = self.conn.execute(
+            f"""
+            WITH latest_metrics AS (
+                SELECT *
+                FROM benchmark_index_daily_metric
+                QUALIFY ROW_NUMBER() OVER (PARTITION BY index_id ORDER BY metric_date DESC) = 1
+            ),
+            latest_prices AS (
+                SELECT *
+                FROM benchmark_index_daily_price
+                QUALIFY ROW_NUMBER() OVER (PARTITION BY index_id ORDER BY price_date DESC) = 1
+            ),
+            latest_compositions AS (
+                SELECT *
+                FROM benchmark_index_composition_snapshot
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY index_id
+                    ORDER BY snapshot_date DESC, fetched_at DESC
+                ) = 1
+            ),
+            sync_rollup AS (
+                SELECT
+                    index_id,
+                    MAX(last_success_at) FILTER (WHERE job_type = 'daily_price') AS daily_price_last_success_at,
+                    MAX(last_success_at) FILTER (WHERE job_type = 'composition') AS composition_last_success_at,
+                    STRING_AGG(last_error, ' | ' ORDER BY updated_at DESC) FILTER (
+                        WHERE last_error IS NOT NULL AND last_error <> ''
+                    ) AS last_error
+                FROM benchmark_index_sync_state
+                GROUP BY index_id
+            )
+            SELECT
+                b.index_id,
+                b.index_name,
+                b.index_family,
+                b.index_category,
+                b.region,
+                b.country_code,
+                b.currency,
+                b.is_core,
+                b.is_active,
+                b.notes,
+                m.metric_date,
+                p.close,
+                m.return_1d,
+                m.return_21d,
+                m.return_252d,
+                m.volatility_252d_ann,
+                c.snapshot_date,
+                c.constituent_count,
+                c.data_quality,
+                s.daily_price_last_success_at,
+                s.composition_last_success_at,
+                s.last_error
+            FROM benchmark_index b
+            LEFT JOIN latest_metrics m ON m.index_id = b.index_id
+            LEFT JOIN latest_prices p ON p.index_id = b.index_id
+            LEFT JOIN latest_compositions c ON c.index_id = b.index_id
+            LEFT JOIN sync_rollup s ON s.index_id = b.index_id
+            {where_sql}
+            ORDER BY b.is_core DESC, b.index_category, b.index_id
+            LIMIT ? OFFSET ?
+            """,
+            [*params, limit, offset],
+        ).fetchall()
+        return [self._summary_from_row(row) for row in rows]
+
+    def get_benchmark(self, index_id: str) -> BenchmarkIndexDetail:
+        summary = self._get_summary(index_id)
+        if summary is None:
+            raise LookupError(f"Benchmark not found: {index_id}")
+        symbols = [
+            BenchmarkSymbol(
+                provider=row[0],
+                provider_symbol=row[1],
+                symbol_purpose=row[2],
+                is_primary=bool(row[3]),
+                is_proxy=bool(row[4]),
+            )
+            for row in self.conn.execute(
+                """
+                SELECT provider, provider_symbol, symbol_purpose, is_primary, is_proxy
+                FROM benchmark_index_symbol
+                WHERE UPPER(index_id) = UPPER(?)
+                ORDER BY is_primary DESC, symbol_purpose, provider
+                """,
+                [index_id],
+            ).fetchall()
+        ]
+        sync_state = {
+            row[0]: BenchmarkSyncState(
+                job_type=row[0],
+                last_success_at=row[1],
+                last_attempt_at=row[2],
+                last_success_date=row[3],
+                last_error=row[4],
+                updated_at=row[5],
+            )
+            for row in self.conn.execute(
+                """
+                SELECT job_type, last_success_at, last_attempt_at, last_success_date, last_error, updated_at
+                FROM benchmark_index_sync_state
+                WHERE UPPER(index_id) = UPPER(?)
+                ORDER BY job_type
+                """,
+                [index_id],
+            ).fetchall()
+        }
+        snapshot_dates = [
+            row[0]
+            for row in self.conn.execute(
+                """
+                SELECT DISTINCT snapshot_date
+                FROM benchmark_index_composition_snapshot
+                WHERE UPPER(index_id) = UPPER(?)
+                ORDER BY snapshot_date DESC
+                """,
+                [index_id],
+            ).fetchall()
+        ]
+        price_range = self.conn.execute(
+            """
+            SELECT MIN(price_date), MAX(price_date)
+            FROM benchmark_index_daily_price
+            WHERE UPPER(index_id) = UPPER(?)
+            """,
+            [index_id],
+        ).fetchone()
+        metric_range = self.conn.execute(
+            """
+            SELECT MIN(metric_date), MAX(metric_date)
+            FROM benchmark_index_daily_metric
+            WHERE UPPER(index_id) = UPPER(?)
+            """,
+            [index_id],
+        ).fetchone()
+        return BenchmarkIndexDetail(
+            **summary.model_dump(),
+            symbols=symbols,
+            sync_state=sync_state,
+            available_snapshot_dates=snapshot_dates,
+            available_price_range=BenchmarkAvailablePriceRange(
+                first_price_date=price_range[0],
+                last_price_date=price_range[1],
+            ),
+            available_metric_range=BenchmarkAvailableMetricRange(
+                first_metric_date=metric_range[0],
+                last_metric_date=metric_range[1],
+            ),
+        )
+
+    def prices(
+        self,
+        index_id: str,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        limit: int = 365,
+    ) -> list[BenchmarkPricePoint]:
+        self._require_benchmark(index_id)
+        where = ["UPPER(index_id) = UPPER(?)"]
+        params: list[Any] = [index_id]
+        if start_date is not None:
+            where.append("price_date >= ?")
+            params.append(start_date)
+        if end_date is not None:
+            where.append("price_date <= ?")
+            params.append(end_date)
+        rows = self.conn.execute(
+            f"""
+            SELECT price_date, open, high, low, close, adj_close, volume, source, source_symbol, is_proxy
+            FROM (
+                SELECT *
+                FROM benchmark_index_daily_price
+                WHERE {" AND ".join(where)}
+                ORDER BY price_date DESC
+                LIMIT ?
+            )
+            ORDER BY price_date
+            """,
+            [*params, limit],
+        ).fetchall()
+        return [
+            BenchmarkPricePoint(
+                date=row[0],
+                open=_float_or_none(row[1]),
+                high=_float_or_none(row[2]),
+                low=_float_or_none(row[3]),
+                close=float(row[4]),
+                adj_close=_float_or_none(row[5]),
+                volume=_float_or_none(row[6]),
+                source=row[7],
+                source_symbol=row[8],
+                is_proxy=bool(row[9]),
+            )
+            for row in rows
+        ]
+
+    def metrics(self, index_id: str, limit: int = 365) -> list[BenchmarkDailyMetric]:
+        self._require_benchmark(index_id)
+        rows = self.conn.execute(
+            """
+            SELECT
+                metric_date,
+                return_1d,
+                return_5d,
+                return_21d,
+                return_63d,
+                return_126d,
+                return_252d,
+                return_ytd,
+                volatility_21d_ann,
+                volatility_63d_ann,
+                volatility_252d_ann,
+                sma_50,
+                sma_200,
+                high_52w,
+                low_52w,
+                drawdown_from_52w_high
+            FROM (
+                SELECT *
+                FROM benchmark_index_daily_metric
+                WHERE UPPER(index_id) = UPPER(?)
+                ORDER BY metric_date DESC
+                LIMIT ?
+            )
+            ORDER BY metric_date
+            """,
+            [index_id, limit],
+        ).fetchall()
+        return [
+            BenchmarkDailyMetric(
+                metric_date=row[0],
+                return_1d=_float_or_none(row[1]),
+                return_5d=_float_or_none(row[2]),
+                return_21d=_float_or_none(row[3]),
+                return_63d=_float_or_none(row[4]),
+                return_126d=_float_or_none(row[5]),
+                return_252d=_float_or_none(row[6]),
+                return_ytd=_float_or_none(row[7]),
+                volatility_21d_ann=_float_or_none(row[8]),
+                volatility_63d_ann=_float_or_none(row[9]),
+                volatility_252d_ann=_float_or_none(row[10]),
+                sma_50=_float_or_none(row[11]),
+                sma_200=_float_or_none(row[12]),
+                high_52w=_float_or_none(row[13]),
+                low_52w=_float_or_none(row[14]),
+                drawdown_from_52w_high=_float_or_none(row[15]),
+            )
+            for row in rows
+        ]
+
+    def constituents(
+        self,
+        index_id: str,
+        snapshot_date: date | None = None,
+        source: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        sort: str = "weight_desc",
+    ) -> Page[BenchmarkConstituent]:
+        self._require_benchmark(index_id)
+        snap_date = snapshot_date or self._latest_snapshot_date(index_id)
+        if snap_date is None:
+            return Page(items=[], total=0, limit=limit, offset=offset)
+        where = ["UPPER(index_id) = UPPER(?)", "snapshot_date = ?"]
+        params: list[Any] = [index_id, snap_date]
+        if source:
+            where.append("source = ?")
+            params.append(source)
+        where_sql = " AND ".join(where)
+        order_by = {
+            "weight_desc": "weight_pct DESC NULLS LAST, constituent_symbol",
+            "weight_asc": "weight_pct ASC NULLS LAST, constituent_symbol",
+            "symbol": "constituent_symbol",
+            "name": "constituent_name NULLS LAST, constituent_symbol",
+        }.get(sort)
+        if order_by is None:
+            raise ValueError(f"Unsupported constituent sort: {sort}")
+        total = int(
+            self.conn.execute(
+                f"SELECT COUNT(*) FROM benchmark_index_constituent WHERE {where_sql}",
+                params,
+            ).fetchone()[0]
+        )
+        rows = self.conn.execute(
+            f"""
+            SELECT
+                index_id,
+                snapshot_date,
+                source,
+                constituent_symbol,
+                constituent_name,
+                exchange_code,
+                country_code,
+                currency,
+                sector,
+                industry,
+                weight_pct,
+                market_cap,
+                is_proxy
+            FROM benchmark_index_constituent
+            WHERE {where_sql}
+            ORDER BY {order_by}
+            LIMIT ? OFFSET ?
+            """,
+            [*params, limit, offset],
+        ).fetchall()
+        return Page(
+            items=[
+                BenchmarkConstituent(
+                    index_id=row[0],
+                    snapshot_date=row[1],
+                    source=row[2],
+                    constituent_symbol=row[3],
+                    constituent_name=row[4],
+                    exchange_code=row[5],
+                    country_code=row[6],
+                    currency=row[7],
+                    sector=row[8],
+                    industry=row[9],
+                    weight_pct=_float_or_none(row[10]),
+                    market_cap=_float_or_none(row[11]),
+                    is_proxy=bool(row[12]),
+                )
+                for row in rows
+            ],
+            total=total,
+            limit=limit,
+            offset=offset,
+        )
+
+    def exposures(
+        self,
+        index_id: str,
+        snapshot_date: date | None = None,
+        dimension_type: str | None = None,
+    ) -> list[BenchmarkExposure]:
+        self._require_benchmark(index_id)
+        snap_date = snapshot_date or self._latest_exposure_snapshot_date(index_id)
+        if snap_date is None:
+            return []
+        where = ["UPPER(index_id) = UPPER(?)", "snapshot_date = ?"]
+        params: list[Any] = [index_id, snap_date]
+        if dimension_type:
+            where.append("dimension_type = ?")
+            params.append(dimension_type)
+        rows = self.conn.execute(
+            f"""
+            SELECT index_id, snapshot_date, dimension_type, dimension_value, weight_pct, source, source_type, is_proxy
+            FROM benchmark_index_exposure_snapshot
+            WHERE {" AND ".join(where)}
+            ORDER BY dimension_type, weight_pct DESC, dimension_value
+            """,
+            params,
+        ).fetchall()
+        return [
+            BenchmarkExposure(
+                index_id=row[0],
+                snapshot_date=row[1],
+                dimension_type=row[2],
+                dimension_value=row[3],
+                weight_pct=float(row[4]),
+                source=row[5],
+                source_type=row[6],
+                is_proxy=bool(row[7]),
+            )
+            for row in rows
+        ]
+
+    def default_for_asset(self, asset_id: str) -> BenchmarkDefaultResponse:
+        repo = AnalyticsRepository(self.conn)
+        benchmark = repo.default_benchmark_for_asset(asset_id)
+        return BenchmarkDefaultResponse(
+            subject_type="asset",
+            subject_id=asset_id.upper().strip(),
+            benchmark_index_id=benchmark,
+            reason="asset country/currency metadata and available benchmark prices",
+            fallback_used=benchmark is None,
+        )
+
+    def default_for_portfolio(self, portfolio_id: int) -> BenchmarkDefaultResponse:
+        PortfolioApiService(self.conn).get_portfolio(portfolio_id)
+        repo = AnalyticsRepository(self.conn)
+        positions = self._weighted_portfolio_positions(repo, portfolio_id)
+        benchmark = repo.default_benchmark_for_portfolio(positions)
+        return BenchmarkDefaultResponse(
+            subject_type="portfolio",
+            subject_id=str(portfolio_id),
+            benchmark_index_id=benchmark,
+            reason="dominant portfolio country/currency exposure and available benchmark prices",
+            fallback_used=benchmark is None or not positions,
+        )
+
+    def seed(self, scope: str) -> dict[str, int | str]:
+        service = create_index_ingestion_service(self.conn)
+        if scope == "core":
+            count = service.seed_core_universe()
+        elif scope == "non_core":
+            count = service.seed_sector_industry_universe()
+        elif scope == "all":
+            count = service.seed_all_universes()
+        else:
+            raise ValueError(f"Unsupported benchmark seed scope: {scope}")
+        return {"scope": scope, "seeded_count": count}
+
+    def refresh_benchmark(
+        self,
+        index_id: str,
+        job_type: str,
+        lookback_days: int = 10,
+        interval: str = "5min",
+        comparison_index_id: str = "SP500",
+    ) -> dict[str, Any]:
+        self._require_benchmark(index_id)
+        service = create_index_ingestion_service(self.conn)
+        end = date.today()
+        start = end - timedelta(days=lookback_days)
+        if job_type == "daily_price":
+            row_count = service.ingest_daily_prices(index_id, start, end)
+        elif job_type == "intraday_price":
+            row_count = service.ingest_intraday_prices(index_id, interval)
+        elif job_type == "composition":
+            row_count = service.ingest_composition(index_id, end)
+        elif job_type == "metrics":
+            row_count = service.compute_daily_metrics(index_id)
+        elif job_type == "relative_metrics":
+            row_count = service.compute_relative_metrics(index_id, comparison_index_id)
+        else:
+            raise ValueError(f"Unsupported benchmark refresh job type: {job_type}")
+        return {
+            "index_id": index_id,
+            "job_type": job_type,
+            "target_count": 1,
+            "row_count": row_count,
+        }
+
+    def refresh_benchmarks(
+        self,
+        category: str,
+        job_type: str,
+        lookback_days: int = 10,
+        interval: str = "5min",
+    ) -> dict[str, Any]:
+        scheduler = create_index_scheduler(self.conn)
+        service = scheduler.service
+        end = date.today()
+        start = end - timedelta(days=lookback_days)
+
+        if job_type == "relative_metrics":
+            result = scheduler.run_relative_metrics_against_sp500()
+        elif category == "all":
+            result = self._run_all_refresh(service, job_type, start, end, interval)
+        elif category == "non_core":
+            result = self._run_non_core_refresh(scheduler, job_type, lookback_days, interval)
+        elif category == "core_geo":
+            result = self._run_core_refresh(scheduler, job_type, lookback_days, interval)
+        elif category in {"sector", "industry", "theme"}:
+            result = self._run_category_refresh(service, category, job_type, start, end, interval)
+        else:
+            raise ValueError(f"Unsupported benchmark refresh category: {category}")
+        return CommandApiService.action_result(result)
+
+    def _run_core_refresh(self, scheduler, job_type: str, lookback_days: int, interval: str):
+        if job_type == "daily_price":
+            return scheduler.run_core_daily_refresh(lookback_days=lookback_days)
+        if job_type == "intraday_price":
+            return scheduler.run_core_intraday_refresh(interval=interval)
+        if job_type == "composition":
+            return scheduler.run_core_composition_refresh()
+        if job_type == "metrics":
+            count = scheduler.service.compute_core_metrics()
+            return {"job_type": "core_metrics", "target_count": scheduler._count_indices_by_category("core_geo"), "row_count": count}
+        raise ValueError(f"Unsupported benchmark refresh job type: {job_type}")
+
+    def _run_non_core_refresh(self, scheduler, job_type: str, lookback_days: int, interval: str):
+        if job_type == "daily_price":
+            return scheduler.run_non_core_daily_refresh(lookback_days=lookback_days)
+        if job_type == "intraday_price":
+            return scheduler.run_non_core_intraday_refresh(interval=interval)
+        if job_type == "composition":
+            return scheduler.run_non_core_composition_refresh()
+        if job_type == "metrics":
+            count = scheduler.service.compute_non_core_metrics()
+            return {"job_type": "non_core_metrics", "target_count": scheduler._count_non_core_indices(), "row_count": count}
+        raise ValueError(f"Unsupported benchmark refresh job type: {job_type}")
+
+    def _run_category_refresh(
+        self,
+        service,
+        category: str,
+        job_type: str,
+        start: date,
+        end: date,
+        interval: str,
+    ) -> dict[str, Any]:
+        target_count = self._count_category(category)
+        if job_type == "daily_price":
+            row_count = service.ingest_daily_prices_for_category(category, start, end)
+            service.compute_metrics_for_category(category)
+        elif job_type == "intraday_price":
+            row_count = service.ingest_intraday_prices_for_category(category, interval)
+        elif job_type == "composition":
+            row_count = service.ingest_composition_for_category(category, end, continue_on_error=True)
+        elif job_type == "metrics":
+            row_count = service.compute_metrics_for_category(category)
+        else:
+            raise ValueError(f"Unsupported benchmark refresh job type: {job_type}")
+        return {"job_type": f"{category}_{job_type}", "target_count": target_count, "row_count": row_count}
+
+    def _run_all_refresh(
+        self,
+        service,
+        job_type: str,
+        start: date,
+        end: date,
+        interval: str,
+    ) -> dict[str, Any]:
+        target_count = self._count_all_active()
+        if job_type == "daily_price":
+            row_count = 0
+            for category in ("core_geo", "sector", "industry", "theme"):
+                row_count += service.ingest_daily_prices_for_category(category, start, end)
+                service.compute_metrics_for_category(category)
+        elif job_type == "intraday_price":
+            row_count = 0
+            for category in ("core_geo", "sector", "industry", "theme"):
+                row_count += service.ingest_intraday_prices_for_category(category, interval)
+        elif job_type == "composition":
+            row_count = 0
+            for category in ("core_geo", "sector", "industry", "theme"):
+                row_count += service.ingest_composition_for_category(category, end, continue_on_error=True)
+        elif job_type == "metrics":
+            row_count = 0
+            for category in ("core_geo", "sector", "industry", "theme"):
+                row_count += service.compute_metrics_for_category(category)
+        else:
+            raise ValueError(f"Unsupported benchmark refresh job type: {job_type}")
+        return {"job_type": f"all_{job_type}", "target_count": target_count, "row_count": row_count}
+
+    def _summary_from_row(self, row) -> BenchmarkIndexSummary:
+        return BenchmarkIndexSummary(
+            index_id=row[0],
+            index_name=row[1],
+            index_family=row[2],
+            index_category=row[3],
+            region=row[4],
+            country_code=row[5],
+            currency=row[6],
+            is_core=bool(row[7]),
+            is_active=bool(row[8]),
+            notes=row[9],
+            latest_metric_date=row[10],
+            latest_close=_float_or_none(row[11]),
+            return_1d=_float_or_none(row[12]),
+            return_21d=_float_or_none(row[13]),
+            return_252d=_float_or_none(row[14]),
+            volatility_252d_ann=_float_or_none(row[15]),
+            latest_composition_date=row[16],
+            constituent_count=int(row[17]) if row[17] is not None else None,
+            composition_quality=row[18],
+            daily_price_last_success_at=row[19],
+            composition_last_success_at=row[20],
+            last_error=row[21],
+        )
+
+    def _get_summary(self, index_id: str) -> BenchmarkIndexSummary | None:
+        rows = self.list_benchmarks(q=index_id, is_active=None, limit=500)
+        for row in rows:
+            if row.index_id.upper() == index_id.upper().strip():
+                return row
+        return None
+
+    def _require_benchmark(self, index_id: str) -> None:
+        if self._get_summary(index_id) is None:
+            raise LookupError(f"Benchmark not found: {index_id}")
+
+    def _latest_snapshot_date(self, index_id: str) -> date | None:
+        row = self.conn.execute(
+            """
+            SELECT MAX(snapshot_date)
+            FROM benchmark_index_composition_snapshot
+            WHERE UPPER(index_id) = UPPER(?)
+            """,
+            [index_id],
+        ).fetchone()
+        return row[0] if row else None
+
+    def _latest_exposure_snapshot_date(self, index_id: str) -> date | None:
+        row = self.conn.execute(
+            """
+            SELECT MAX(snapshot_date)
+            FROM benchmark_index_exposure_snapshot
+            WHERE UPPER(index_id) = UPPER(?)
+            """,
+            [index_id],
+        ).fetchone()
+        return row[0] if row else None
+
+    def _weighted_portfolio_positions(
+        self,
+        repo: AnalyticsRepository,
+        portfolio_id: int,
+    ) -> list[PositionAnalytics]:
+        positions: list[PositionAnalytics] = []
+        total_value = 0.0
+        for _portfolio_id, asset_id, qty, book_cost in repo.portfolio_positions(portfolio_id):
+            latest_price = repo.latest_price(asset_id)
+            market_value = qty * latest_price if latest_price is not None else None
+            if market_value is not None:
+                total_value += market_value
+            positions.append(
+                PositionAnalytics(
+                    portfolio_id=portfolio_id,
+                    asset_id=asset_id,
+                    qty=qty,
+                    book_cost=book_cost,
+                    latest_price=latest_price,
+                    market_value=market_value,
+                    weight=None,
+                    unrealized_gain=market_value - book_cost if market_value is not None else None,
+                )
+            )
+        if total_value <= 0:
+            return positions
+        return [
+            PositionAnalytics(
+                portfolio_id=item.portfolio_id,
+                asset_id=item.asset_id,
+                qty=item.qty,
+                book_cost=item.book_cost,
+                latest_price=item.latest_price,
+                market_value=item.market_value,
+                weight=item.market_value / total_value if item.market_value is not None else None,
+                unrealized_gain=item.unrealized_gain,
+            )
+            for item in positions
+        ]
+
+    def _count_category(self, category: str) -> int:
+        return int(
+            self.conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM benchmark_index
+                WHERE index_category = ?
+                  AND is_active = TRUE
+                """,
+                [category],
+            ).fetchone()[0]
+        )
+
+    def _count_all_active(self) -> int:
+        return int(
+            self.conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM benchmark_index
+                WHERE is_active = TRUE
+                """
+            ).fetchone()[0]
+        )
 
 
 _ENRICHED_ASSET_JOIN = """

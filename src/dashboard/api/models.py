@@ -230,6 +230,148 @@ class ComparisonResponse(BaseModel):
     insights: list[str] = Field(default_factory=list)
 
 
+class BenchmarkSymbol(BaseModel):
+    provider: str
+    provider_symbol: str
+    symbol_purpose: str
+    is_primary: bool
+    is_proxy: bool
+
+
+class BenchmarkSyncState(BaseModel):
+    job_type: str
+    last_success_at: datetime | None = None
+    last_attempt_at: datetime | None = None
+    last_success_date: date | None = None
+    last_error: str | None = None
+    updated_at: datetime | None = None
+
+
+class BenchmarkIndexSummary(BaseModel):
+    index_id: str
+    index_name: str
+    index_family: str
+    index_category: str
+    region: str | None = None
+    country_code: str | None = None
+    currency: str
+    is_core: bool
+    is_active: bool
+    notes: str | None = None
+    latest_metric_date: date | None = None
+    latest_close: float | None = None
+    return_1d: float | None = None
+    return_21d: float | None = None
+    return_252d: float | None = None
+    volatility_252d_ann: float | None = None
+    latest_composition_date: date | None = None
+    constituent_count: int | None = None
+    composition_quality: str | None = None
+    daily_price_last_success_at: datetime | None = None
+    composition_last_success_at: datetime | None = None
+    last_error: str | None = None
+
+
+class BenchmarkAvailablePriceRange(BaseModel):
+    first_price_date: date | None = None
+    last_price_date: date | None = None
+
+
+class BenchmarkAvailableMetricRange(BaseModel):
+    first_metric_date: date | None = None
+    last_metric_date: date | None = None
+
+
+class BenchmarkIndexDetail(BenchmarkIndexSummary):
+    symbols: list[BenchmarkSymbol] = Field(default_factory=list)
+    sync_state: dict[str, BenchmarkSyncState] = Field(default_factory=dict)
+    available_snapshot_dates: list[date] = Field(default_factory=list)
+    available_price_range: BenchmarkAvailablePriceRange
+    available_metric_range: BenchmarkAvailableMetricRange
+
+
+class BenchmarkPricePoint(BaseModel):
+    date: date
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    close: float
+    adj_close: float | None = None
+    volume: float | None = None
+    source: str
+    source_symbol: str
+    is_proxy: bool
+
+
+class BenchmarkDailyMetric(BaseModel):
+    metric_date: date
+    return_1d: float | None = None
+    return_5d: float | None = None
+    return_21d: float | None = None
+    return_63d: float | None = None
+    return_126d: float | None = None
+    return_252d: float | None = None
+    return_ytd: float | None = None
+    volatility_21d_ann: float | None = None
+    volatility_63d_ann: float | None = None
+    volatility_252d_ann: float | None = None
+    sma_50: float | None = None
+    sma_200: float | None = None
+    high_52w: float | None = None
+    low_52w: float | None = None
+    drawdown_from_52w_high: float | None = None
+
+
+class BenchmarkConstituent(BaseModel):
+    index_id: str
+    snapshot_date: date
+    source: str
+    constituent_symbol: str
+    constituent_name: str | None = None
+    exchange_code: str | None = None
+    country_code: str | None = None
+    currency: str | None = None
+    sector: str | None = None
+    industry: str | None = None
+    weight_pct: float | None = None
+    market_cap: float | None = None
+    is_proxy: bool
+
+
+class BenchmarkExposure(BaseModel):
+    index_id: str
+    snapshot_date: date
+    dimension_type: str
+    dimension_value: str
+    weight_pct: float
+    source: str
+    source_type: str
+    is_proxy: bool
+
+
+class BenchmarkDefaultResponse(BaseModel):
+    subject_type: str
+    subject_id: str
+    benchmark_index_id: str | None = None
+    reason: str
+    fallback_used: bool
+
+
+class BenchmarkSeedRequest(BaseModel):
+    scope: str = Field(default="core", pattern="^(core|non_core|all)$")
+
+
+class BenchmarkRefreshRequest(BaseModel):
+    job_type: str = Field(pattern="^(daily_price|intraday_price|composition|metrics|relative_metrics)$")
+    lookback_days: int = Field(default=10, ge=1, le=3650)
+    interval: str = Field(default="5min", min_length=1, max_length=16)
+    comparison_index_id: str = Field(default="SP500", min_length=1, max_length=64)
+
+
+class BenchmarkBulkRefreshRequest(BenchmarkRefreshRequest):
+    category: str = Field(pattern="^(core_geo|sector|industry|theme|non_core|all)$")
+
+
 class BrokerUserCreate(BaseModel):
     user_key: str = Field(min_length=1, max_length=100)
 

@@ -1,5 +1,6 @@
 """Versioned HTTP API routes."""
 
+from datetime import date
 from threading import Lock
 
 from fastapi import APIRouter, Depends, Query, Request, status
@@ -10,6 +11,16 @@ from dashboard.api.models import (
     AssetActivitySummary,
     AssetDetail,
     AssetHoldingSummary,
+    BenchmarkBulkRefreshRequest,
+    BenchmarkConstituent,
+    BenchmarkDailyMetric,
+    BenchmarkDefaultResponse,
+    BenchmarkExposure,
+    BenchmarkIndexDetail,
+    BenchmarkIndexSummary,
+    BenchmarkPricePoint,
+    BenchmarkRefreshRequest,
+    BenchmarkSeedRequest,
     BrokerAccountMappingRequest,
     BrokerAccountResponse,
     BrokerConnectionResponse,
@@ -35,7 +46,13 @@ from dashboard.api.models import (
     PricePointResponse,
     TransactionSummary,
 )
-from dashboard.api.services import AssetApiService, CommandApiService, ComparisonApiService, PortfolioApiService
+from dashboard.api.services import (
+    AssetApiService,
+    BenchmarkApiService,
+    CommandApiService,
+    ComparisonApiService,
+    PortfolioApiService,
+)
 
 router = APIRouter(prefix="/api/v1")
 
@@ -58,6 +75,131 @@ def comparison(
     conn=Depends(get_connection),
 ):
     return ComparisonApiService(conn).compare(left, right, benchmark_index_id)
+
+
+@router.get("/benchmarks", response_model=list[BenchmarkIndexSummary])
+def list_benchmarks(
+    q: str | None = Query(default=None, min_length=1, max_length=100),
+    category: str | None = Query(default=None, max_length=32),
+    region: str | None = Query(default=None, max_length=64),
+    country_code: str | None = Query(default=None, min_length=2, max_length=3),
+    currency: str | None = Query(default=None, min_length=3, max_length=3),
+    is_core: bool | None = None,
+    is_active: bool | None = True,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    conn=Depends(get_connection),
+):
+    return BenchmarkApiService(conn).list_benchmarks(
+        q=q,
+        category=category,
+        region=region,
+        country_code=country_code,
+        currency=currency,
+        is_core=is_core,
+        is_active=is_active,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/benchmarks/defaults/asset/{asset_id}", response_model=BenchmarkDefaultResponse)
+def asset_default_benchmark(asset_id: str, conn=Depends(get_connection)):
+    return BenchmarkApiService(conn).default_for_asset(asset_id)
+
+
+@router.get("/benchmarks/defaults/portfolio/{portfolio_id}", response_model=BenchmarkDefaultResponse)
+def portfolio_default_benchmark(portfolio_id: int, conn=Depends(get_connection)):
+    return BenchmarkApiService(conn).default_for_portfolio(portfolio_id)
+
+
+@router.get("/benchmarks/{index_id}", response_model=BenchmarkIndexDetail)
+def benchmark_detail(index_id: str, conn=Depends(get_connection)):
+    return BenchmarkApiService(conn).get_benchmark(index_id)
+
+
+@router.get("/benchmarks/{index_id}/prices", response_model=list[BenchmarkPricePoint])
+def benchmark_prices(
+    index_id: str,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    limit: int = Query(default=365, ge=1, le=5000),
+    conn=Depends(get_connection),
+):
+    return BenchmarkApiService(conn).prices(index_id, start_date, end_date, limit)
+
+
+@router.get("/benchmarks/{index_id}/metrics", response_model=list[BenchmarkDailyMetric])
+def benchmark_metrics(
+    index_id: str,
+    limit: int = Query(default=365, ge=1, le=5000),
+    conn=Depends(get_connection),
+):
+    return BenchmarkApiService(conn).metrics(index_id, limit)
+
+
+@router.get("/benchmarks/{index_id}/constituents", response_model=Page[BenchmarkConstituent])
+def benchmark_constituents(
+    index_id: str,
+    snapshot_date: date | None = None,
+    source: str | None = Query(default=None, max_length=64),
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    sort: str = Query(default="weight_desc", max_length=32),
+    conn=Depends(get_connection),
+):
+    return BenchmarkApiService(conn).constituents(index_id, snapshot_date, source, limit, offset, sort)
+
+
+@router.get("/benchmarks/{index_id}/exposures", response_model=list[BenchmarkExposure])
+def benchmark_exposures(
+    index_id: str,
+    snapshot_date: date | None = None,
+    dimension_type: str | None = Query(default=None, max_length=64),
+    conn=Depends(get_connection),
+):
+    return BenchmarkApiService(conn).exposures(index_id, snapshot_date, dimension_type)
+
+
+@router.post("/benchmarks/seed", response_model=ActionResult)
+def benchmark_seed(payload: BenchmarkSeedRequest, request: Request, conn=Depends(get_connection)):
+    with request.app.state.write_lock:
+        result = BenchmarkApiService(conn).seed(payload.scope)
+    return ActionResult(result=result)
+
+
+@router.post("/benchmarks/{index_id}/refresh", response_model=ActionResult)
+def benchmark_refresh(
+    index_id: str,
+    payload: BenchmarkRefreshRequest,
+    request: Request,
+    conn=Depends(get_connection),
+):
+    with request.app.state.write_lock:
+        result = BenchmarkApiService(conn).refresh_benchmark(
+            index_id=index_id,
+            job_type=payload.job_type,
+            lookback_days=payload.lookback_days,
+            interval=payload.interval,
+            comparison_index_id=payload.comparison_index_id,
+        )
+    return ActionResult(result=result)
+
+
+@router.post("/benchmarks/refresh", response_model=ActionResult)
+def benchmark_bulk_refresh(
+    payload: BenchmarkBulkRefreshRequest,
+    request: Request,
+    conn=Depends(get_connection),
+):
+    with request.app.state.write_lock:
+        result = BenchmarkApiService(conn).refresh_benchmarks(
+            category=payload.category,
+            job_type=payload.job_type,
+            lookback_days=payload.lookback_days,
+            interval=payload.interval,
+        )
+    return ActionResult(result=result)
 
 
 @router.get("/portfolios/aggregate/overview", response_model=PortfolioSummary)
