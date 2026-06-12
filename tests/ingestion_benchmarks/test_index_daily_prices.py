@@ -10,6 +10,22 @@ from tests.fixtures.fixture_index import (
 )
 
 
+class FailingDailyPriceProvider:
+    provider_name = "etf_proxy"
+
+    def get_daily_prices(self, *args, **kwargs):
+        raise RuntimeError(
+            "403 Client Error: Forbidden for url: "
+            "https://financialmodelingprep.com/api/v3/historical-price-full/IEFA?apikey=secret"
+        )
+
+    def get_intraday_prices(self, *args, **kwargs):
+        return []
+
+    def get_constituents(self, *args, **kwargs):
+        return []
+
+
 def test_daily_price_ingestion_upserts_bars(conn):
     insert_test_index(conn)
     insert_test_symbol(conn, provider="fake", provider_symbol="^GSPC")
@@ -124,3 +140,43 @@ def test_provider_fallback_marks_proxy_rows_correctly(conn):
 
     assert row[0] == "SPY"
     assert row[1] is True
+
+
+def test_proxy_price_falls_back_to_yfinance_symbol(conn):
+    insert_test_index(conn, index_id="DEV_INTL")
+    insert_test_symbol(
+        conn,
+        index_id="DEV_INTL",
+        provider="etf_proxy",
+        provider_symbol="IEFA",
+        symbol_purpose="proxy_price",
+        is_primary=True,
+        is_proxy=True,
+    )
+
+    service = BenchmarkIndexIngestionService(
+        conn,
+        provider_registry={
+            "etf_proxy": FailingDailyPriceProvider(),
+            "yfinance": FakeDailyPriceProvider(closes=[70.0, 71.0]),
+        },
+    )
+
+    inserted = service.ingest_daily_prices(
+        index_id="DEV_INTL",
+        start_date=date(2026, 1, 1),
+        end_date=date(2026, 1, 3),
+    )
+
+    row = conn.execute(
+        """
+        SELECT source_symbol, is_proxy
+        FROM benchmark_index_daily_price
+        WHERE index_id = 'DEV_INTL'
+        ORDER BY price_date
+        LIMIT 1;
+        """
+    ).fetchone()
+
+    assert inserted == 2
+    assert row == ("IEFA", True)

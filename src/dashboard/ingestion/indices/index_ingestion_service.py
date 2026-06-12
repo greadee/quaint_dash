@@ -489,9 +489,9 @@ class BenchmarkIndexIngestionService:
                 f"{exact_purpose}/{proxy_purpose}"
             )
 
-        return symbols
+        return self._with_yfinance_proxy_fallbacks(symbols)
 
-    def _with_proxy_holdings_fallbacks(self, symbols: list[IndexSymbol]) -> list[IndexSymbol]:
+    def _with_yfinance_proxy_fallbacks(self, symbols: list[IndexSymbol]) -> list[IndexSymbol]:
         augmented = list(symbols)
         existing = {
             (symbol.provider, symbol.provider_symbol, symbol.symbol_purpose)
@@ -499,10 +499,12 @@ class BenchmarkIndexIngestionService:
         }
 
         for symbol in symbols:
-            if symbol.symbol_purpose != "proxy_holdings" or not symbol.is_proxy:
+            if symbol.symbol_purpose not in {"proxy_price", "proxy_holdings"}:
+                continue
+            if not symbol.is_proxy:
                 continue
 
-            key = ("yfinance", symbol.provider_symbol, "proxy_holdings")
+            key = ("yfinance", symbol.provider_symbol, symbol.symbol_purpose)
             if key in existing:
                 continue
 
@@ -511,7 +513,7 @@ class BenchmarkIndexIngestionService:
                     index_id=symbol.index_id,
                     provider="yfinance",
                     provider_symbol=symbol.provider_symbol,
-                    symbol_purpose="proxy_holdings",
+                    symbol_purpose=symbol.symbol_purpose,
                     is_primary=False,
                     is_proxy=True,
                 )
@@ -526,7 +528,7 @@ class BenchmarkIndexIngestionService:
     ) -> tuple[IndexSymbol, list[Any]]:
         errors: list[str] = []
 
-        for symbol in self._with_proxy_holdings_fallbacks(symbols):
+        for symbol in symbols:
             provider = self.provider_registry.get(symbol.provider)
 
             if provider is None:
