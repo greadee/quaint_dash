@@ -549,6 +549,54 @@ def test_portfolio_report_rolls_up_holding_valuation_metrics(tmp_path):
     assert any(explanation.topic == "portfolio_valuation" for explanation in report.ai_context.explanations)
 
 
+def test_portfolio_valuation_rollup_uses_cdr_underlying_fundamentals(tmp_path):
+    db = DB(str(tmp_path / "portfolio_cdr_valuation_rollup.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, asset_subtype, ccy, name, shares_outstanding)
+        VALUES
+            ('AMD', 'AMD', 'stock', NULL, 'USD', 'Advanced Micro Devices', 100),
+            ('AMD.TO', 'AMD.TO', 'stock', 'cdr', 'CAD', 'AMD Canadian Depositary Receipt', NULL)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO position(portfolio_id, asset_id, qty, book_cost, created_at, updated_at)
+        VALUES (1, 'AMD.TO', 1, 10, now(), now())
+        """
+    )
+    for asset_id, close in [("AMD", 20.0), ("AMD.TO", 10.0)]:
+        db.conn.execute(
+            """
+            INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+            VALUES
+                (?, DATE '2026-01-01', ?, ?, 'test'),
+                (?, DATE '2026-01-02', ?, ?, 'test')
+            """,
+            [asset_id, close - 1, close - 1, asset_id, close, close],
+        )
+    db.conn.execute(
+        """
+        INSERT INTO financial_statement(asset_id, statement_type, year, quarter, data_json, source)
+        VALUES
+            ('AMD', 'income', 2025, 4, '{"revenue":500,"netIncome":100,"eps":1}', 'test'),
+            ('AMD', 'balance', 2025, 4, '{"totalStockholdersEquity":250,"totalAssets":500,"totalDebt":50}', 'test'),
+            ('AMD', 'cashflow', 2025, 4, '{"freeCashFlow":100}', 'test'),
+            ('AMD', 'cashflow', 2024, 4, '{"freeCashFlow":90}', 'test')
+        """
+    )
+
+    report = AnalyticsEngine(AnalyticsRepository(db.conn)).portfolio_report(1)
+
+    assert report.valuation.weighted_pe_ratio == pytest.approx(20.0)
+    assert report.valuation.weighted_price_to_free_cash_flow == pytest.approx(20.0)
+    assert report.valuation.weighted_margin_of_safety is not None
+    assert report.valuation.position_contributions[0].asset_id == "AMD.TO"
+    assert "AMD.TO: income statement" not in report.valuation.missing_inputs
+
+
 def test_analytics_report_payload_has_stable_public_shape(tmp_path):
     db = DB(str(tmp_path / "analytics_payload.db"))
     init_db(db)

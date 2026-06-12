@@ -29,6 +29,10 @@ from dashboard.ingestion.corporate_calendar.models import (
 load_dotenv()
 
 
+class FmpEntitlementError(RuntimeError):
+    """Raised when the configured FMP plan cannot access the requested endpoint."""
+
+
 class FmpCorporateCalendarProvider:
     """
     FMP stable endpoint provider.
@@ -70,6 +74,10 @@ class FmpCorporateCalendarProvider:
         except urllib.error.HTTPError as exc:
             if exc.code == 429:
                 raise RateLimitExceeded("FMP rate limit exceeded") from exc
+            if exc.code == 402:
+                raise FmpEntitlementError(
+                    "FMP HTTP error 402: plan does not include this corporate endpoint"
+                ) from exc
             raise RuntimeError(f"FMP HTTP error {exc.code}") from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(f"FMP connection error: {exc.reason}") from exc

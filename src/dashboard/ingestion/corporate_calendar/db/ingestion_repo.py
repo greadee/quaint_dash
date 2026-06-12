@@ -238,6 +238,28 @@ class CorporateCalendarIngestionRepository:
             [asset_id],
         )
 
+    def deactivate_fundamental_subscription(self, asset_id: str, reason: str) -> None:
+        if not self._table_exists("fundamental_subscription"):
+            return
+
+        self.conn.execute(
+            """
+            UPDATE fundamental_subscription
+            SET
+                is_active = FALSE,
+                next_refresh_at = NULL,
+                updated_at = now()
+            WHERE asset_id = ?
+            """,
+            [asset_id],
+        )
+
+        self.ensure_sync_state(asset_id, "financial_statements")
+        self.conn.execute(
+            qry.UPDATE_SYNC_STATE_FAILED,
+            [BACKFILL_FAILED, reason, asset_id, DOMAIN_CORPORATE, "financial_statements"],
+        )
+
     def select_due_earnings_update_asset_ids(
         self,
         today: date,

@@ -2615,9 +2615,15 @@ class CommandApiService(BrokerCommands, IngestionCommands):
         row_count = int(row[0])
         latest_date = row[1]
         open_jobs = self._open_job_count(asset_id, "corporate", "financial_statements")
+        sync_done = self._sync_has_success(asset_id, "corporate", "financial_statements")
         last_error = self._sync_last_error(asset_id, "corporate", "financial_statements")
-        ready = row_count > 0
-        detail = f"{row_count} statement(s)" if ready else "no stored statements"
+        ready = row_count > 0 or sync_done
+        if row_count:
+            detail = f"{row_count} statement(s)"
+        elif sync_done:
+            detail = "coverage checked; no statements returned"
+        else:
+            detail = "no stored statements"
         if not ready and open_jobs:
             detail += f"; {open_jobs} open job(s)"
         return IngestionRequirementStatus(

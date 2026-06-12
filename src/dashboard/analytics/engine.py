@@ -290,11 +290,16 @@ class AnalyticsEngine:
             if position.weight is None or position.weight <= 0:
                 continue
             asset_id = position.asset_id
-            latest_price = position.latest_price
-            annual_dividend = self.repo.annual_dividend_per_share(asset_id)
+            valuation_asset_id = self.repo.valuation_asset_id(asset_id)
+            latest_price = (
+                self.repo.latest_price(valuation_asset_id) or position.latest_price
+                if valuation_asset_id != asset_id
+                else position.latest_price
+            )
+            annual_dividend = self.repo.annual_dividend_per_share(valuation_asset_id)
             dividend_yield = safe_div(annual_dividend, latest_price)
-            shares = self.repo.shares_outstanding(asset_id)
-            fcf = self.repo.latest_free_cash_flow(asset_id)
+            shares = self.repo.shares_outstanding(valuation_asset_id)
+            fcf = self.repo.latest_free_cash_flow(valuation_asset_id)
             fcf_per_share = fcf / shares if fcf is not None and shares else None
             dcf = discounted_cash_flow_model(
                 cashflow_per_share=fcf_per_share,
@@ -305,9 +310,15 @@ class AnalyticsEngine:
                 forecast_years=forecast_years,
             )
             valuation_depth = valuation_depth_metrics(
-                income_statements=self.repo.financial_statement_history(asset_id, "income"),
-                balance_sheets=self.repo.financial_statement_history(asset_id, "balance"),
-                cashflow_statements=self.repo.financial_statement_history(asset_id, "cashflow"),
+                income_statements=self.repo.financial_statement_history(
+                    valuation_asset_id, "income"
+                ),
+                balance_sheets=self.repo.financial_statement_history(
+                    valuation_asset_id, "balance"
+                ),
+                cashflow_statements=self.repo.financial_statement_history(
+                    valuation_asset_id, "cashflow"
+                ),
                 market_price=latest_price,
                 shares_outstanding=shares,
                 annual_dividend=annual_dividend,
@@ -316,12 +327,12 @@ class AnalyticsEngine:
                 terminal_growth_rate=terminal_growth_rate,
                 forecast_years=forecast_years,
             )
-            risk = risk_return_metrics(self.repo.price_history(asset_id))
+            risk = risk_return_metrics(self.repo.price_history(valuation_asset_id))
             forecast = asset_forecast_metrics(
                 market_price=latest_price,
                 risk=risk,
                 valuation_depth=valuation_depth,
-                dividend_history=self.repo.dividend_history(asset_id),
+                dividend_history=self.repo.dividend_history(valuation_asset_id),
                 annual_dividend=annual_dividend,
                 forecast_years=forecast_years,
             )

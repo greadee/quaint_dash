@@ -420,6 +420,59 @@ def test_ingestion_readiness_reports_portfolio_ticker_metric_inputs(tmp_path):
     assert "Cash flow statements" in by_asset["MSFT"]["missing"]
 
 
+def test_ingestion_readiness_treats_successful_financial_statement_sync_as_checked(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    start = date(2025, 1, 1)
+
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, shares_outstanding)
+        VALUES ('AAPL', 'AAPL', 'stock', 'USD', 1000000)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'AAPL', TRUE, 'position')
+        """
+    )
+    for index in range(252):
+        price_date = start + timedelta(days=index)
+        db.conn.execute(
+            """
+            INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+            VALUES ('AAPL', ?, 100, 100, 'test')
+            """,
+            [price_date],
+        )
+    db.conn.execute(
+        """
+        INSERT INTO asset_sync_state(
+            asset_id, domain, dataset, backfill_status, last_successful_date, last_successful_at
+        )
+        VALUES
+            ('AAPL', 'market', 'dividends', 'done', DATE '2026-01-01', now()),
+            ('AAPL', 'market', 'splits', 'done', DATE '2026-01-01', now()),
+            ('AAPL', 'corporate', 'financial_statements', 'done', DATE '2026-01-01', now())
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/ingestion/readiness")
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    by_requirement = {requirement["key"]: requirement for requirement in item["requirements"]}
+    assert item["ready"] is True
+    assert item["missing"] == []
+    assert by_requirement["income_statements"]["ready"] is True
+    assert by_requirement["income_statements"]["detail"] == "coverage checked; no statements returned"
+
+
 def test_retry_failed_ingestion_jobs_requeues_bounded_failures(tmp_path):
     db_path = tmp_path / "api.db"
     app = create_app(db_path)

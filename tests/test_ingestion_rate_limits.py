@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from dashboard.ingestion.corporate_calendar.provider_fmp import FmpCorporateCalendarProvider
+from dashboard.ingestion.corporate_calendar.provider_fmp import FmpEntitlementError
 from dashboard.ingestion.indices.fmp_index_provider import FMPIndexProvider
 from dashboard.ingestion.indices.yfinance_index_provider import YFinanceIndexProvider
 from dashboard.ingestion.price_history.provider_yahoo import YahooPriceProvider
@@ -92,6 +93,23 @@ def test_fmp_corporate_provider_uses_limiter_and_detects_429(monkeypatch):
         provider._get_json("earnings", {"symbol": "AAPL"})
 
     assert len(limiter.calls) == 1
+
+
+def test_fmp_corporate_provider_detects_entitlement_402(monkeypatch):
+    provider = FmpCorporateCalendarProvider(
+        api_key="key",
+        base_url="https://example.test",
+        rate_limiter=FakeLimiter(),
+        rate_limit_policy=RateLimitPolicy(provider="fmp-test"),
+    )
+
+    def fail_402(*args, **kwargs):
+        raise urllib.error.HTTPError("url", 402, "Payment Required", {}, None)
+
+    monkeypatch.setattr("urllib.request.urlopen", fail_402)
+
+    with pytest.raises(FmpEntitlementError):
+        provider._get_json("income-statement", {"symbol": "AAPL"})
 
 
 def test_fmp_corporate_provider_treats_limit_payload_as_budget_failure(monkeypatch):
@@ -227,6 +245,30 @@ def test_fmp_index_provider_uses_limiter_and_detects_429(monkeypatch):
     assert len(limiter.calls) == 1
 
 
+def test_fmp_index_provider_reports_entitlement_errors_without_url(monkeypatch):
+    provider = FMPIndexProvider(
+        api_key="secret",
+        rate_limiter=FakeLimiter(),
+        rate_limit_policy=RateLimitPolicy(provider="fmp-index-test"),
+    )
+
+    class Response:
+        status_code = 402
+
+        def raise_for_status(self):
+            raise AssertionError("402 should be handled before raise_for_status")
+
+    monkeypatch.setattr("requests.get", lambda *args, **kwargs: Response())
+
+    with pytest.raises(RuntimeError) as exc_info:
+        provider._get("https://example.test", "/path", {})
+
+    message = str(exc_info.value)
+    assert "access denied" in message
+    assert "secret" not in message
+    assert "apikey" not in message
+
+
 def test_yfinance_index_provider_uses_limiter(monkeypatch):
     limiter = FakeLimiter()
     provider = YFinanceIndexProvider(
@@ -246,3 +288,41 @@ def test_yfinance_index_provider_uses_limiter(monkeypatch):
     )
 
     assert len(limiter.calls) == 1
+
+
+def test_yfinance_index_provider_parses_proxy_top_holdings(monkeypatch):
+    limiter = FakeLimiter()
+    provider = YFinanceIndexProvider(
+        rate_limiter=limiter,
+        rate_limit_policy=RateLimitPolicy(provider="yf-index-test"),
+    )
+    holdings = pd.DataFrame(
+        {
+            "Name": ["Apple Inc.", "Microsoft Corp."],
+            "Holding Percent": [0.06, 4.0],
+            "Sector": ["Information Technology", "Information Technology"],
+        },
+        index=["AAPL", "MSFT"],
+    )
+
+    class FakeFundsData:
+        top_holdings = holdings
+
+    class FakeTicker:
+        def __init__(self, symbol: str) -> None:
+            self.symbol = symbol
+            self.funds_data = FakeFundsData()
+
+    monkeypatch.setattr("yfinance.Ticker", FakeTicker)
+
+    constituents = provider.get_constituents(
+        index_id="SP500",
+        provider_symbol="SPY",
+        is_proxy=True,
+    )
+
+    assert len(limiter.calls) == 1
+    assert [(item.constituent_symbol, item.weight_pct) for item in constituents] == [
+        ("AAPL", 6.0),
+        ("MSFT", 4.0),
+    ]

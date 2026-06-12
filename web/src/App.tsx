@@ -10,6 +10,7 @@ import {
   CircleDollarSign,
   Database,
   ExternalLink,
+  Info,
   KeyRound,
   LayoutDashboard,
   Menu,
@@ -70,6 +71,7 @@ type ThemeMode = "light" | "dark";
 type MoverDefault = "8" | "all";
 type SignalTimeframe = "1d" | "1w" | "1m" | "1y";
 type AppNotification = { id: number; tone: "success" | "error"; message: string };
+type HelpItem = { term: string; detail: string };
 type AppSettings = {
   theme: ThemeMode;
   moverDefault: MoverDefault;
@@ -87,6 +89,48 @@ const signalTimeframes: { value: SignalTimeframe; label: string }[] = [
   { value: "1w", label: "Week" },
   { value: "1m", label: "Month" },
   { value: "1y", label: "Year" },
+];
+const signalHelp: HelpItem[] = [
+  { term: "Return", detail: "How much the holding moved over the selected period. Positive returns support buy momentum; negative returns can support sell pressure." },
+  { term: "Confidence", detail: "How much usable data backs the signal. It rises when the app has enough recent closes and model inputs, and falls when the history is thin." },
+  { term: "Closes", detail: "The number of daily closing prices used for the selected timeframe. More closes usually means the signal is less jumpy." },
+  { term: "Score", detail: "A blended ranking from price return, trend, risk, valuation, and data quality. It is a prioritization tool, not a trade order." },
+];
+const compareHelp: HelpItem[] = [
+  { term: "P/E and price/sales", detail: "Simple valuation ratios. Lower can mean cheaper, but only if the business quality and growth are comparable." },
+  { term: "Vs history/sector/industry", detail: "Shows whether the company looks expensive or cheap versus its own past and similar companies." },
+  { term: "Returns", detail: "Short and long period price movement. Good for context, but one period should not decide the investment case." },
+  { term: "Spread", detail: "The gap between the left and right ticker. It helps show which company is stronger on a given metric." },
+];
+const benchmarkHelp: HelpItem[] = [
+  { term: "Benchmark", detail: "A reference basket, like an index, used to judge whether a company or portfolio is doing better than the market it belongs to." },
+  { term: "Volatility", detail: "How jumpy the benchmark has been. Higher volatility means a wider range of normal outcomes." },
+  { term: "Composition", detail: "The companies or groups inside the benchmark. This explains what the benchmark is actually exposed to." },
+  { term: "Exposures", detail: "Breakdowns by sector, region, or other traits. Use them to see what is driving benchmark behavior." },
+];
+const portfolioAnalyticsHelp: HelpItem[] = [
+  { term: "Modified Dietz", detail: "A portfolio return estimate that adjusts for deposits and withdrawals, so cash movement does not distort performance as much." },
+  { term: "Sharpe and Sortino", detail: "Risk-adjusted return scores. Higher is generally better; Sortino focuses more on harmful downside moves." },
+  { term: "Max drawdown", detail: "The largest peak-to-trough loss in the period. It is a plain stress measure: how deep the worst slump was." },
+  { term: "Monte Carlo", detail: "A probability simulation that creates many possible paths using expected return and volatility. Treat it as a range of outcomes, not a prediction." },
+  { term: "Margin of safety", detail: "How far estimated fair value sits above the current price. Bigger positive margins imply more valuation cushion." },
+];
+const assetAnalyticsHelp: HelpItem[] = [
+  { term: "Beta", detail: "How sensitive the stock is to the benchmark. A beta above 1 usually moves more than the market; below 1 usually moves less." },
+  { term: "DCF", detail: "Discounted cash flow. It estimates fair value from future cash the company may produce, discounted back to today." },
+  { term: "DDM", detail: "Dividend discount model. It estimates fair value from future dividends, so it matters most for dividend-paying companies." },
+  { term: "Forecast band", detail: "A range of simulated outcomes. The 10th percentile is a rough bear case, the 90th percentile a rough bull case." },
+  { term: "Quality", detail: "Profitability and balance-sheet clues, such as margins, return on equity, and debt/equity." },
+];
+const dataReadinessHelp: HelpItem[] = [
+  { term: "Ready", detail: "The model has enough inputs to produce that section's analytics." },
+  { term: "Missing inputs", detail: "Data the model wanted but could not find, such as price history, fundamentals, cash flow, or dividend data." },
+  { term: "Weak", detail: "Some useful data exists, but the output may be thinner or less reliable than a fully populated model." },
+];
+const ingestionHelp: HelpItem[] = [
+  { term: "Routine ingestion", detail: "Scheduled data refresh work that keeps prices, fundamentals, benchmarks, and analytics inputs current." },
+  { term: "Projection readiness", detail: "A checklist showing whether held assets have enough data for projections and valuation models." },
+  { term: "Manual controls", detail: "Explicit refresh actions for backfills, retries, and provider-sensitive jobs. These can change local data." },
 ];
 const loadAppSettings = (): AppSettings => {
   try {
@@ -188,6 +232,28 @@ function ActionNotification({ notification, onClose }: { notification: AppNotifi
   );
 }
 
+function HelpDisclosure({ title, items, note }: { title: string; items: HelpItem[]; note?: string }) {
+  return (
+    <details className="info-popover">
+      <summary aria-label={`Explain ${title}`}>
+        <Info size={15} />
+      </summary>
+      <div className="info-panel">
+        <strong>{title}</strong>
+        <dl>
+          {items.map((item) => (
+            <div key={item.term}>
+              <dt>{item.term}</dt>
+              <dd>{item.detail}</dd>
+            </div>
+          ))}
+        </dl>
+        {note ? <p>{note}</p> : null}
+      </div>
+    </details>
+  );
+}
+
 class RouteErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state: { error: Error | null } = { error: null };
 
@@ -240,6 +306,7 @@ function OverviewPage({ moverDefault }: { moverDefault: MoverDefault }) {
       <div className="card-heading">
         <div><p className="eyebrow">Signal rank</p><h2>Buy and sell signals</h2></div>
         <div className="card-tools signal-timeframes">
+          <HelpDisclosure title="How to read signals" items={signalHelp} note="Use the rank to decide what deserves review first. Confirm the thesis, valuation, taxes, and position size before acting." />
           {signalTimeframes.map((item) => (
             <button
               key={item.value}
@@ -338,7 +405,6 @@ function PortfoliosPage({ notify }: { notify: (message: string, tone?: AppNotifi
   const [newName, setNewName] = useState("");
   const [newBaseCcy, setNewBaseCcy] = useState("CAD");
   const [renameName, setRenameName] = useState("");
-  const [analyticsBenchmark, setAnalyticsBenchmark] = useState("");
   const [transactionLimit, setTransactionLimit] = useState("8");
   const [transactionOffset, setTransactionOffset] = useState(0);
   const isAggregate = selectedId === "all";
@@ -381,13 +447,8 @@ function PortfoliosPage({ notify }: { notify: (message: string, tone?: AppNotifi
     enabled: Boolean(selected),
   });
   const analytics = useQuery({
-    queryKey: ["portfolio-analytics", selected?.portfolio_id, analyticsBenchmark],
-    queryFn: () => api.portfolioAnalytics(selected!.portfolio_id, analyticsBenchmark.trim().toUpperCase() || undefined),
-    enabled: Boolean(selected) && !isAggregate,
-  });
-  const defaultBenchmark = useQuery({
-    queryKey: ["portfolio-default-benchmark", selected?.portfolio_id],
-    queryFn: () => api.portfolioDefaultBenchmark(selected!.portfolio_id),
+    queryKey: ["portfolio-analytics", selected?.portfolio_id],
+    queryFn: () => api.portfolioAnalytics(selected!.portfolio_id),
     enabled: Boolean(selected) && !isAggregate,
   });
   const create = useMutation({
@@ -516,9 +577,6 @@ function PortfoliosPage({ notify }: { notify: (message: string, tone?: AppNotifi
           <AnalyticsPanel
             payload={analytics.data}
             isLoading={analytics.isLoading}
-            benchmark={analyticsBenchmark}
-            onBenchmarkChange={setAnalyticsBenchmark}
-            defaultBenchmark={defaultBenchmark.data}
           />
         )}
         <section className="card">
@@ -652,7 +710,10 @@ function ComparePage() {
 
 function CompareAssetCard({ asset, label }: { asset: ComparisonAsset; label: string }) {
   return <section className="card compare-card">
-    <div className="card-heading"><div><p className="eyebrow">{label}</p><h2>{asset.symbol}</h2></div><span>{asset.sector ?? "Unclassified"}</span></div>
+    <div className="card-heading">
+      <div><p className="eyebrow">{label}</p><h2>{asset.symbol}</h2></div>
+      <div className="card-tools"><HelpDisclosure title="Company metric basics" items={compareHelp} /><span>{asset.sector ?? "Unclassified"}</span></div>
+    </div>
     <div className="compare-summary">
       <strong>{asset.name ?? asset.asset_id}</strong>
       <span>{[asset.industry, asset.country, asset.currency].filter(Boolean).join(" - ")}</span>
@@ -698,7 +759,10 @@ function CompareMetricMatrix({ left, right }: { left: ComparisonAsset; right: Co
     { group: "Returns", label: "252 day", left: percent(left.returns.return_252d), right: right ? percent(right.returns.return_252d) : "No peer", delta: percentDelta(left.returns.return_252d, right?.returns.return_252d) },
   ];
   return <section className="card compare-matrix-card">
-    <div className="card-heading"><div><p className="eyebrow">Company metrics</p><h2>{right ? `${left.symbol} vs ${right.symbol}` : `${left.symbol} full metric view`}</h2></div><span>{right ? "left / right / spread" : "left ticker only"}</span></div>
+    <div className="card-heading">
+      <div><p className="eyebrow">Company metrics</p><h2>{right ? `${left.symbol} vs ${right.symbol}` : `${left.symbol} full metric view`}</h2></div>
+      <div className="card-tools"><HelpDisclosure title="How comparisons work" items={compareHelp} /><span>{right ? "left / right / spread" : "left ticker only"}</span></div>
+    </div>
     <div className="comparison-matrix">
       <div className="comparison-matrix-head"><span>Metric</span><strong>{left.symbol}</strong><strong>{right?.symbol ?? "Peer"}</strong><strong>Spread</strong></div>
       {rows.map((row) => <div className="comparison-matrix-row" key={`${row.group}-${row.label}`}>
@@ -768,6 +832,14 @@ const gapLabel = (value: number | null | undefined, label: string) => {
   if (value == null) return "Unavailable";
   const direction = value >= 0 ? "above" : "below";
   return `${percent(Math.abs(value))} ${direction} ${label}`;
+};
+const valuationMixLabel = (valuation: AnyRecord) => {
+  const undervalued = num(valuation?.undervalued_weight);
+  const fair = num(valuation?.fair_value_weight);
+  const overvalued = num(valuation?.overvalued_weight);
+  const total = (undervalued ?? 0) + (fair ?? 0) + (overvalued ?? 0);
+  if (!total) return "Needs DCF inputs";
+  return `${percent(undervalued)} under / ${percent(fair)} fair / ${percent(overvalued)} over`;
 };
 
 type TrancheDimension = "sector" | "country" | "industry" | "asset_type" | "currency";
@@ -911,7 +983,7 @@ function BenchmarkBrowserPage({ notify }: { notify: (message: string, tone?: App
         {!activeId ? <EmptyRow text="Select a benchmark to inspect details." /> : detail.error ? <ErrorPanel error={detail.error} /> : detail.isLoading ? <Loading compact /> : detail.data ? <>
           <div className="card-heading benchmark-detail-heading">
             <div><p className="eyebrow">{detail.data.index_category}</p><h2>{detail.data.index_name}</h2></div>
-            <span>{detail.data.index_id}</span>
+            <div className="card-tools"><HelpDisclosure title="Benchmark analytics" items={benchmarkHelp} /><span>{detail.data.index_id}</span></div>
           </div>
           <div className="benchmark-summary-grid">
             <Signal label="Latest close" value={money(detail.data.latest_close, detail.data.currency)} />
@@ -1405,14 +1477,17 @@ function OperationsPage() {
   const jobs = useQuery({
     queryKey: ["jobs", status, domain, jobLimit],
     queryFn: () => api.ingestionJobs(status, domain, boundedInt(jobLimit, 100, 1, 500)),
+    refetchInterval: 10000,
   });
   const background = useQuery({
     queryKey: ["ingestion-background-status"],
     queryFn: api.ingestionBackgroundStatus,
+    refetchInterval: 10000,
   });
   const readiness = useQuery({
     queryKey: ["ingestion-readiness"],
     queryFn: api.ingestionReadiness,
+    refetchInterval: 10000,
   });
   const schedule = useMutation({
     mutationFn: (override?: ScheduleOverride) => api.scheduleIngestion({
@@ -1469,7 +1544,7 @@ function OperationsPage() {
     <IngestionBackgroundCard status={background.data} isLoading={background.isLoading} error={background.error} />
     <IngestionReadinessCard readiness={readiness.data} isLoading={readiness.isLoading} error={readiness.error} onScheduleAsset={scheduleAsset} isBusy={isBusy} />
     <section className="card operations-control">
-      <div className="card-heading"><div><p className="eyebrow">Manual controls</p><h2>Ingestion actions</h2></div><span>{isBusy ? "working" : "ready"}</span></div>
+      <div className="card-heading"><div><p className="eyebrow">Manual controls</p><h2>Ingestion actions</h2></div><div className="card-tools"><HelpDisclosure title="Manual ingestion actions" items={ingestionHelp} /><span>{isBusy ? "working" : "ready"}</span></div></div>
       <div className="operations-grid">
         <div className="control-panel">
           <strong>Schedule jobs</strong>
@@ -1535,7 +1610,7 @@ function IngestionBackgroundCard({
   return <section className="card operations-background">
     <div className="card-heading">
       <div><p className="eyebrow">Background due work</p><h2>Routine ingestion worker</h2></div>
-      <span className={`pill ${status?.running ? "running" : status?.enabled ? "done" : ""}`}>{isLoading ? "loading" : stateLabel}</span>
+      <div className="card-tools"><HelpDisclosure title="Ingestion basics" items={ingestionHelp} /><span className={`pill ${status?.running ? "running" : status?.enabled ? "done" : ""}`}>{isLoading ? "loading" : stateLabel}</span></div>
     </div>
     {error ? <ErrorPanel error={error} /> : (
       <div className="background-status-grid">
@@ -1570,7 +1645,7 @@ function IngestionReadinessCard({
   return <section className="card operations-readiness">
     <div className="card-heading">
       <div><p className="eyebrow">Portfolio tickers</p><h2>Projection input readiness</h2></div>
-      <span>{isLoading ? "loading" : `${readiness?.ready_count ?? 0}/${readiness?.total ?? 0} ready`}</span>
+      <div className="card-tools"><HelpDisclosure title="Readiness checks" items={dataReadinessHelp} /><span>{isLoading ? "loading" : `${readiness?.ready_count ?? 0}/${readiness?.total ?? 0} ready`}</span></div>
     </div>
     {error ? <ErrorPanel error={error} /> : isLoading ? <Loading compact /> : readiness?.items.length ? (
       <div className="readiness-list">
@@ -1616,15 +1691,9 @@ function Pager({ total, limit, offset, onChange }: { total: number; limit: numbe
 function AnalyticsPanel({
   payload,
   isLoading,
-  benchmark,
-  onBenchmarkChange,
-  defaultBenchmark,
 }: {
   payload?: Record<string, unknown>;
   isLoading: boolean;
-  benchmark: string;
-  onBenchmarkChange: (value: string) => void;
-  defaultBenchmark?: BenchmarkDefaultResponse;
 }) {
   const report = payload?.report as AnyRecord | undefined;
   const performance = record(report?.performance);
@@ -1665,7 +1734,7 @@ function AnalyticsPanel({
     <div className="card-heading">
       <div><p className="eyebrow">Phase 3 analytics</p><h2>Portfolio signals</h2></div>
       <div className="card-tools">
-        <BenchmarkPicker value={benchmark} onChange={onBenchmarkChange} defaultBenchmark={defaultBenchmark} />
+        <HelpDisclosure title="Portfolio analytics" items={portfolioAnalyticsHelp} note="These metrics are best used together. A high return with poor drawdown or weak data should still be treated cautiously." />
         <span>{payload?.schema_version as string ?? "loading"}</span>
       </div>
     </div>
@@ -1710,10 +1779,10 @@ function AnalyticsPanel({
             <MetricLine label="Bull CAGR" value={percent(num(simulation?.p90_cagr))} />
           </AnalyticsBlock>
           <AnalyticsBlock title="Valuation rollup">
-            <MetricLine label="Margin of safety" value={percent(num(valuation?.weighted_margin_of_safety))} />
-            <MetricLine label="Undervalued weight" value={percent(num(valuation?.undervalued_weight))} />
-            <MetricLine label="Fair value weight" value={percent(num(valuation?.fair_value_weight))} />
-            <MetricLine label="Overvalued weight" value={percent(num(valuation?.overvalued_weight))} />
+            <MetricLine label="Expected CAGR" value={percent(num(valuation?.weighted_expected_cagr))} />
+            <MetricLine label="Dividend yield" value={percent(num(valuation?.weighted_dividend_yield))} />
+            <MetricLine label="Margin of safety" value={num(valuation?.weighted_margin_of_safety) == null ? "Needs DCF inputs" : percent(num(valuation?.weighted_margin_of_safety))} />
+            <MetricLine label="Valuation mix" value={valuationMixLabel(valuation)} />
           </AnalyticsBlock>
         </div>
         <DataHealthPanel items={healthItems} />
@@ -1783,6 +1852,7 @@ function AssetAnalyticsPanel({
     <div className="card-heading">
       <div><p className="eyebrow">Phase 3 analytics</p><h2>Asset signals</h2></div>
       <div className="card-tools">
+        <HelpDisclosure title="Asset analytics" items={assetAnalyticsHelp} note="Fair value models are sensitive to assumptions. Treat them as structured estimates, then compare against the business story and risk." />
         <BenchmarkPicker value={benchmark} onChange={onBenchmarkChange} defaultBenchmark={defaultBenchmark} associations={associations} />
         <span>{payload?.schema_version as string ?? "loading"}</span>
       </div>
@@ -1910,7 +1980,10 @@ function dateRange(start?: string | null, end?: string | null): string {
 }
 function DataHealthPanel({ items }: { items: DataHealthItem[] }) {
   return <div className="data-health-panel">
-    <div className="data-health-heading"><div><p className="eyebrow">Analytics data health</p><strong>Model input readiness</strong></div><span>{items.filter((item) => item.missing.length === 0 && item.ready).length}/{items.length} ready</span></div>
+    <div className="data-health-heading">
+      <div><p className="eyebrow">Analytics data health</p><strong>Model input readiness</strong></div>
+      <div className="card-tools"><HelpDisclosure title="Model input readiness" items={dataReadinessHelp} /><span>{items.filter((item) => item.missing.length === 0 && item.ready).length}/{items.length} ready</span></div>
+    </div>
     <div className="data-health-grid">
       {items.map((item) => {
         const status = item.missing.length ? "missing" : item.ready ? "ready" : "weak";

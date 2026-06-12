@@ -167,6 +167,7 @@ class CorporateCalendarScheduler:
         """
         ensure_fundamental_phase1_schema(self.conn)
         self._ensure_active_universe_subscriptions()
+        self._deactivate_entitlement_blocked_subscriptions()
 
         now = datetime.now()
         today = date.today()
@@ -244,6 +245,7 @@ class CorporateCalendarScheduler:
         """
         ensure_fundamental_phase1_schema(self.conn)
         self._ensure_active_universe_subscriptions()
+        self._deactivate_entitlement_blocked_subscriptions()
 
         asset_ids = self.ticker_universe.ingestible_asset_ids(
             include_watchlist=True,
@@ -342,6 +344,28 @@ class CorporateCalendarScheduler:
             """,
             rows,
         )
+        return len(rows)
+
+    def _deactivate_entitlement_blocked_subscriptions(self) -> int:
+        rows = self.conn.execute(
+            """
+            SELECT DISTINCT s.asset_id, s.last_error
+            FROM asset_sync_state s
+            JOIN fundamental_subscription f
+              ON f.asset_id = s.asset_id
+            WHERE s.domain = ?
+              AND s.dataset = ?
+              AND f.is_active = TRUE
+              AND s.last_error ILIKE '%FMP HTTP error 402%'
+            """,
+            [DOMAIN_CORPORATE, DATASET_FINANCIAL_STATEMENTS],
+        ).fetchall()
+        for asset_id, last_error in rows:
+            self.repo.deactivate_fundamental_subscription(
+                asset_id,
+                str(last_error)
+                or "FMP HTTP error 402: plan does not include this corporate endpoint",
+            )
         return len(rows)
 
     def _mark_subscription_refresh_scheduled(

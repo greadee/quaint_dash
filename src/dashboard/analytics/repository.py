@@ -16,6 +16,11 @@ from .models import (
 )
 
 
+_CDR_SYMBOL_ALIASES = {
+    "NOWS": "NOW",
+}
+
+
 class AnalyticsRepository:
     """Read-only access to existing analytics inputs."""
 
@@ -208,6 +213,27 @@ class AnalyticsRepository:
             [asset_id.upper().strip()],
         ).fetchone()
         return float(row[0]) if row and row[0] is not None else None
+
+    def valuation_asset_id(self, asset_id: str) -> str:
+        """Return the asset id whose fundamentals should drive valuation models."""
+        asset_id = asset_id.upper().strip()
+        row = self.conn.execute(
+            """
+            SELECT asset_id, symbol, asset_subtype, name, description
+            FROM asset
+            WHERE asset_id = ?
+            """,
+            [asset_id],
+        ).fetchone()
+        if row is None:
+            return asset_id
+
+        symbol = str(row[1] or row[0])
+        base = symbol.split(".", maxsplit=1)[0].upper()
+        base = _CDR_SYMBOL_ALIASES.get(base, base)
+        if base == asset_id or not self._looks_like_cdr_listing(row):
+            return asset_id
+        return base if self._has_valuation_inputs(base) else asset_id
 
     def annual_dividend_per_share(
         self, asset_id: str, as_of_date: date | None = None
@@ -496,3 +522,47 @@ class AnalyticsRepository:
             [table_name],
         ).fetchone()
         return bool(row and row[0])
+
+    def _has_valuation_inputs(self, asset_id: str) -> bool:
+        asset_id = asset_id.upper().strip()
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM financial_statement
+            WHERE UPPER(asset_id) = ?
+            """,
+            [asset_id],
+        ).fetchone()
+        if row and row[0]:
+            return True
+        row = self.conn.execute(
+            """
+            SELECT shares_outstanding
+            FROM asset
+            WHERE UPPER(asset_id) = ?
+            """,
+            [asset_id],
+        ).fetchone()
+        if row and row[0] is not None and row[0] > 0:
+            return True
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM dividend_event
+            WHERE UPPER(asset_id) = ?
+            """,
+            [asset_id],
+        ).fetchone()
+        return bool(row and row[0])
+
+    @staticmethod
+    def _looks_like_cdr_listing(row: Any) -> bool:
+        asset_id = str(row[0] or "")
+        symbol = str(row[1] or asset_id)
+        asset_subtype = str(row[2] or "")
+        name = str(row[3] or "")
+        description = str(row[4] or "")
+        text = f"{asset_id} {symbol} {asset_subtype} {name} {description}".lower()
+        if "cdr" in text or "depositary receipt" in text or "depository receipt" in text:
+            return True
+        return symbol.upper().endswith(".TO") and "." in symbol

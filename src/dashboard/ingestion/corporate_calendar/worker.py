@@ -15,6 +15,7 @@ from dashboard.ingestion.corporate_calendar.db.ingestion_repo import (
     CorporateCalendarIngestionRepository,
 )
 from dashboard.ingestion.corporate_calendar.provider_fmp import FmpCorporateCalendarProvider
+from dashboard.ingestion.corporate_calendar.provider_fmp import FmpEntitlementError
 
 
 class CorporateCalendarWorker:
@@ -78,6 +79,18 @@ class CorporateCalendarWorker:
                 elif job.job_type == JOB_TYPE_BACKFILL:
                     self.repo.mark_fundamental_subscription_backfill_succeeded(job.asset_id)
 
+            return True
+
+        except FmpEntitlementError as exc:
+            error = str(exc)
+            self.repo.mark_job_failed(
+                job_id=job.job_id,
+                asset_id=job.asset_id,
+                dataset=job.dataset,
+                error=error,
+            )
+            if job.dataset == DATASET_FINANCIAL_STATEMENTS:
+                self.repo.deactivate_fundamental_subscription(job.asset_id, error)
             return True
 
         except Exception as exc:

@@ -10,6 +10,7 @@ from dashboard.ingestion.corporate_calendar.models import (
 from dashboard.ingestion.corporate_calendar.service import (
     CorporateCalendarIngestionService,
 )
+from dashboard.ingestion.corporate_calendar.provider_fmp import FmpEntitlementError
 
 
 class FakeCorporateProvider:
@@ -60,6 +61,13 @@ class FakeCorporateProvider:
                 source="fake",
             )
         ]
+
+
+class EntitlementFailingProvider(FakeCorporateProvider):
+    def fetch_quarterly_statements(self, asset_id, limit=16):
+        raise FmpEntitlementError(
+            "FMP HTTP error 402: plan does not include this corporate endpoint"
+        )
 
 
 def make_conn():
@@ -691,3 +699,95 @@ def test_worker_marks_fundamental_refresh_succeeded_after_statement_ingestion():
 
     assert processed == 1
     assert last_refresh_succeeded_at is not None
+
+
+def test_worker_deactivates_fundamental_subscription_on_fmp_402():
+    conn = make_conn()
+    ensure_fundamental_phase1_schema(conn)
+    service = CorporateCalendarIngestionService(conn, provider=EntitlementFailingProvider())
+
+    conn.execute(
+        """
+        INSERT INTO fundamental_subscription(asset_id, is_active, next_refresh_at)
+        VALUES ('AAPL', TRUE, now() - INTERVAL 1 DAY)
+        """
+    )
+
+    job_ids = service.schedule_due_fundamental_subscription_refreshes(max_assets=10)
+    assert len(job_ids) == 1
+
+    processed = service.process_jobs(max_jobs=1)
+
+    subscription_row = conn.execute(
+        """
+        SELECT is_active, next_refresh_at
+        FROM fundamental_subscription
+        WHERE asset_id = 'AAPL'
+        """
+    ).fetchone()
+    job_row = conn.execute(
+        """
+        SELECT status, error_message
+        FROM ingestion_job
+        WHERE job_id = ?
+        """,
+        [job_ids[0]],
+    ).fetchone()
+    sync_error = conn.execute(
+        """
+        SELECT last_error
+        FROM asset_sync_state
+        WHERE asset_id = 'AAPL'
+          AND domain = 'corporate'
+          AND dataset = 'financial_statements'
+        """
+    ).fetchone()[0]
+    next_job_ids = service.schedule_due_fundamental_subscription_refreshes(max_assets=10)
+
+    assert processed == 1
+    assert subscription_row == (False, None)
+    assert job_row[0] == "failed"
+    assert "FMP HTTP error 402" in job_row[1]
+    assert "FMP HTTP error 402" in sync_error
+    assert next_job_ids == []
+
+
+def test_scheduler_deactivates_existing_fmp_402_subscriptions_before_refresh():
+    conn = make_conn()
+    ensure_fundamental_phase1_schema(conn)
+    service = CorporateCalendarIngestionService(conn, provider=FakeCorporateProvider())
+
+    conn.execute(
+        """
+        INSERT INTO fundamental_subscription(asset_id, is_active, next_refresh_at)
+        VALUES ('AAPL', TRUE, now() - INTERVAL 1 DAY)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO asset_sync_state(
+            asset_id, domain, dataset, backfill_status, last_error, needs_repair
+        )
+        VALUES (
+            'AAPL',
+            'corporate',
+            'financial_statements',
+            'failed',
+            'FMP HTTP error 402: plan does not include this corporate endpoint',
+            FALSE
+        )
+        """
+    )
+
+    job_ids = service.schedule_due_fundamental_subscription_refreshes(max_assets=10)
+
+    subscription_row = conn.execute(
+        """
+        SELECT is_active, next_refresh_at
+        FROM fundamental_subscription
+        WHERE asset_id = 'AAPL'
+        """
+    ).fetchone()
+
+    assert job_ids == []
+    assert subscription_row == (False, None)

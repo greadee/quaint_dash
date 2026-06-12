@@ -272,6 +272,13 @@ class FMPIndexProvider:
         )
         if response.status_code == 429:
             raise RateLimitExceeded("FMP index rate limit exceeded")
+        if response.status_code in {402, 403}:
+            raise RuntimeError(
+                f"FMP index endpoint access denied ({response.status_code}); "
+                "the current plan does not include this benchmark data endpoint"
+            )
+        if response.status_code >= 400:
+            raise RuntimeError(f"FMP index HTTP error {response.status_code}")
         response.raise_for_status()
         data = response.json()
         if isinstance(data, dict) and "Error Message" in data:
