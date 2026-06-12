@@ -200,7 +200,8 @@ class BrokerPortfolioIntegrationService:
                 p.description,
                 p.quantity,
                 p.market_value,
-                p.currency
+                p.currency,
+                p.raw_json
             FROM broker_position_snapshot p
             JOIN latest_positions latest
               ON latest.provider = p.provider
@@ -595,11 +596,19 @@ def _normalize_broker_position(row: tuple, portfolio_id: int) -> _NormalizedBrok
         quantity,
         market_value,
         currency,
+        raw_json,
     ) = row
     symbol_payload = _symbol_payload(raw_symbol)
     asset_id = _normalize_asset_id(raw_asset_id or raw_symbol)
     qty = _float_or_none(quantity)
-    if asset_id is None or qty is None or qty == 0:
+    value = _float_or_none(market_value)
+    payload = _json_payload(raw_json)
+    weighting = _position_weighting(payload)
+    if asset_id is None or qty is None or abs(qty) < 0.0001:
+        return None
+    if value is not None and abs(value) < 0.01:
+        return None
+    if weighting is not None and abs(weighting) < 0.0001:
         return None
     currency = _normalize_currency(currency) or _normalize_currency(_payload_value(symbol_payload, "currency"))
     return _NormalizedBrokerPosition(
@@ -611,7 +620,7 @@ def _normalize_broker_position(row: tuple, portfolio_id: int) -> _NormalizedBrok
         description=str(description or _payload_value(symbol_payload, "description") or "")
         or None,
         quantity=qty,
-        book_cost=_float_or_none(market_value) or 0.0,
+        book_cost=value or 0.0,
         currency=currency,
     )
 
@@ -752,6 +761,29 @@ def _payload_value(payload: dict[str, Any], key: str) -> Any:
     if isinstance(value, dict):
         return _payload_value(value, "code") or _payload_value(value, "symbol")
     return value
+
+
+def _position_weighting(payload: dict[str, Any]) -> float | None:
+    for key in (
+        "weight",
+        "weighting",
+        "weight_percent",
+        "weightPercentage",
+        "allocation",
+        "allocation_percent",
+        "portfolio_weight",
+        "portfolioWeight",
+        "percentage",
+    ):
+        value = _payload_value(payload, key)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            value = value.strip().removesuffix("%")
+        parsed = _float_or_none(value)
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def _normalize_quantity(txn_type: str, value) -> float | None:

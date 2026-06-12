@@ -118,6 +118,35 @@ export type OverviewUpdates = {
   price_movers: PriceMover[];
   news: NewsItem[];
 };
+export type HoldingSignalComponent = {
+  name: string;
+  metric: string;
+  value: number | null;
+  contribution: number | null;
+  detail: string;
+};
+export type HoldingSignal = {
+  asset_id: string;
+  symbol: string;
+  name: string | null;
+  currency: string;
+  market_value: number | null;
+  weight: number | null;
+  latest_price: number | null;
+  timeframe: string;
+  return_value: number | null;
+  signal_score: number;
+  signal_strength: number;
+  action: string;
+  confidence: number;
+  data_points: number;
+  components: HoldingSignalComponent[];
+};
+export type HoldingSignalsResponse = {
+  timeframe: string;
+  methodology: string;
+  items: HoldingSignal[];
+};
 export type ComparisonReturns = {
   return_1d: number | null;
   return_5d: number | null;
@@ -418,6 +447,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   overviewUpdates: () => request<OverviewUpdates>("/overview/updates"),
+  holdingSignals: (timeframe = "1d") =>
+    request<HoldingSignalsResponse>(`/holdings/signals?timeframe=${encodeURIComponent(timeframe)}`),
   comparison: (left: string, right?: string, benchmarkIndexId?: string) => {
     const params = new URLSearchParams({ left });
     if (right) params.set("right", right);
@@ -550,6 +581,7 @@ export const api = {
     if (domain) params.set("domain", domain);
     return request<IngestionJob[]>(`/ingestion/jobs?${params.toString()}`);
   },
+  clearIngestionHistory: () => request<ActionResult>("/ingestion/jobs", { method: "DELETE" }),
   ingestionBackgroundStatus: () => request<IngestionBackgroundStatus>("/ingestion/background/status"),
   ingestionReadiness: () => request<IngestionReadiness>("/ingestion/readiness"),
   scheduleIngestion: (payload: IngestionSchedulePayload) =>

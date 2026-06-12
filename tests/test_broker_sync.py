@@ -755,6 +755,65 @@ def test_broker_projected_positions_use_transaction_cost_basis(tmp_path):
     assert position_row == (85.0, 464.1)
 
 
+def test_broker_projected_positions_skip_closed_zero_value_or_weight_rows(tmp_path):
+    db = DB(str(tmp_path / "broker_projected_closed_positions.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Broker')")
+    repo = BrokerSyncRepository(db.conn)
+    for position in [
+        BrokerPosition(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_position_id="acct-1:ACTIVE",
+            symbol="ACTIVE",
+            description="Active Holding",
+            quantity=10.0,
+            market_value=500.0,
+            currency="USD",
+            as_of_date=date(2026, 1, 5),
+            raw_payload={"weight": 0.25},
+        ),
+        BrokerPosition(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_position_id="acct-1:CLOSEDVALUE",
+            symbol="CLOSEDVALUE",
+            description="Closed Value",
+            quantity=5.0,
+            market_value=0.0,
+            currency="USD",
+            as_of_date=date(2026, 1, 5),
+        ),
+        BrokerPosition(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_position_id="acct-1:CLOSEDWEIGHT",
+            symbol="CLOSEDWEIGHT",
+            description="Closed Weight",
+            quantity=5.0,
+            market_value=100.0,
+            currency="USD",
+            as_of_date=date(2026, 1, 5),
+            raw_payload={"weight": 0},
+        ),
+    ]:
+        repo.upsert_position_snapshot(position)
+
+    result = BrokerPortfolioIntegrationService(db.conn).project_account_positions("acct-1", 1)
+
+    mapped = db.conn.execute(
+        "SELECT asset_id, quantity, book_cost FROM broker_portfolio_position_map ORDER BY asset_id"
+    ).fetchall()
+    active_positions = db.conn.execute(
+        "SELECT asset_id, qty, book_cost FROM position ORDER BY asset_id"
+    ).fetchall()
+
+    assert result.upserted_positions == 1
+    assert result.skipped_positions == 2
+    assert mapped == [("ACTIVE", 10.0, 500.0)]
+    assert active_positions == [("ACTIVE", 10.0, 500.0)]
+
+
 def test_broker_projected_positions_prefer_transaction_cost_over_reported_average(tmp_path):
     db = DB(str(tmp_path / "broker_projected_activity_basis.db"))
     init_db(db)

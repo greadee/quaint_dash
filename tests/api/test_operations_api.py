@@ -450,3 +450,42 @@ def test_retry_failed_ingestion_jobs_requeues_bounded_failures(tmp_path):
     assert retry.json()["result"] == {"retried_jobs": 1}
     statuses = {row["job_id"]: row["status"] for row in jobs.json()}
     assert statuses == {1: "pending", 2: "failed"}
+
+
+def test_clear_ingestion_history_removes_jobs_and_sync_state(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        "INSERT INTO asset(asset_id, symbol, asset_type, ccy) VALUES ('AAPL', 'AAPL', 'stock', 'USD')"
+    )
+    db.conn.execute(
+        """
+        INSERT INTO ingestion_job(
+            job_id, asset_id, domain, job_type, dataset, status, priority
+        )
+        VALUES (1, 'AAPL', 'market', 'refresh', 'price_daily', 'done', 10)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset_sync_state(asset_id, domain, dataset, last_successful_at)
+        VALUES ('AAPL', 'market', 'price_daily', now())
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        cleared = client.delete("/api/v1/ingestion/jobs")
+        jobs = client.get("/api/v1/ingestion/jobs")
+
+    db = DB(db_path)
+    state_count = db.conn.execute("SELECT COUNT(*) FROM asset_sync_state").fetchone()[0]
+    asset_count = db.conn.execute("SELECT COUNT(*) FROM asset").fetchone()[0]
+    db.conn.close()
+
+    assert cleared.status_code == 200
+    assert cleared.json()["result"] == {"deleted_jobs": 1, "deleted_sync_states": 1}
+    assert jobs.json() == []
+    assert state_count == 0
+    assert asset_count == 1

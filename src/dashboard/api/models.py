@@ -184,6 +184,38 @@ class OverviewUpdatesResponse(BaseModel):
     news: list[NewsItemResponse]
 
 
+class HoldingSignalComponent(BaseModel):
+    name: str
+    metric: str
+    value: float | None = None
+    contribution: float | None = None
+    detail: str
+
+
+class HoldingSignalResponse(BaseModel):
+    asset_id: str
+    symbol: str
+    name: str | None
+    currency: str
+    market_value: float | None
+    weight: float | None
+    latest_price: float | None
+    timeframe: str
+    return_value: float | None
+    signal_score: float
+    signal_strength: float
+    action: str
+    confidence: float
+    data_points: int
+    components: list[HoldingSignalComponent]
+
+
+class HoldingSignalsResponse(BaseModel):
+    timeframe: str
+    methodology: str
+    items: list[HoldingSignalResponse]
+
+
 class ComparisonReturns(BaseModel):
     return_1d: float | None = None
     return_5d: float | None = None

@@ -40,6 +40,7 @@ from dashboard.api.models import (
     IngestionRetryFailedRequest,
     IngestionRunRequest,
     IngestionScheduleRequest,
+    HoldingSignalsResponse,
     OverviewUpdatesResponse,
     Page,
     PortfolioCreate,
@@ -68,6 +69,14 @@ def list_portfolios(conn=Depends(get_connection)):
 @router.get("/overview/updates", response_model=OverviewUpdatesResponse)
 def overview_updates(conn=Depends(get_connection)):
     return PortfolioApiService(conn).overview_updates()
+
+
+@router.get("/holdings/signals", response_model=HoldingSignalsResponse)
+def holding_signals(
+    timeframe: str = Query(default="1d", pattern="^(1d|1w|1m|1y)$"),
+    conn=Depends(get_connection),
+):
+    return PortfolioApiService(conn).holding_signals(timeframe)
 
 
 @router.get("/comparison", response_model=ComparisonResponse)
@@ -421,6 +430,13 @@ def ingestion_jobs(
     conn=Depends(get_connection),
 ):
     return CommandApiService(conn).ingestion_jobs(job_status, domain, limit)
+
+
+@router.delete("/ingestion/jobs", response_model=ActionResult)
+def ingestion_clear_history(request: Request, conn=Depends(get_connection)):
+    with request.app.state.write_lock:
+        result = CommandApiService(conn).clear_ingestion_history()
+    return ActionResult(result=result)
 
 
 @router.get("/ingestion/background/status", response_model=IngestionBackgroundStatusResponse)

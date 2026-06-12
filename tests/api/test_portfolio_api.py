@@ -274,6 +274,48 @@ def test_portfolio_position_delete_warns_for_broker_linked_holding(tmp_path):
     assert after.json() == []
 
 
+def test_portfolio_position_delete_allows_zero_broker_holding_cleanup(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy)
+        VALUES ('OLD', 'OLD', 'stock', 'USD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO broker_portfolio_position_map(
+            provider,
+            provider_account_id,
+            provider_position_id,
+            portfolio_id,
+            asset_id,
+            quantity,
+            book_cost,
+            currency
+        )
+        VALUES ('snaptrade', 'acct-1', 'pos-old', 1, 'OLD', 0, 0, 'USD')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        delete = client.delete("/api/v1/portfolios/1/positions/OLD")
+
+    db = DB(db_path)
+    remaining = db.conn.execute(
+        "SELECT COUNT(*) FROM broker_portfolio_position_map WHERE portfolio_id = 1 AND asset_id = 'OLD'"
+    ).fetchone()[0]
+    db.conn.close()
+
+    assert delete.status_code == 200
+    assert delete.json()["result"]["deleted_broker_mappings"] == 1
+    assert remaining == 0
+
+
 def test_asset_holdings_include_portfolio_context_and_returns(tmp_path):
     db_path = tmp_path / "api.db"
     app = create_app(db_path)
@@ -540,6 +582,70 @@ def test_overview_updates_returns_all_price_movers(tmp_path):
     assert response.status_code == 200
     assert response.json()["mover_count"] == 9
     assert len(response.json()["price_movers"]) == 9
+
+
+def test_holding_signals_rank_buy_and_sell_signals_from_stored_metrics(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    assets = [
+        ("BUYME", "BUYME", "Buy Momentum"),
+        ("SELLME", "SELLME", "Sell Momentum"),
+        ("FLAT", "FLAT", "Flat Holding"),
+    ]
+    for asset_id, symbol, name in assets:
+        db.conn.execute(
+            "INSERT INTO asset(asset_id, symbol, asset_type, ccy, name) VALUES (?, ?, 'stock', 'USD', ?)",
+            [asset_id, symbol, name],
+        )
+        db.conn.execute(
+            """
+            INSERT INTO txn(portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id)
+            VALUES (1, '2026-01-02 10:00:00', 'buy', ?, 1, 100, 'USD', 0, 1)
+            """,
+            [asset_id],
+        )
+    price_paths = {
+        "BUYME": [100, 104, 108, 112, 116, 120],
+        "SELLME": [100, 96, 92, 88, 84, 80],
+        "FLAT": [100, 100, 100, 100, 100, 100],
+    }
+    for asset_id, closes in price_paths.items():
+        for index, close in enumerate(closes):
+            db.conn.execute(
+                """
+                INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+                VALUES (?, DATE '2026-01-01' + CAST(? AS INTEGER), ?, ?, 'test')
+                """,
+                [asset_id, index, close, close],
+            )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/holdings/signals?timeframe=1w")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["timeframe"] == "1w"
+    assert "stored price momentum" in payload["methodology"]
+    by_symbol = {item["symbol"]: item for item in payload["items"]}
+    assert set(list(by_symbol)[:2]) == {"BUYME", "SELLME"}
+    assert list(by_symbol)[-1] == "FLAT"
+    assert by_symbol["BUYME"]["action"] in {"Buy", "Strong Buy"}
+    assert by_symbol["SELLME"]["action"] in {"Sell", "Strong Sell"}
+    assert round(by_symbol["BUYME"]["return_value"], 2) == 0.2
+    assert round(by_symbol["SELLME"]["return_value"], 2) == -0.2
+    assert by_symbol["BUYME"]["data_points"] == 6
+    assert by_symbol["BUYME"]["confidence"] == 0.67
+    assert [component["name"] for component in by_symbol["BUYME"]["components"]] == [
+        "Momentum",
+        "Valuation",
+        "Risk",
+    ]
+    assert by_symbol["BUYME"]["components"][0]["contribution"] == 100
+    assert by_symbol["BUYME"]["components"][1]["contribution"] is None
 
 
 def test_portfolio_positions_normalize_object_like_currency_code(tmp_path):

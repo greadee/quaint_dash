@@ -37,8 +37,10 @@ import {
   type BenchmarkIndexSummary,
   type BenchmarkPricePoint,
   type ComparisonAsset,
+  type HoldingSignal,
   type IngestionReadiness,
   type IngestionBackgroundStatus,
+  type Portfolio,
   type Position,
 } from "./api";
 
@@ -46,6 +48,8 @@ const percent = (value: number | null | undefined) =>
   value == null ? "Unavailable" : `${(value * 100).toFixed(1)}%`;
 const number = (value: number | null | undefined, digits = 2) =>
   value == null ? "Unavailable" : value.toFixed(digits);
+const signedNumber = (value: number | null | undefined, digits = 1) =>
+  value == null ? "Unavailable" : `${value > 0 ? "+" : ""}${value.toFixed(digits)}`;
 const cleanCurrency = (value: string | null | undefined, fallback = "CAD") => {
   if (!value) return fallback;
   const direct = value.trim().toUpperCase();
@@ -64,6 +68,8 @@ const formatMoney = (value: number | null | undefined, currency = "CAD") =>
 const money = formatMoney;
 type ThemeMode = "light" | "dark";
 type MoverDefault = "8" | "all";
+type SignalTimeframe = "1d" | "1w" | "1m" | "1y";
+type AppNotification = { id: number; tone: "success" | "error"; message: string };
 type AppSettings = {
   theme: ThemeMode;
   moverDefault: MoverDefault;
@@ -76,6 +82,12 @@ const defaultAppSettings: AppSettings = {
   density: "comfortable",
   featureColor: true,
 };
+const signalTimeframes: { value: SignalTimeframe; label: string }[] = [
+  { value: "1d", label: "1 day" },
+  { value: "1w", label: "Week" },
+  { value: "1m", label: "Month" },
+  { value: "1y", label: "Year" },
+];
 const loadAppSettings = (): AppSettings => {
   try {
     const raw = window.localStorage.getItem("quaint_dash_app_settings");
@@ -100,11 +112,16 @@ const friendlyBrokerError = (error: unknown) => {
   }
   return message;
 };
+const actionErrorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [settings, setSettings] = useState<AppSettings>(loadAppSettings);
+  const [notification, setNotification] = useState<AppNotification | null>(null);
   const location = useLocation();
+  const notify = (message: string, tone: AppNotification["tone"] = "success") => {
+    setNotification({ id: Date.now(), tone, message });
+  };
   const updateSettings = (next: Partial<AppSettings>) => {
     setSettings((current) => {
       const updated = { ...current, ...next };
@@ -140,16 +157,33 @@ export default function App() {
         <RouteErrorBoundary key={location.pathname}>
           <Routes>
             <Route path="/" element={<OverviewPage moverDefault={settings.moverDefault} />} />
-            <Route path="/portfolios" element={<PortfoliosPage />} />
+            <Route path="/portfolios" element={<PortfoliosPage notify={notify} />} />
             <Route path="/compare" element={<ComparePage />} />
-            <Route path="/benchmarks" element={<BenchmarkBrowserPage />} />
-            <Route path="/asset/:assetId" element={<AssetPage />} />
+            <Route path="/benchmarks" element={<BenchmarkBrowserPage notify={notify} />} />
+            <Route path="/asset/:assetId" element={<AssetPage notify={notify} />} />
             <Route path="/brokers" element={<BrokersPage />} />
             <Route path="/operations" element={<OperationsPage />} />
             <Route path="/settings" element={<SettingsPage settings={settings} onChange={updateSettings} />} />
           </Routes>
         </RouteErrorBoundary>
+        <ActionNotification notification={notification} onClose={() => setNotification(null)} />
       </main>
+    </div>
+  );
+}
+
+function ActionNotification({ notification, onClose }: { notification: AppNotification | null; onClose: () => void }) {
+  useEffect(() => {
+    if (!notification) return undefined;
+    const timer = window.setTimeout(onClose, 3600);
+    return () => window.clearTimeout(timer);
+  }, [notification, onClose]);
+  if (!notification) return null;
+  return (
+    <div className={`action-toast ${notification.tone}`} role="status" aria-live="polite">
+      {notification.tone === "success" ? <CheckCircle2 size={18} /> : <X size={18} />}
+      <span>{notification.message}</span>
+      <button aria-label="Dismiss notification" onClick={onClose}><X size={14} /></button>
     </div>
   );
 }
@@ -171,7 +205,12 @@ class RouteErrorBoundary extends Component<{ children: ReactNode }, { error: Err
 
 function OverviewPage({ moverDefault }: { moverDefault: MoverDefault }) {
   const [showAllMovers, setShowAllMovers] = useState(moverDefault === "all");
+  const [signalTimeframe, setSignalTimeframe] = useState<SignalTimeframe>("1d");
   const updates = useQuery({ queryKey: ["overview-updates"], queryFn: api.overviewUpdates });
+  const signals = useQuery({
+    queryKey: ["holding-signals", signalTimeframe],
+    queryFn: () => api.holdingSignals(signalTimeframe),
+  });
   const portfolios = useQuery({ queryKey: ["portfolios"], queryFn: api.portfolios });
   const brokers = useQuery({ queryKey: ["broker-accounts"], queryFn: api.brokerAccounts });
   const jobs = useQuery({ queryKey: ["jobs", "failed", ""], queryFn: () => api.ingestionJobs("failed") });
@@ -196,6 +235,30 @@ function OverviewPage({ moverDefault }: { moverDefault: MoverDefault }) {
       <Metric icon={<Activity />} label="Active holdings" value={String(updates.data?.position_count ?? 0)} />
       <Metric icon={<WalletCards />} label="Portfolios" value={String(portfolioCount)} />
       <Metric icon={<Database />} label="Attention items" value={String(failedJobs)} detail={failedJobs ? "failed jobs" : "data healthy"} positive={!failedJobs} />
+    </section>
+    <section className="card holding-signals-card">
+      <div className="card-heading">
+        <div><p className="eyebrow">Signal rank</p><h2>Buy and sell signals</h2></div>
+        <div className="card-tools signal-timeframes">
+          {signalTimeframes.map((item) => (
+            <button
+              key={item.value}
+              className={signalTimeframe === item.value ? "selected" : ""}
+              onClick={() => setSignalTimeframe(item.value)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {signals.isLoading ? <Loading compact /> : signals.data?.items.length ? (
+        <>
+          <div className="holding-signal-list">
+            {signals.data.items.map((item, index) => <HoldingSignalRow item={item} rank={index + 1} key={item.asset_id} />)}
+          </div>
+          <p className="signal-methodology">{signals.data.methodology}</p>
+        </>
+      ) : <EmptyRow text="No holding signals yet. Add held assets with daily price history to calculate ranked signals." />}
     </section>
     <section className="update-grid">
       <section className="card">
@@ -231,7 +294,42 @@ function OverviewPage({ moverDefault }: { moverDefault: MoverDefault }) {
   </div>;
 }
 
-function PortfoliosPage() {
+function HoldingSignalRow({ item, rank }: { item: HoldingSignal; rank: number }) {
+  const tone = item.action.includes("Sell") ? "sell" : item.action.includes("Buy") ? "buy" : "hold";
+  const scoreWidth = Math.min(100, Math.max(0, item.signal_strength));
+  return (
+    <Link to={`/asset/${item.asset_id}`} className={`holding-signal-row ${tone}`}>
+      <div className="signal-rank">{rank}</div>
+      <div className="signal-asset">
+        <strong>{item.symbol}</strong>
+        <span>{item.name ?? "Held asset"}</span>
+      </div>
+      <div className={`signal-action ${tone}`}>
+        <b>{item.action}</b>
+        <span>{signedNumber(item.signal_score, 0)} score</span>
+      </div>
+      <div className="signal-meter" aria-label={`Signal strength ${item.signal_strength}`}>
+        <span style={{ width: `${scoreWidth}%` }} />
+      </div>
+      <div className="signal-facts">
+        <span>{percent(item.return_value)} return</span>
+        <span>{percent(item.confidence)} confidence</span>
+        <span>{item.data_points} closes</span>
+        <span>{money(item.market_value, item.currency)}</span>
+      </div>
+      <div className="signal-components">
+        {item.components.map((component) => (
+          <span title={component.detail} key={component.name}>
+            <b>{component.name}</b>
+            {component.contribution == null ? "missing" : signedNumber(component.contribution, 0)}
+          </span>
+        ))}
+      </div>
+    </Link>
+  );
+}
+
+function PortfoliosPage({ notify }: { notify: (message: string, tone?: AppNotification["tone"]) => void }) {
   const client = useQueryClient();
   const [params, setParams] = useSearchParams();
   const portfolios = useQuery({ queryKey: ["portfolios"], queryFn: api.portfolios });
@@ -296,21 +394,32 @@ function PortfoliosPage() {
     mutationFn: ({ name, baseCcy }: { name: string; baseCcy: string }) => api.createPortfolio(name, baseCcy),
     onSuccess: (item) => {
       setNewName("");
+      client.setQueryData<Portfolio[]>(["portfolios"], (current = []) => [...current.filter((portfolio) => portfolio.portfolio_id !== item.portfolio_id), item]);
       selectPortfolio(item.portfolio_id);
+      notify(`${item.name} created.`);
       client.invalidateQueries({ queryKey: ["portfolios"] });
     },
+    onError: (error) => notify(actionErrorMessage(error), "error"),
   });
   const renamePortfolio = useMutation({
     mutationFn: ({ id, name }: { id: number; name: string }) => api.updatePortfolio(id, name),
     onSuccess: (item) => {
       setRenameName(item.name);
+      client.setQueryData<Portfolio[]>(["portfolios"], (current = []) =>
+        current.map((portfolio) => portfolio.portfolio_id === item.portfolio_id ? item : portfolio)
+      );
+      notify(`Renamed portfolio to ${item.name}.`);
       client.invalidateQueries({ queryKey: ["portfolios"] });
       client.invalidateQueries({ queryKey: ["portfolio-aggregate"] });
     },
+    onError: (error) => notify(actionErrorMessage(error), "error"),
   });
   const deletePortfolio = useMutation({
-    mutationFn: api.deletePortfolio,
-    onSuccess: () => {
+    mutationFn: ({ id }: { id: number; name: string }) => api.deletePortfolio(id),
+    onSuccess: (_result, deleted) => {
+      client.setQueryData<Portfolio[]>(["portfolios"], (current = []) =>
+        current.filter((portfolio) => portfolio.portfolio_id !== deleted.id)
+      );
       setSelectedId(null);
       window.localStorage.removeItem("quaint_dash_portfolio_tab");
       setParams((current) => {
@@ -318,12 +427,14 @@ function PortfoliosPage() {
         next.delete("portfolio");
         return next;
       }, { replace: true });
+      notify(`${deleted.name} deleted.`);
       client.invalidateQueries({ queryKey: ["portfolios"] });
       client.invalidateQueries({ queryKey: ["portfolio-aggregate"] });
       client.invalidateQueries({ queryKey: ["positions"] });
       client.invalidateQueries({ queryKey: ["transactions"] });
       client.invalidateQueries({ queryKey: ["broker-accounts"] });
     },
+    onError: (error) => notify(actionErrorMessage(error), "error"),
   });
   useEffect(() => {
     setRenameName(selectedRenameName);
@@ -390,7 +501,7 @@ function PortfoliosPage() {
               <button className="primary" disabled={!renameName.trim() || renameName.trim() === selected.name || renamePortfolio.isPending}><Save size={15}/>Save</button>
             </form>
           ) : null}
-          {!isAggregate ? <button className="danger" disabled={deletePortfolio.isPending} onClick={() => window.confirm(`Delete ${selected.name} from the overview? This removes its local transactions, mappings, and positions.`) && deletePortfolio.mutate(selected.portfolio_id)}><Trash2 size={16}/>Delete</button> : null}
+          {!isAggregate ? <button className="danger" disabled={deletePortfolio.isPending} onClick={() => window.confirm(`Delete ${selected.name} from the overview? This removes its local transactions, mappings, and positions.`) && deletePortfolio.mutate({ id: selected.portfolio_id, name: selected.name })}><Trash2 size={16}/>Delete</button> : null}
         </div>
       </div>
       <section className="metric-grid">
@@ -683,7 +794,7 @@ function groupPositions(positions: Position[], dimension: TrancheDimension) {
     .sort((a, b) => b.marketValue - a.marketValue);
 }
 
-function BenchmarkBrowserPage() {
+function BenchmarkBrowserPage({ notify }: { notify: (message: string, tone?: AppNotification["tone"]) => void }) {
   const client = useQueryClient();
   const [params, setParams] = useSearchParams();
   const [query, setQuery] = useState("");
@@ -731,12 +842,17 @@ function BenchmarkBrowserPage() {
   });
   const seed = useMutation({
     mutationFn: api.seedBenchmarks,
-    onSuccess: () => client.invalidateQueries({ queryKey: ["benchmarks"] }),
+    onSuccess: () => {
+      notify("Core benchmarks seeded.");
+      client.invalidateQueries({ queryKey: ["benchmarks"] });
+    },
+    onError: (error) => notify(actionErrorMessage(error), "error"),
   });
   const refreshOne = useMutation({
     mutationFn: ({ id, jobType }: { id: string; jobType: "daily_price" | "composition" | "metrics" }) =>
       api.refreshBenchmark(id, { job_type: jobType }),
-    onSuccess: () => {
+    onSuccess: (_result, variables) => {
+      notify(`${variables.id} ${variables.jobType.replace(/_/g, " ")} refresh started.`);
       client.invalidateQueries({ queryKey: ["benchmarks"] });
       client.invalidateQueries({ queryKey: ["benchmark-detail"] });
       client.invalidateQueries({ queryKey: ["benchmark-prices"] });
@@ -744,10 +860,15 @@ function BenchmarkBrowserPage() {
       client.invalidateQueries({ queryKey: ["benchmark-exposures"] });
       client.invalidateQueries({ queryKey: ["benchmark-constituents"] });
     },
+    onError: (error) => notify(actionErrorMessage(error), "error"),
   });
   const refreshBroad = useMutation({
     mutationFn: () => api.refreshBenchmarks({ category: "core_geo", job_type: "daily_price", lookback_days: 10 }),
-    onSuccess: () => client.invalidateQueries({ queryKey: ["benchmarks"] }),
+    onSuccess: () => {
+      notify("Core benchmark daily refresh started.");
+      client.invalidateQueries({ queryKey: ["benchmarks"] });
+    },
+    onError: (error) => notify(actionErrorMessage(error), "error"),
   });
   const selectBenchmark = (id: string) => {
     setParams((current) => {
@@ -941,7 +1062,7 @@ function BenchmarkPicker({
   </div>;
 }
 
-function AssetPage() {
+function AssetPage({ notify }: { notify: (message: string, tone?: AppNotification["tone"]) => void }) {
   const client = useQueryClient();
   const { assetId = "" } = useParams();
   const [priceLimit, setPriceLimit] = useState("365");
@@ -976,7 +1097,8 @@ function AssetPage() {
   const deletePosition = useMutation({
     mutationFn: ({ portfolioId, holdingAssetId }: { portfolioId: number; holdingAssetId: string }) =>
       api.deletePosition(portfolioId, holdingAssetId),
-    onSuccess: () => {
+    onSuccess: (_result, deleted) => {
+      notify(`${deleted.holdingAssetId} removed from portfolio.`);
       client.invalidateQueries({ queryKey: ["asset-holdings", assetId] });
       client.invalidateQueries({ queryKey: ["portfolios"] });
       client.invalidateQueries({ queryKey: ["portfolio-aggregate"] });
@@ -985,6 +1107,7 @@ function AssetPage() {
       client.invalidateQueries({ queryKey: ["overview-updates"] });
       client.invalidateQueries({ queryKey: ["broker-accounts"] });
     },
+    onError: (error) => notify(actionErrorMessage(error), "error"),
   });
   const underlyingAssetId = asset.data?.underlying_asset_id;
   useEffect(() => {
@@ -1327,14 +1450,22 @@ function OperationsPage() {
       client.invalidateQueries({ queryKey: ["ingestion-readiness"] });
     },
   });
-  const isBusy = schedule.isPending || run.isPending || retry.isPending;
-  const actionError = schedule.error ?? run.error ?? retry.error;
+  const clearHistory = useMutation({
+    mutationFn: api.clearIngestionHistory,
+    onSuccess: (result) => {
+      setMessage(`Cleared: ${formatActionResult(result.result)}`);
+      client.invalidateQueries({ queryKey: ["jobs"] });
+      client.invalidateQueries({ queryKey: ["ingestion-readiness"] });
+    },
+  });
+  const isBusy = schedule.isPending || run.isPending || retry.isPending || clearHistory.isPending;
+  const actionError = schedule.error ?? run.error ?? retry.error ?? clearHistory.error;
   const scheduleAsset = (selectedAssetId: string) => {
     setPipeline("all");
     setAssetId(selectedAssetId);
     schedule.mutate({ pipeline: "all", assetId: selectedAssetId, maxAssets: "1" });
   };
-  return <div className="page"><div className="page-title"><div><p className="eyebrow">Data health</p><h1>Operations</h1><p className="page-subtitle">Background due work keeps routine data moving. Manual controls remain here for backfills, retries, provider-sensitive refreshes, and explicit runs.</p></div><div className="actions"><button onClick={() => { jobs.refetch(); background.refetch(); readiness.refetch(); }} disabled={jobs.isFetching || background.isFetching || readiness.isFetching}><RefreshCw size={17}/>Refresh</button><button className="primary" onClick={() => window.confirm("Run pending ingestion jobs with these options?") && run.mutate()} disabled={isBusy}><RefreshCw size={17}/>Run jobs</button></div></div>
+  return <div className="page"><div className="page-title"><div><p className="eyebrow">Data health</p><h1>Operations</h1><p className="page-subtitle">Background due work keeps routine data moving. Manual controls remain here for backfills, retries, provider-sensitive refreshes, and explicit runs.</p></div><div className="actions"><button onClick={() => { jobs.refetch(); background.refetch(); readiness.refetch(); }} disabled={jobs.isFetching || background.isFetching || readiness.isFetching}><RefreshCw size={17}/>Refresh</button><button className="danger" onClick={() => window.confirm("Clear ingestion job history and sync status rows? Market data and broker connections will stay intact.") && clearHistory.mutate()} disabled={isBusy}><Trash2 size={17}/>Clear history</button><button className="primary" onClick={() => window.confirm("Run pending ingestion jobs with these options?") && run.mutate()} disabled={isBusy}><RefreshCw size={17}/>Run jobs</button></div></div>
     <IngestionBackgroundCard status={background.data} isLoading={background.isLoading} error={background.error} />
     <IngestionReadinessCard readiness={readiness.data} isLoading={readiness.isLoading} error={readiness.error} onScheduleAsset={scheduleAsset} isBusy={isBusy} />
     <section className="card operations-control">

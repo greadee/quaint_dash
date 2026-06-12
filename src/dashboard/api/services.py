@@ -32,6 +32,9 @@ from dashboard.api.models import (
     ComparisonFundamentals,
     ComparisonResponse,
     ComparisonReturns,
+    HoldingSignalComponent,
+    HoldingSignalResponse,
+    HoldingSignalsResponse,
     IngestionJobResponse,
     IngestionAssetReadiness,
     NewsItemResponse,
@@ -96,6 +99,19 @@ FROM (
 ) holdings
 GROUP BY portfolio_id, asset_id
 """
+
+_SIGNAL_TIMEFRAME_PERIODS = {
+    "1d": 1,
+    "1w": 5,
+    "1m": 21,
+    "1y": 252,
+}
+_SIGNAL_TIMEFRAME_LABELS = {
+    "1d": "1 day",
+    "1w": "1 week",
+    "1m": "1 month",
+    "1y": "1 year",
+}
 
 
 _ENRICHED_ASSET_SELECT = """
@@ -1174,15 +1190,20 @@ class PortfolioApiService:
         self.get_portfolio(portfolio_id)
         asset_id = asset_id.upper().strip()
         existing = self.conn.execute(
-            f"""
-            WITH holdings AS ({_HOLDINGS_SQL})
+            """
             SELECT 1
-            FROM holdings
-            WHERE portfolio_id = ?
-              AND UPPER(asset_id) = ?
-              AND quantity <> 0
+            FROM (
+                SELECT asset_id FROM txn WHERE portfolio_id = ?
+                UNION ALL
+                SELECT asset_id FROM position WHERE portfolio_id = ?
+                UNION ALL
+                SELECT asset_id FROM broker_portfolio_position_map WHERE portfolio_id = ?
+                UNION ALL
+                SELECT asset_id FROM portfolio_ticker WHERE portfolio_id = ?
+            ) holdings
+            WHERE UPPER(asset_id) = ?
             """,
-            [portfolio_id, asset_id],
+            [portfolio_id, portfolio_id, portfolio_id, portfolio_id, asset_id],
         ).fetchone()
         if existing is None:
             raise LookupError(f"Holding not found in portfolio {portfolio_id}: {asset_id}")
@@ -1805,6 +1826,66 @@ class PortfolioApiService:
                 )
                 for row in news_rows
             ],
+        )
+
+    def holding_signals(self, timeframe: str) -> HoldingSignalsResponse:
+        period = _SIGNAL_TIMEFRAME_PERIODS.get(timeframe)
+        if period is None:
+            raise ValueError("timeframe must be one of 1d, 1w, 1m, or 1y")
+
+        items: list[HoldingSignalResponse] = []
+        comparison = ComparisonApiService(self.conn)
+        for position in self.list_positions():
+            prices = comparison._prices(position.asset_id)
+            return_value = _period_return(prices, period)
+            latest_price = prices[0][1] if prices else position.latest_price
+            closes = [row[1] for row in reversed(prices)]
+            volatility = _realized_volatility_from_closes(closes)
+            profile = comparison.asset_profile(position.asset_id)
+            components = _holding_signal_components(
+                timeframe=timeframe,
+                return_value=return_value,
+                volatility=volatility,
+                valuation=profile.valuation,
+            )
+            available = [item.contribution for item in components if item.contribution is not None]
+            signal_score = sum(available) / len(available) if available else 0.0
+            confidence = len(available) / len(components) if components else 0.0
+            items.append(
+                HoldingSignalResponse(
+                    asset_id=position.asset_id,
+                    symbol=position.symbol,
+                    name=position.name,
+                    currency=position.currency,
+                    market_value=position.market_value,
+                    weight=position.weight,
+                    latest_price=_float_or_none(latest_price),
+                    timeframe=timeframe,
+                    return_value=return_value,
+                    signal_score=round(signal_score, 2),
+                    signal_strength=round(abs(signal_score), 2),
+                    action=_holding_signal_action(signal_score),
+                    confidence=round(confidence, 2),
+                    data_points=len(prices),
+                    components=components,
+                )
+            )
+        items.sort(
+            key=lambda item: (
+                item.signal_strength,
+                item.confidence,
+                item.market_value or 0,
+            ),
+            reverse=True,
+        )
+        return HoldingSignalsResponse(
+            timeframe=timeframe,
+            methodology=(
+                f"Ranked by absolute buy/sell signal strength over {_SIGNAL_TIMEFRAME_LABELS[timeframe]}. "
+                "Score combines stored price momentum, valuation gaps from fundamentals where available, "
+                "and realized volatility as a risk modifier. Missing components reduce confidence."
+            ),
+            items=items,
         )
 
     def _portfolio_summary(self, row) -> PortfolioSummary:
@@ -2617,6 +2698,16 @@ class CommandApiService(BrokerCommands, IngestionCommands):
         ).fetchall()
         return len(rows)
 
+    def clear_ingestion_history(self) -> dict[str, int]:
+        job_rows = self.conn.execute("DELETE FROM ingestion_job RETURNING job_id").fetchall()
+        state_rows = self.conn.execute(
+            "DELETE FROM asset_sync_state RETURNING asset_id"
+        ).fetchall()
+        return {
+            "deleted_jobs": len(job_rows),
+            "deleted_sync_states": len(state_rows),
+        }
+
     @staticmethod
     def action_result(value) -> dict:
         if hasattr(value, "__dataclass_fields__"):
@@ -2773,6 +2864,115 @@ def _period_return(prices: list[tuple[Any, float]], periods: int) -> float | Non
     if previous == 0:
         return None
     return latest / previous - 1
+
+
+def _realized_volatility_from_closes(closes: list[float]) -> float | None:
+    if len(closes) < 2:
+        return None
+    returns = [
+        closes[index] / closes[index - 1] - 1.0
+        for index in range(1, len(closes))
+        if closes[index - 1] > 0
+    ]
+    if not returns:
+        return None
+    mean_return = sum(returns) / len(returns)
+    variance = sum((item - mean_return) ** 2 for item in returns) / len(returns)
+    return (variance ** 0.5) * (252 ** 0.5)
+
+
+def _holding_signal_components(
+    *,
+    timeframe: str,
+    return_value: float | None,
+    volatility: float | None,
+    valuation: ValuationContext,
+) -> list[HoldingSignalComponent]:
+    label = _SIGNAL_TIMEFRAME_LABELS[timeframe]
+    momentum = _scaled_signal(return_value, _momentum_return_scale(timeframe))
+    valuation_gaps = [
+        valuation.historical_pe_discount,
+        valuation.sector_pe_premium,
+        valuation.industry_pe_premium,
+    ]
+    valuation_values = [-gap for gap in valuation_gaps if gap is not None]
+    valuation_signal = (
+        _scaled_signal(sum(valuation_values) / len(valuation_values), 0.35)
+        if valuation_values
+        else None
+    )
+    risk_signal = None
+    if volatility is not None:
+        if return_value is None or abs(return_value) < 0.0001:
+            risk_signal = 0.0
+        elif return_value > 0:
+            risk_signal = _scaled_signal(0.35 - volatility, 0.35)
+        else:
+            risk_signal = -max(0.0, _scaled_signal(volatility - 0.25, 0.35) or 0.0)
+    return [
+        HoldingSignalComponent(
+            name="Momentum",
+            metric=f"{label} return",
+            value=return_value,
+            contribution=momentum,
+            detail=(
+                "Price return from stored daily closes over the selected timeframe."
+                if return_value is not None
+                else f"Needs at least {(_SIGNAL_TIMEFRAME_PERIODS[timeframe] + 1)} stored daily closes."
+            ),
+        ),
+        HoldingSignalComponent(
+            name="Valuation",
+            metric="P/E valuation gap",
+            value=(sum(valuation_values) / len(valuation_values)) if valuation_values else None,
+            contribution=valuation_signal,
+            detail=(
+                "Uses historical, sector, and industry P/E gaps; cheaper than comparables supports buy signals."
+                if valuation_values
+                else "Unavailable until local fundamentals can calculate P/E history or peer gaps."
+            ),
+        ),
+        HoldingSignalComponent(
+            name="Risk",
+            metric="Realized volatility",
+            value=volatility,
+            contribution=risk_signal,
+            detail=(
+                "Annualized volatility from stored daily closes moderates high-risk moves."
+                if volatility is not None
+                else "Needs at least two stored daily closes."
+            ),
+        ),
+    ]
+
+
+def _momentum_return_scale(timeframe: str) -> float:
+    return {
+        "1d": 0.04,
+        "1w": 0.08,
+        "1m": 0.15,
+        "1y": 0.35,
+    }[timeframe]
+
+
+def _scaled_signal(value: float | None, full_scale: float) -> float | None:
+    if value is None:
+        return None
+    if full_scale <= 0:
+        return 0.0
+    return max(-100.0, min(100.0, (value / full_scale) * 100.0))
+
+
+def _holding_signal_action(score: float) -> str:
+    if score >= 65:
+        return "Strong Buy"
+    if score >= 25:
+        return "Buy"
+    if score <= -65:
+        return "Strong Sell"
+    if score <= -25:
+        return "Sell"
+    return "Hold"
 
 
 def _relative_gap(value: float | None, comparison: float | None) -> float | None:
