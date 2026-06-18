@@ -1,6 +1,6 @@
 """Market, sentiment, calendar, and benchmark ingestion commands."""
 
-from datetime import date
+from datetime import date, timedelta
 
 from dashboard.ingestion.corporate_calendar.service import CorporateCalendarIngestionService
 from dashboard.ingestion.indices.index_service_factory import (
@@ -150,6 +150,10 @@ class IngestionCommands:
         years: int = 10,
         prices_only: bool = False,
         calendar_year: int | None = None,
+        ranking_factor: str = "aggregate",
+        ranking_universe: str = "tracked",
+        missing_only: bool = False,
+        stale_only: bool = False,
     ) -> int:
         """
         Master scheduler for dev ingestion commands.
@@ -221,6 +225,17 @@ class IngestionCommands:
         if pipeline == "sentiment":
             return self.schedule_due_sentiment_snapshot_refreshes(max_assets=max_assets)
 
+        if pipeline == "ranking":
+            return self.schedule_ranking_input_jobs(
+                factor=ranking_factor,
+                universe=ranking_universe,
+                asset_id=asset_id,
+                max_assets=max_assets,
+                years=years,
+                missing_only=missing_only,
+                stale_only=stale_only,
+            )
+
         if pipeline == "price-backfill":
             return self.enqueue_market_backfill(
                 asset_id=asset_id,
@@ -263,6 +278,9 @@ class IngestionCommands:
 
         if pipeline == "metadata":
             return self.refresh_due_asset_metadata(max_assets=max_assets)
+
+        if pipeline == "metadata-refresh":
+            return self.refresh_asset_metadata(asset_id=asset_id)
 
         if pipeline == "trading-calendar":
             return self.refresh_trading_calendar(market_code="all", year=calendar_year)
@@ -645,6 +663,396 @@ class IngestionCommands:
     def run_price_history_backfill_jobs(self, max_jobs: int = 1) -> int:
         service = _price_history_service(self.conn)
         return service.process_backfill_jobs(max_jobs=max_jobs)
+
+    def schedule_ranking_input_jobs(
+        self,
+        *,
+        factor: str = "aggregate",
+        universe: str = "tracked",
+        asset_id: str | None = None,
+        max_assets: int = 25,
+        years: int = 10,
+        missing_only: bool = False,
+        stale_only: bool = False,
+    ) -> int:
+        factor = factor.replace("-", "_").lower().strip()
+        universe = universe.lower().strip()
+        if factor == "aggregate":
+            total = 0
+            for child_factor in [
+                "share_price_momentum",
+                "news_sentiment",
+                "retail_sentiment",
+                "earnings_momentum",
+            ]:
+                total += self.schedule_ranking_input_jobs(
+                    factor=child_factor,
+                    universe=universe,
+                    asset_id=asset_id,
+                    max_assets=max_assets,
+                    years=years,
+                    missing_only=missing_only,
+                    stale_only=stale_only,
+                )
+            return total
+
+        asset_ids = self._ranking_asset_ids(
+            universe=universe,
+            asset_id=asset_id,
+            max_assets=max_assets,
+        )
+        if not asset_ids:
+            return 0
+
+        if factor == "share_price_momentum":
+            return self._schedule_ranking_price_jobs(
+                asset_ids=asset_ids,
+                years=years,
+                missing_only=missing_only,
+                stale_only=stale_only,
+            )
+        if factor == "news_sentiment":
+            return self._schedule_ranking_sentiment_jobs(
+                asset_ids=asset_ids,
+                source="news",
+                missing_only=missing_only,
+                stale_only=stale_only,
+            )
+        if factor == "retail_sentiment":
+            return self._schedule_ranking_sentiment_jobs(
+                asset_ids=asset_ids,
+                source="retail",
+                missing_only=missing_only,
+                stale_only=stale_only,
+            )
+        if factor == "earnings_momentum":
+            return self._schedule_ranking_earnings_jobs(
+                asset_ids=asset_ids,
+                missing_only=missing_only,
+                stale_only=stale_only,
+            )
+        if factor == "institutional_buying":
+            return 0
+        raise ValueError(f"Unsupported ranking factor: {factor}")
+
+    def _ranking_asset_ids(
+        self,
+        *,
+        universe: str,
+        asset_id: str | None,
+        max_assets: int,
+    ) -> list[str]:
+        if asset_id:
+            normalized = asset_id.upper().strip()
+            self._ensure_catalog_asset(normalized)
+            return [normalized]
+
+        if universe == "tracked":
+            return TickerUniverseRepository(self.conn).ingestible_asset_ids(
+                include_watchlist=True,
+                asset_types=("stock",),
+            )[:max_assets]
+        if universe != "all":
+            raise ValueError(f"Unsupported ranking universe: {universe}")
+
+        rows = self.conn.execute(
+            """
+            SELECT asset_id
+            FROM asset
+            WHERE COALESCE(asset_type, 'stock') = 'stock'
+            ORDER BY asset_id
+            LIMIT ?
+            """,
+            [max_assets],
+        ).fetchall()
+        asset_ids = [row[0] for row in rows]
+        remaining = max_assets - len(asset_ids)
+        if remaining <= 0:
+            return asset_ids
+
+        catalog_rows = self.conn.execute(
+            """
+            SELECT asset_id
+            FROM stock_catalog
+            WHERE asset_id NOT IN (SELECT asset_id FROM asset)
+            ORDER BY symbol
+            LIMIT ?
+            """,
+            [remaining],
+        ).fetchall()
+        for row in catalog_rows:
+            self._ensure_catalog_asset(row[0])
+            asset_ids.append(row[0])
+        return asset_ids
+
+    def _ensure_catalog_asset(self, asset_id: str) -> None:
+        exists = self.conn.execute(
+            "SELECT 1 FROM asset WHERE asset_id = ?",
+            [asset_id],
+        ).fetchone()
+        if exists:
+            return
+        row = self.conn.execute(
+            """
+            SELECT asset_id, symbol, exchange_code, ccy, name, sector, industry, country, region
+            FROM stock_catalog
+            WHERE asset_id = ? OR UPPER(symbol) = UPPER(?)
+            LIMIT 1
+            """,
+            [asset_id, asset_id],
+        ).fetchone()
+        if row is None:
+            return
+        self.conn.execute(
+            """
+            INSERT INTO asset(
+                asset_id, symbol, exchange_code, asset_type, ccy, name,
+                sector, industry, country, region, track
+            )
+            VALUES (?, ?, ?, 'stock', ?, ?, ?, ?, ?, ?, FALSE)
+            """,
+            list(row),
+        )
+
+    def _schedule_ranking_price_jobs(
+        self,
+        *,
+        asset_ids: list[str],
+        years: int,
+        missing_only: bool,
+        stale_only: bool,
+    ) -> int:
+        service = _price_history_service(self.conn)
+        total = 0
+        for asset_id in self._filter_ranking_asset_ids(
+            asset_ids,
+            factor="share_price_momentum",
+            missing_only=missing_only,
+            stale_only=stale_only,
+        ):
+            total += len(
+                service.enqueue_backfill_one(
+                    asset_id=asset_id,
+                    years=years,
+                    include_dividends=True,
+                    include_splits=True,
+                )
+            )
+        return total
+
+    def _schedule_ranking_sentiment_jobs(
+        self,
+        *,
+        asset_ids: list[str],
+        source: str,
+        missing_only: bool,
+        stale_only: bool,
+    ) -> int:
+        from dashboard.ingestion_sentiment.constants import (
+            DATASET_NEWS,
+            DATASET_REDDIT,
+            DATASET_SENTIMENT_DAILY,
+            DATASET_X,
+            JOB_TYPE_NEWS_RSS_REFRESH,
+            JOB_TYPE_SENTIMENT_DAILY_AGGREGATE,
+            JOB_TYPE_SENTIMENT_REDDIT_REFRESH,
+            JOB_TYPE_SENTIMENT_X_REFRESH,
+            PRIORITY_DAILY_AGGREGATE,
+            PRIORITY_NEWS_REFRESH,
+            PRIORITY_RETAIL_REFRESH,
+        )
+        from dashboard.ingestion_sentiment.repo import SentimentIngestionRepository
+
+        repo = SentimentIngestionRepository(self.conn)
+        total = 0
+        snapshot_date = date.today()
+        job_specs = (
+            [(JOB_TYPE_NEWS_RSS_REFRESH, DATASET_NEWS, PRIORITY_NEWS_REFRESH)]
+            if source == "news"
+            else [
+                (JOB_TYPE_SENTIMENT_REDDIT_REFRESH, DATASET_REDDIT, PRIORITY_RETAIL_REFRESH),
+                (JOB_TYPE_SENTIMENT_X_REFRESH, DATASET_X, PRIORITY_RETAIL_REFRESH),
+            ]
+        )
+        factor = "news_sentiment" if source == "news" else "retail_sentiment"
+        for asset_id in self._filter_ranking_asset_ids(
+            asset_ids,
+            factor=factor,
+            missing_only=missing_only,
+            stale_only=stale_only,
+        ):
+            for job_type, dataset, priority in job_specs:
+                if self._open_ranking_job_count(asset_id, "sentiment", dataset, job_type):
+                    continue
+                repo.create_job(
+                    asset_id=asset_id,
+                    job_type=job_type,
+                    dataset=dataset,
+                    priority=priority,
+                    start_date=snapshot_date,
+                    end_date=snapshot_date,
+                )
+                total += 1
+            if not self._open_ranking_job_count(
+                asset_id,
+                "sentiment",
+                DATASET_SENTIMENT_DAILY,
+                JOB_TYPE_SENTIMENT_DAILY_AGGREGATE,
+            ):
+                repo.create_job(
+                    asset_id=asset_id,
+                    job_type=JOB_TYPE_SENTIMENT_DAILY_AGGREGATE,
+                    dataset=DATASET_SENTIMENT_DAILY,
+                    priority=PRIORITY_DAILY_AGGREGATE,
+                    start_date=snapshot_date,
+                    end_date=snapshot_date,
+                )
+                total += 1
+        return total
+
+    def _schedule_ranking_earnings_jobs(
+        self,
+        *,
+        asset_ids: list[str],
+        missing_only: bool,
+        stale_only: bool,
+    ) -> int:
+        from dashboard.ingestion.fundamentals.subscription_service import (
+            FundamentalSubscriptionService,
+        )
+
+        subscription = FundamentalSubscriptionService(self.conn)
+        total = 0
+        for asset_id in self._filter_ranking_asset_ids(
+            asset_ids,
+            factor="earnings_momentum",
+            missing_only=missing_only,
+            stale_only=stale_only,
+        ):
+            subscription.subscribe_asset(asset_id, subscription_source="ranking")
+            total += self.schedule_due_fundamental_backfills(max_assets=1, asset_id=asset_id)
+            total += self.schedule_due_fundamental_refreshes(max_assets=1, asset_id=asset_id)
+        total += self.schedule_due_corporate_calendar_refresh()
+        return total
+
+    def _filter_ranking_asset_ids(
+        self,
+        asset_ids: list[str],
+        *,
+        factor: str,
+        missing_only: bool,
+        stale_only: bool,
+    ) -> list[str]:
+        if not missing_only and not stale_only:
+            return asset_ids
+        return [
+            asset_id
+            for asset_id in asset_ids
+            if (
+                (missing_only and self._ranking_factor_missing(asset_id, factor))
+                or (stale_only and self._ranking_factor_stale(asset_id, factor))
+            )
+        ]
+
+    def _ranking_factor_missing(self, asset_id: str, factor: str) -> bool:
+        if factor == "share_price_momentum":
+            row = self.conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM asset_quote_daily
+                WHERE asset_id = ? AND COALESCE(adj_close, close) IS NOT NULL
+                """,
+                [asset_id],
+            ).fetchone()
+            return int(row[0]) < 22
+        if factor == "news_sentiment":
+            row = self.conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM ticker_sentiment_daily
+                WHERE asset_id = ? AND news_sentiment_score IS NOT NULL AND article_count > 0
+                """,
+                [asset_id],
+            ).fetchone()
+            return int(row[0]) == 0
+        if factor == "retail_sentiment":
+            row = self.conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM ticker_sentiment_daily
+                WHERE asset_id = ?
+                  AND retail_sentiment_score IS NOT NULL
+                  AND (reddit_post_count + x_post_count) > 0
+                """,
+                [asset_id],
+            ).fetchone()
+            return int(row[0]) == 0
+        if factor == "earnings_momentum":
+            statements = self.conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM financial_statement
+                WHERE asset_id = ? AND statement_type = 'income'
+                """,
+                [asset_id],
+            ).fetchone()
+            events = self.conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM earnings_calendar_event
+                WHERE asset_id = ?
+                  AND (eps_actual IS NOT NULL OR revenue_actual IS NOT NULL)
+                """,
+                [asset_id],
+            ).fetchone()
+            return int(statements[0]) < 2 and int(events[0]) == 0
+        return True
+
+    def _ranking_factor_stale(self, asset_id: str, factor: str) -> bool:
+        if factor == "share_price_momentum":
+            row = self.conn.execute(
+                "SELECT MAX(date) FROM asset_quote_daily WHERE asset_id = ?",
+                [asset_id],
+            ).fetchone()
+            return row[0] is None or row[0] < date.today() - timedelta(days=5)
+        if factor in {"news_sentiment", "retail_sentiment"}:
+            row = self.conn.execute(
+                "SELECT MAX(date) FROM ticker_sentiment_daily WHERE asset_id = ?",
+                [asset_id],
+            ).fetchone()
+            return row[0] is None or row[0] < date.today() - timedelta(days=2)
+        if factor == "earnings_momentum":
+            row = self.conn.execute(
+                """
+                SELECT MAX(COALESCE(period_end_date, report_date))
+                FROM financial_statement
+                WHERE asset_id = ? AND statement_type = 'income'
+                """,
+                [asset_id],
+            ).fetchone()
+            return row[0] is None or row[0] < date.today() - timedelta(days=150)
+        return True
+
+    def _open_ranking_job_count(
+        self,
+        asset_id: str,
+        domain: str,
+        dataset: str,
+        job_type: str,
+    ) -> int:
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM ingestion_job
+            WHERE asset_id = ?
+              AND domain = ?
+              AND dataset = ?
+              AND job_type = ?
+              AND status IN ('pending', 'running')
+            """,
+            [asset_id, domain, dataset, job_type],
+        ).fetchone()
+        return int(row[0])
 
     ########################
     ##          trading calendar

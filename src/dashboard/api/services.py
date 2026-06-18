@@ -47,6 +47,11 @@ from dashboard.api.models import (
     PricePointResponse,
     PriceMoverResponse,
     IngestionRequirementStatus,
+    StockRankingComponent,
+    StockRankingItem,
+    StockRankingReadinessItem,
+    StockRankingReadinessResponse,
+    StockRankingsResponse,
     TransactionSummary,
     ValuationContext,
 )
@@ -80,6 +85,11 @@ FROM (
       AND txn_type IN ('buy', 'sell')
       AND NOT EXISTS (
         SELECT 1
+        FROM broker_portfolio_position_map mapped_positions
+        WHERE mapped_positions.portfolio_id = txn.portfolio_id
+      )
+      AND NOT EXISTS (
+        SELECT 1
         FROM broker_portfolio_txn_map tm
         JOIN broker_portfolio_position_map pm
           ON pm.provider = tm.provider
@@ -111,6 +121,22 @@ _SIGNAL_TIMEFRAME_LABELS = {
     "1w": "1 week",
     "1m": "1 month",
     "1y": "1 year",
+}
+_STOCK_RANKING_FACTORS = {
+    "aggregate",
+    "share_price_momentum",
+    "news_sentiment",
+    "retail_sentiment",
+    "earnings_momentum",
+    "institutional_buying",
+}
+_STOCK_RANKING_LABELS = {
+    "aggregate": "Aggregate",
+    "share_price_momentum": "Share price momentum",
+    "news_sentiment": "News sentiment",
+    "retail_sentiment": "Retail sentiment",
+    "earnings_momentum": "Earnings momentum",
+    "institutional_buying": "Institutional buying",
 }
 
 
@@ -1054,7 +1080,7 @@ class PortfolioApiService:
                     COUNT(*) FILTER (WHERE h.quantity <> 0) AS position_count,
                     COALESCE(SUM(h.book_cost) FILTER (WHERE h.quantity <> 0), 0) AS book_cost,
                     COALESCE(
-                        SUM(COALESCE(h.quantity * lp.price, h.quantity * bp.price, h.book_cost))
+                        SUM(COALESCE(h.quantity * bp.price, h.quantity * lp.price, h.book_cost))
                             FILTER (WHERE h.quantity <> 0),
                         0
                     ) AS market_value
@@ -1340,8 +1366,8 @@ class PortfolioApiService:
                 END AS country,
                 a.ccy,
                 COALESCE(bl.broker_account_count, 0) AS broker_account_count,
-                COALESCE(lp.price, bp.price) AS price,
-                COALESCE(h.quantity * lp.price, h.quantity * bp.price, h.book_cost) AS market_value
+                COALESCE(bp.price, lp.price) AS price,
+                COALESCE(h.quantity * bp.price, h.quantity * lp.price, h.book_cost) AS market_value
                 FROM holdings h
                 JOIN asset a ON a.asset_id = h.asset_id
                 {_ENRICHED_ASSET_JOIN}
@@ -1487,8 +1513,8 @@ class PortfolioApiService:
                     END AS country,
                     a.ccy,
                     COALESCE(bl.broker_account_count, 0) AS broker_account_count,
-                    COALESCE(lp.price, bp.price) AS price,
-                    COALESCE(h.quantity * lp.price, h.quantity * bp.price, h.book_cost) AS market_value
+                    COALESCE(bp.price, lp.price) AS price,
+                    COALESCE(h.quantity * bp.price, h.quantity * lp.price, h.book_cost) AS market_value
                 FROM holdings h
                 JOIN asset a ON a.asset_id = h.asset_id
                 {_ENRICHED_ASSET_JOIN}
@@ -1888,6 +1914,488 @@ class PortfolioApiService:
             items=items,
         )
 
+    def stock_rankings(
+        self,
+        *,
+        factor: str,
+        universe: str,
+        direction: str,
+        limit: int,
+        offset: int,
+    ) -> StockRankingsResponse:
+        factor = factor.lower().strip()
+        universe = universe.lower().strip()
+        direction = direction.lower().strip()
+        if factor not in _STOCK_RANKING_FACTORS:
+            raise ValueError(f"Unsupported stock ranking factor: {factor}")
+        if universe not in {"tracked", "all"}:
+            raise ValueError("universe must be tracked or all")
+        if direction not in {"buy", "sell"}:
+            raise ValueError("direction must be buy or sell")
+
+        as_of_date = date.today()
+        items = [
+            self._stock_ranking_item(row, factor=factor)
+            for row in self._stock_ranking_universe(universe)
+        ]
+        items.sort(
+            key=(
+                _stock_sell_sort_key
+                if direction == "sell"
+                else _stock_buy_sort_key
+            )
+        )
+        total = len(items)
+        return StockRankingsResponse(
+            factor=factor,
+            universe=universe,
+            direction=direction,
+            as_of_date=as_of_date,
+            methodology=_stock_ranking_methodology(factor, universe),
+            total=total,
+            data_complete_count=sum(1 for item in items if item.data_status == "complete"),
+            items=items[offset : offset + limit],
+        )
+
+    def _stock_ranking_universe(self, universe: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            f"""
+            WITH portfolio_holdings AS ({_HOLDINGS_SQL}),
+            holdings AS (
+                SELECT asset_id, SUM(quantity) AS quantity, SUM(book_cost) AS book_cost
+                FROM portfolio_holdings
+                GROUP BY asset_id
+                HAVING SUM(quantity) <> 0
+            ),
+            ranked_prices AS (
+                SELECT
+                    asset_id,
+                    date,
+                    COALESCE(adj_close, close) AS price,
+                    ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY date DESC) AS price_rank
+                FROM asset_quote_daily
+                WHERE COALESCE(adj_close, close) IS NOT NULL
+            ),
+            latest_prices AS (
+                SELECT asset_id, date, price
+                FROM ranked_prices
+                WHERE price_rank = 1
+            ),
+            portfolio_assets AS (
+                SELECT DISTINCT asset_id
+                FROM portfolio_ticker
+                WHERE is_active = TRUE
+            ),
+            watchlist_assets AS (
+                SELECT DISTINCT asset_id
+                FROM watchlist_ticker
+                WHERE is_active = TRUE
+            )
+            SELECT
+                a.asset_id,
+                COALESCE(a.symbol, a.asset_id) AS symbol,
+                a.name,
+                a.exchange_code,
+                COALESCE(a.ccy, 'USD') AS currency,
+                lp.price AS latest_price,
+                CASE
+                    WHEN h.quantity IS NULL THEN NULL
+                    ELSE COALESCE(h.quantity * lp.price, h.book_cost)
+                END AS market_value,
+                COALESCE(a.track, FALSE) AS asset_tracked,
+                h.asset_id IS NOT NULL AS is_held,
+                wa.asset_id IS NOT NULL AS is_watchlisted,
+                pa.asset_id IS NOT NULL AS is_portfolio_tracked,
+                lp.date AS latest_price_date
+            FROM asset a
+            LEFT JOIN holdings h ON h.asset_id = a.asset_id
+            LEFT JOIN latest_prices lp ON lp.asset_id = a.asset_id
+            LEFT JOIN portfolio_assets pa ON pa.asset_id = a.asset_id
+            LEFT JOIN watchlist_assets wa ON wa.asset_id = a.asset_id
+            WHERE COALESCE(a.asset_type, 'stock') = 'stock'
+              AND (
+                ? = 'all'
+                OR COALESCE(a.track, FALSE) = TRUE
+                OR h.asset_id IS NOT NULL
+                OR pa.asset_id IS NOT NULL
+                OR wa.asset_id IS NOT NULL
+              )
+            ORDER BY symbol
+            """,
+            [universe],
+        ).fetchall()
+        items = [
+            {
+                "asset_id": row[0],
+                "symbol": row[1],
+                "name": row[2],
+                "exchange_code": row[3],
+                "currency": row[4],
+                "latest_price": _float_or_none(row[5]),
+                "market_value": _float_or_none(row[6]),
+                "is_tracked": bool(row[7] or row[8] or row[9] or row[10]),
+                "is_held": bool(row[8]),
+                "is_watchlisted": bool(row[9]),
+                "latest_price_date": row[11],
+                "catalog_only": False,
+            }
+            for row in rows
+        ]
+
+        if universe == "all":
+            asset_ids = {item["asset_id"] for item in items}
+            catalog_rows = self.conn.execute(
+                """
+                SELECT asset_id, symbol, name, exchange_code, ccy
+                FROM stock_catalog
+                ORDER BY symbol
+                """
+            ).fetchall()
+            for asset_id, symbol, name, exchange_code, currency in catalog_rows:
+                if asset_id in asset_ids:
+                    continue
+                items.append(
+                    {
+                        "asset_id": asset_id,
+                        "symbol": symbol,
+                        "name": name,
+                        "exchange_code": exchange_code,
+                        "currency": currency,
+                        "latest_price": None,
+                        "market_value": None,
+                        "is_tracked": False,
+                        "is_held": False,
+                        "is_watchlisted": False,
+                        "latest_price_date": None,
+                        "catalog_only": True,
+                    }
+                )
+        return items
+
+    def _stock_ranking_item(self, row: dict[str, Any], *, factor: str) -> StockRankingItem:
+        if factor == "aggregate":
+            result = self._aggregate_stock_score(row["asset_id"])
+        elif factor == "share_price_momentum":
+            result = self._price_momentum_score(row["asset_id"])
+        elif factor == "news_sentiment":
+            result = self._sentiment_score(row["asset_id"], "news")
+        elif factor == "retail_sentiment":
+            result = self._sentiment_score(row["asset_id"], "retail")
+        elif factor == "earnings_momentum":
+            result = self._earnings_momentum_score(row["asset_id"])
+        else:
+            result = self._institutional_buying_score()
+
+        components: list[StockRankingComponent] = result["components"]
+        missing = [
+            component.detail
+            for component in components
+            if not component.available
+        ]
+        available_count = sum(1 for component in components if component.available)
+        if available_count == 0:
+            data_status = "missing"
+        elif missing:
+            data_status = "partial"
+        else:
+            data_status = "complete"
+        score = result["score"] if result["score"] is not None else 0.0
+        latest_data_date = result.get("latest_data_date") or row.get("latest_price_date")
+        return StockRankingItem(
+            asset_id=row["asset_id"],
+            symbol=row["symbol"],
+            name=row["name"],
+            exchange_code=row["exchange_code"],
+            currency=row["currency"],
+            latest_price=row["latest_price"],
+            market_value=row["market_value"],
+            is_tracked=row["is_tracked"],
+            is_held=row["is_held"],
+            is_watchlisted=row["is_watchlisted"],
+            score=round(score, 2),
+            score_strength=round(abs(score), 2),
+            action=_holding_signal_action(score),
+            confidence=round(available_count / len(components), 2) if components else 0.0,
+            data_status=data_status,
+            latest_data_date=latest_data_date,
+            missing_inputs=missing,
+            components=components,
+        )
+
+    def _aggregate_stock_score(self, asset_id: str) -> dict[str, Any]:
+        factor_results = [
+            ("Share price momentum", self._price_momentum_score(asset_id)),
+            ("News sentiment", self._sentiment_score(asset_id, "news")),
+            ("Retail sentiment", self._sentiment_score(asset_id, "retail")),
+            ("Earnings momentum", self._earnings_momentum_score(asset_id)),
+            ("Institutional buying", self._institutional_buying_score()),
+        ]
+        components: list[StockRankingComponent] = []
+        dates = []
+        for name, result in factor_results:
+            score = result["score"]
+            components.append(
+                StockRankingComponent(
+                    name=name,
+                    metric="factor score",
+                    value=score,
+                    score=score,
+                    available=score is not None,
+                    detail=(
+                        f"{name} contributed to the aggregate score."
+                        if score is not None
+                        else "; ".join(
+                            component.detail
+                            for component in result["components"]
+                            if not component.available
+                        )
+                    ),
+                )
+            )
+            if result.get("latest_data_date") is not None:
+                dates.append(result["latest_data_date"])
+        scores = [component.score for component in components if component.score is not None]
+        return {
+            "score": sum(scores) / len(scores) if scores else None,
+            "latest_data_date": max(dates) if dates else None,
+            "components": components,
+        }
+
+    def _price_momentum_score(self, asset_id: str) -> dict[str, Any]:
+        prices = ComparisonApiService(self.conn)._prices(asset_id)
+        closes = [row[1] for row in reversed(prices)]
+        latest_data_date = prices[0][0] if prices else None
+        return_1m = _period_return(prices, 21)
+        return_3m = _period_return(prices, 63)
+        return_6m = _period_return(prices, 126)
+        volatility = _realized_volatility_from_closes(closes)
+        trend_scores = [
+            _scaled_signal(return_1m, 0.15),
+            _scaled_signal(return_3m, 0.25),
+            _scaled_signal(return_6m, 0.35),
+        ]
+        trend_score = _average_present(trend_scores)
+        risk_score = None
+        if volatility is not None:
+            risk_score = -max(0.0, _scaled_signal(volatility - 0.35, 0.35) or 0.0)
+        score = _average_present([trend_score, risk_score])
+        return {
+            "score": score,
+            "latest_data_date": latest_data_date,
+            "components": [
+                StockRankingComponent(
+                    name="Price trend",
+                    metric="1m/3m/6m return",
+                    value=return_1m,
+                    score=trend_score,
+                    available=trend_score is not None,
+                    detail=(
+                        "Blends 1, 3, and 6 month returns from stored daily closes."
+                        if trend_score is not None
+                        else "Needs at least 22 stored daily closes for price momentum."
+                    ),
+                ),
+                StockRankingComponent(
+                    name="Risk",
+                    metric="realized volatility",
+                    value=volatility,
+                    score=risk_score,
+                    available=risk_score is not None,
+                    detail=(
+                        "Lower realized volatility improves the risk-adjusted momentum score."
+                        if risk_score is not None
+                        else "Needs at least two stored daily closes for risk scoring."
+                    ),
+                ),
+            ],
+        }
+
+    def _sentiment_score(self, asset_id: str, bucket: str) -> dict[str, Any]:
+        row = self.conn.execute(
+            """
+            SELECT
+                date,
+                retail_sentiment_score,
+                news_sentiment_score,
+                blended_sentiment_score,
+                sentiment_momentum_7d,
+                reddit_post_count,
+                x_post_count,
+                article_count
+            FROM ticker_sentiment_daily
+            WHERE asset_id = ?
+            ORDER BY date DESC
+            LIMIT 1
+            """,
+            [asset_id],
+        ).fetchone()
+        if row is None:
+            label = "retail" if bucket == "retail" else "news"
+            return {
+                "score": None,
+                "latest_data_date": None,
+                "components": [
+                    StockRankingComponent(
+                        name=f"{label.title()} sentiment",
+                        metric="daily sentiment",
+                        available=False,
+                        detail=f"Needs a stored {label} sentiment daily snapshot.",
+                    )
+                ],
+            }
+
+        snapshot_date = row[0]
+        if bucket == "retail":
+            sentiment = _float_or_none(row[1])
+            count = int(row[5] or 0) + int(row[6] or 0)
+            label = "Retail sentiment"
+            missing = "Needs Reddit or X sentiment observations for this ticker."
+        else:
+            sentiment = _float_or_none(row[2])
+            count = int(row[7] or 0)
+            label = "News sentiment"
+            missing = "Needs news sentiment observations for this ticker."
+        momentum = _float_or_none(row[4])
+        sentiment_score = sentiment * 100 if sentiment is not None else None
+        momentum_score = _scaled_signal(momentum, 0.75)
+        score = _average_present([sentiment_score, momentum_score])
+        return {
+            "score": score,
+            "latest_data_date": snapshot_date,
+            "components": [
+                StockRankingComponent(
+                    name=label,
+                    metric="sentiment score",
+                    value=sentiment,
+                    score=sentiment_score,
+                    available=sentiment_score is not None and count > 0,
+                    detail=(
+                        f"Uses {count} recent item(s) in the latest daily sentiment snapshot."
+                        if sentiment_score is not None and count > 0
+                        else missing
+                    ),
+                ),
+                StockRankingComponent(
+                    name="Sentiment momentum",
+                    metric="7d change",
+                    value=momentum,
+                    score=momentum_score,
+                    available=momentum_score is not None,
+                    detail=(
+                        "Seven-day change in blended sentiment."
+                        if momentum_score is not None
+                        else "Needs a previous sentiment snapshot to calculate momentum."
+                    ),
+                ),
+            ],
+        }
+
+    def _earnings_momentum_score(self, asset_id: str) -> dict[str, Any]:
+        statement_rows = self.conn.execute(
+            """
+            SELECT period_end_date, report_date, data_json
+            FROM financial_statement
+            WHERE asset_id = ?
+              AND statement_type = 'income'
+            ORDER BY period_end_date DESC NULLS LAST, year DESC, quarter DESC
+            LIMIT 2
+            """,
+            [asset_id],
+        ).fetchall()
+        calendar_row = self.conn.execute(
+            """
+            SELECT earnings_date, eps_estimated, eps_actual, revenue_estimated, revenue_actual
+            FROM earnings_calendar_event
+            WHERE asset_id = ?
+              AND earnings_date <= current_date
+            ORDER BY earnings_date DESC
+            LIMIT 1
+            """,
+            [asset_id],
+        ).fetchone()
+        growth_score = None
+        latest_date = None
+        if len(statement_rows) >= 2:
+            latest = _json_dict(statement_rows[0][2])
+            previous = _json_dict(statement_rows[1][2])
+            latest_date = statement_rows[0][0] or statement_rows[0][1]
+            revenue_growth = _relative_change(
+                _first_number(latest, "revenue", "totalRevenue", "revenueActual"),
+                _first_number(previous, "revenue", "totalRevenue", "revenueActual"),
+            )
+            eps_growth = _relative_change(
+                _first_number(latest, "eps", "epsDiluted", "netIncome"),
+                _first_number(previous, "eps", "epsDiluted", "netIncome"),
+            )
+            growth_score = _average_present(
+                [
+                    _scaled_signal(revenue_growth, 0.25),
+                    _scaled_signal(eps_growth, 0.35),
+                ]
+            )
+        surprise_score = None
+        if calendar_row is not None:
+            latest_date = max(
+                [value for value in [latest_date, calendar_row[0]] if value is not None],
+                default=latest_date,
+            )
+            eps_surprise = _relative_change(
+                _float_or_none(calendar_row[2]),
+                _float_or_none(calendar_row[1]),
+            )
+            revenue_surprise = _relative_change(
+                _float_or_none(calendar_row[4]),
+                _float_or_none(calendar_row[3]),
+            )
+            surprise_score = _average_present(
+                [
+                    _scaled_signal(eps_surprise, 0.15),
+                    _scaled_signal(revenue_surprise, 0.10),
+                ]
+            )
+        return {
+            "score": _average_present([growth_score, surprise_score]),
+            "latest_data_date": latest_date,
+            "components": [
+                StockRankingComponent(
+                    name="Statement growth",
+                    metric="revenue/EPS growth",
+                    score=growth_score,
+                    available=growth_score is not None,
+                    detail=(
+                        "Compares the two latest stored income statements."
+                        if growth_score is not None
+                        else "Needs at least two stored income statements with revenue or EPS inputs."
+                    ),
+                ),
+                StockRankingComponent(
+                    name="Earnings surprise",
+                    metric="actual vs estimate",
+                    score=surprise_score,
+                    available=surprise_score is not None,
+                    detail=(
+                        "Uses latest stored earnings actuals versus estimates."
+                        if surprise_score is not None
+                        else "Needs an earnings event with actual and estimated EPS or revenue."
+                    ),
+                ),
+            ],
+        }
+
+    def _institutional_buying_score(self) -> dict[str, Any]:
+        return {
+            "score": None,
+            "latest_data_date": None,
+            "components": [
+                StockRankingComponent(
+                    name="Institutional buying",
+                    metric="net institutional flow",
+                    available=False,
+                    detail="Institutional buying data is not configured yet.",
+                )
+            ],
+        }
+
     def _portfolio_summary(self, row) -> PortfolioSummary:
         market_value = float(row[6])
         book_cost = float(row[7])
@@ -1935,10 +2443,11 @@ class AssetApiService:
         limit: int = 25,
         offset: int = 0,
     ) -> list[AssetSearchResult]:
+        query = q.strip() if q else ""
         where = []
         params: list[Any] = []
-        if q:
-            like = f"%{q.strip().lower()}%"
+        if query:
+            like = f"%{query.lower()}%"
             where.append(
                 "("
                 "LOWER(a.asset_id) LIKE ? OR LOWER(COALESCE(a.symbol, '')) LIKE ? OR "
@@ -1971,9 +2480,29 @@ class AssetApiService:
                 a.asset_id
             LIMIT ? OFFSET ?
             """,
-            [*params, q or "", q or "", limit, offset],
+            [*params, query, query, limit + offset, 0],
         ).fetchall()
-        return [self._asset_search_result_from_row(row) for row in rows]
+        asset_results = [self._asset_search_result_from_row(row) for row in rows]
+        catalog_results = self._search_stock_catalog(query)
+
+        merged: dict[str, AssetSearchResult] = {}
+        for item in catalog_results:
+            merged[item.asset_id] = item
+        for item in asset_results:
+            merged[item.asset_id] = item
+
+        def sort_key(item: AssetSearchResult) -> tuple[int, str]:
+            symbol = item.symbol.lower()
+            asset_id = item.asset_id.lower()
+            search = query.lower()
+            if search and asset_id == search:
+                return (0, item.asset_id)
+            if search and symbol == search:
+                return (1, item.asset_id)
+            return (2, item.asset_id)
+
+        ordered = sorted(merged.values(), key=sort_key)
+        return ordered[offset : offset + limit]
 
     def get_asset(self, asset_id: str) -> AssetDetail:
         asset_id = asset_id.upper().strip()
@@ -1998,6 +2527,9 @@ class AssetApiService:
             [asset_id],
         ).fetchone()
         if row is None:
+            catalog_asset = self._catalog_asset_detail(asset_id)
+            if catalog_asset is not None:
+                return catalog_asset
             fallback = _known_underlying_asset_detail(asset_id)
             if fallback is not None:
                 return fallback
@@ -2092,6 +2624,107 @@ class AssetApiService:
             country=classification["country"],
             currency=row[5],
             latest_price=_float_or_none(row[16]),
+        )
+
+    def _search_stock_catalog(self, q: str) -> list[AssetSearchResult]:
+        where = []
+        params: list[Any] = []
+        if q:
+            like = f"%{q.lower()}%"
+            where.append(
+                "("
+                "LOWER(asset_id) LIKE ? OR LOWER(symbol) LIKE ? OR "
+                "LOWER(name) LIKE ? OR LOWER(COALESCE(sector, '')) LIKE ? OR "
+                "LOWER(COALESCE(industry, '')) LIKE ?"
+                ")"
+            )
+            params.extend([like, like, like, like, like])
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        rows = self.conn.execute(
+            f"""
+            SELECT
+                asset_id,
+                symbol,
+                asset_type,
+                ccy,
+                name,
+                sector,
+                industry,
+                country
+            FROM stock_catalog
+            {where_sql}
+            ORDER BY
+                CASE
+                    WHEN LOWER(asset_id) = LOWER(?) THEN 0
+                    WHEN LOWER(symbol) = LOWER(?) THEN 1
+                    ELSE 2
+                END,
+                asset_id
+            LIMIT 500
+            """,
+            [*params, q, q],
+        ).fetchall()
+        return [
+            AssetSearchResult(
+                asset_id=row[0],
+                symbol=row[1],
+                name=row[4],
+                asset_type=row[2],
+                sector=row[5],
+                industry=row[6],
+                country=row[7],
+                currency=row[3],
+                latest_price=None,
+            )
+            for row in rows
+        ]
+
+    def _catalog_asset_detail(self, asset_id: str) -> AssetDetail | None:
+        row = self.conn.execute(
+            """
+            SELECT
+                asset_id,
+                symbol,
+                exchange_code,
+                asset_type,
+                ccy,
+                name,
+                sector,
+                industry,
+                country,
+                region
+            FROM stock_catalog
+            WHERE UPPER(asset_id) = UPPER(?)
+               OR UPPER(symbol) = UPPER(?)
+            ORDER BY
+                CASE WHEN UPPER(asset_id) = UPPER(?) THEN 0 ELSE 1 END,
+                asset_id
+            LIMIT 1
+            """,
+            [asset_id, asset_id, asset_id],
+        ).fetchone()
+        if row is None:
+            return None
+        return AssetDetail(
+            asset_id=row[0],
+            symbol=row[1],
+            is_cdr=False,
+            underlying_asset_id=None,
+            exchange_code=row[2],
+            asset_type=row[3],
+            asset_subtype=None,
+            currency=row[4],
+            name=row[5],
+            description=None,
+            sector=row[6],
+            industry=row[7],
+            country=row[8],
+            region=row[9],
+            size=None,
+            market_cap=None,
+            shares_outstanding=None,
+            market_beta=None,
+            latest_price=None,
         )
 
 
@@ -2473,8 +3106,9 @@ class CommandApiService(BrokerCommands, IngestionCommands):
 
         items: list[IngestionAssetReadiness] = []
         for asset_id, symbol, asset_type in rows:
+            price_requirement = self._price_history_requirement(asset_id)
             requirements = [
-                self._price_history_requirement(asset_id),
+                price_requirement,
                 self._market_coverage_requirement(
                     asset_id=asset_id,
                     dataset="dividends",
@@ -2494,7 +3128,13 @@ class CommandApiService(BrokerCommands, IngestionCommands):
                 self._financial_statement_requirement(asset_id, "balance", "Balance sheets"),
                 self._financial_statement_requirement(asset_id, "cashflow", "Cash flow statements"),
             ]
-            missing = [item.label for item in requirements if not item.ready]
+            # This endpoint backs the Operations "Projection input readiness"
+            # card. Portfolio projections need enough price observations for
+            # volatility, expected return, and simulation bands. Fundamentals
+            # enrich valuation depth, but provider entitlement gaps should not
+            # block projection readiness once all runnable ingestion jobs have
+            # been closed out.
+            missing = [] if price_requirement.ready else [price_requirement.label]
             items.append(
                 IngestionAssetReadiness(
                     asset_id=asset_id,
@@ -2506,6 +3146,68 @@ class CommandApiService(BrokerCommands, IngestionCommands):
                 )
             )
         return items
+
+    def stock_ranking_readiness(
+        self,
+        *,
+        universe: str = "tracked",
+        limit: int = 50,
+    ) -> StockRankingReadinessResponse:
+        portfolio_service = PortfolioApiService(self.conn)
+        rows = portfolio_service._stock_ranking_universe(universe)[:limit]
+        factors = [
+            "share_price_momentum",
+            "news_sentiment",
+            "retail_sentiment",
+            "earnings_momentum",
+            "institutional_buying",
+        ]
+        items: list[StockRankingReadinessItem] = []
+        for row in rows:
+            requirements: list[IngestionRequirementStatus] = []
+            missing: list[str] = []
+            for factor in factors:
+                ranking = portfolio_service._stock_ranking_item(row, factor=factor)
+                ready = ranking.data_status == "complete"
+                detail = (
+                    "complete"
+                    if ready
+                    else "; ".join(ranking.missing_inputs) or ranking.data_status
+                )
+                requirements.append(
+                    IngestionRequirementStatus(
+                        key=factor,
+                        label=_STOCK_RANKING_LABELS[factor],
+                        ready=ready,
+                        detail=detail,
+                        row_count=sum(
+                            1 for component in ranking.components if component.available
+                        ),
+                        latest_date=ranking.latest_data_date,
+                    )
+                )
+                if not ready:
+                    missing.append(_STOCK_RANKING_LABELS[factor])
+            complete_count = sum(1 for requirement in requirements if requirement.ready)
+            items.append(
+                StockRankingReadinessItem(
+                    asset_id=row["asset_id"],
+                    symbol=row["symbol"],
+                    name=row["name"],
+                    universe=universe,
+                    ready=complete_count == len(requirements),
+                    complete_factor_count=complete_count,
+                    total_factor_count=len(requirements),
+                    missing=missing,
+                    requirements=requirements,
+                )
+            )
+        return StockRankingReadinessResponse(
+            universe=universe,
+            items=items,
+            total=len(items),
+            ready_count=sum(1 for item in items if item.ready),
+        )
 
     def _price_history_requirement(self, asset_id: str) -> IngestionRequirementStatus:
         row = self.conn.execute(
@@ -2521,13 +3223,13 @@ class CommandApiService(BrokerCommands, IngestionCommands):
         latest_date = row[1]
         open_jobs = self._open_job_count(asset_id, "market", "price_daily")
         last_error = self._sync_last_error(asset_id, "market", "price_daily")
-        ready = row_count >= 252
+        ready = row_count >= 3
         detail = f"{row_count} usable daily prices"
         if not ready and open_jobs:
             detail += f"; {open_jobs} open job(s)"
         return IngestionRequirementStatus(
             key="price_history",
-            label="One-year price history",
+            label="Projection price history",
             ready=ready,
             detail=detail,
             row_count=row_count,
@@ -2870,6 +3572,62 @@ def _period_return(prices: list[tuple[Any, float]], periods: int) -> float | Non
     if previous == 0:
         return None
     return latest / previous - 1
+
+
+def _average_present(values: list[float | None]) -> float | None:
+    present = [value for value in values if value is not None]
+    if not present:
+        return None
+    return sum(present) / len(present)
+
+
+def _relative_change(value: float | None, previous: float | None) -> float | None:
+    if value is None or previous is None:
+        return None
+    if previous == 0:
+        return None
+    return (value - previous) / abs(previous)
+
+
+def _stock_buy_sort_key(item: StockRankingItem):
+    return (
+        item.data_status == "missing",
+        -item.score,
+        -item.confidence,
+        -(item.market_value or 0),
+        item.symbol,
+    )
+
+
+def _stock_sell_sort_key(item: StockRankingItem):
+    return (
+        item.data_status == "missing",
+        item.score,
+        -item.confidence,
+        -(item.market_value or 0),
+        item.symbol,
+    )
+
+
+def _stock_ranking_methodology(factor: str, universe: str) -> str:
+    scope = "tracked stocks" if universe == "tracked" else "the available stock catalog"
+    label = _STOCK_RANKING_LABELS[factor]
+    if factor == "aggregate":
+        return (
+            f"Ranks {scope} by the average of available price momentum, news sentiment, retail sentiment, "
+            "earnings momentum, and institutional buying inputs. Missing factor inputs reduce confidence."
+        )
+    if factor == "share_price_momentum":
+        return (
+            f"Ranks {scope} by stored daily close momentum, blended with realized volatility as a risk modifier."
+        )
+    if factor == "news_sentiment":
+        return f"Ranks {scope} by the latest stored news sentiment snapshot and sentiment momentum."
+    if factor == "retail_sentiment":
+        return f"Ranks {scope} by the latest stored retail/social sentiment snapshot and sentiment momentum."
+    if factor == "earnings_momentum":
+        return f"Ranks {scope} by stored income statement growth and latest earnings surprise data."
+    return f"Ranks {scope} by {label.lower()}; this data source is not configured yet, so rows disclose missing inputs."
 
 
 def _realized_volatility_from_closes(closes: list[float]) -> float | None:

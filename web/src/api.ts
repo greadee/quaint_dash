@@ -118,34 +118,43 @@ export type OverviewUpdates = {
   price_movers: PriceMover[];
   news: NewsItem[];
 };
-export type HoldingSignalComponent = {
+export type StockRankingComponent = {
   name: string;
   metric: string;
   value: number | null;
-  contribution: number | null;
+  score: number | null;
+  available: boolean;
   detail: string;
 };
-export type HoldingSignal = {
+export type StockRankingItem = {
   asset_id: string;
   symbol: string;
   name: string | null;
+  exchange_code: string | null;
   currency: string;
-  market_value: number | null;
-  weight: number | null;
   latest_price: number | null;
-  timeframe: string;
-  return_value: number | null;
-  signal_score: number;
-  signal_strength: number;
+  market_value: number | null;
+  is_tracked: boolean;
+  is_held: boolean;
+  is_watchlisted: boolean;
+  score: number;
+  score_strength: number;
   action: string;
   confidence: number;
-  data_points: number;
-  components: HoldingSignalComponent[];
+  data_status: string;
+  latest_data_date: string | null;
+  missing_inputs: string[];
+  components: StockRankingComponent[];
 };
-export type HoldingSignalsResponse = {
-  timeframe: string;
+export type StockRankingsResponse = {
+  factor: string;
+  universe: string;
+  direction: string;
+  as_of_date: string;
   methodology: string;
-  items: HoldingSignal[];
+  total: number;
+  data_complete_count: number;
+  items: StockRankingItem[];
 };
 export type ComparisonReturns = {
   return_1d: number | null;
@@ -421,6 +430,23 @@ export type IngestionReadiness = {
   total: number;
   ready_count: number;
 };
+export type StockRankingReadinessItem = {
+  asset_id: string;
+  symbol: string;
+  name: string | null;
+  universe: string;
+  ready: boolean;
+  complete_factor_count: number;
+  total_factor_count: number;
+  missing: string[];
+  requirements: IngestionRequirementStatus[];
+};
+export type StockRankingReadiness = {
+  universe: string;
+  items: StockRankingReadinessItem[];
+  total: number;
+  ready_count: number;
+};
 export type ActionResult = { status: string; result: Record<string, unknown> };
 export type BrokerPortalPayload = { user_key: string; broker?: string | null; reconnect?: string | null };
 export type IngestionSchedulePayload = {
@@ -429,6 +455,10 @@ export type IngestionSchedulePayload = {
   max_assets: number;
   years: number;
   prices_only: boolean;
+  ranking_factor?: string;
+  ranking_universe?: string;
+  missing_only?: boolean;
+  stale_only?: boolean;
 };
 export type IngestionRunPayload = { domain: string; max_jobs: number };
 export type IngestionRetryPayload = { domain?: string | null; max_jobs: number };
@@ -447,8 +477,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   overviewUpdates: () => request<OverviewUpdates>("/overview/updates"),
-  holdingSignals: (timeframe = "1d") =>
-    request<HoldingSignalsResponse>(`/holdings/signals?timeframe=${encodeURIComponent(timeframe)}`),
+  stockRankings: (params: { factor: string; universe: string; direction: string; limit?: number; offset?: number }) => {
+    const query = new URLSearchParams({
+      factor: params.factor,
+      universe: params.universe,
+      direction: params.direction,
+      limit: String(params.limit ?? 25),
+      offset: String(params.offset ?? 0),
+    });
+    return request<StockRankingsResponse>(`/rankings/stocks?${query.toString()}`);
+  },
   comparison: (left: string, right?: string, benchmarkIndexId?: string) => {
     const params = new URLSearchParams({ left });
     if (right) params.set("right", right);
@@ -583,7 +621,17 @@ export const api = {
   },
   clearIngestionHistory: () => request<ActionResult>("/ingestion/jobs", { method: "DELETE" }),
   ingestionBackgroundStatus: () => request<IngestionBackgroundStatus>("/ingestion/background/status"),
+  startIngestionBackground: () => request<ActionResult>("/ingestion/background/start", { method: "POST" }),
+  stopIngestionBackground: () => request<ActionResult>("/ingestion/background/stop", { method: "POST" }),
+  tickIngestionBackground: () => request<ActionResult>("/ingestion/background/tick", { method: "POST" }),
   ingestionReadiness: () => request<IngestionReadiness>("/ingestion/readiness"),
+  rankingReadiness: (params: { universe: string; limit?: number }) => {
+    const query = new URLSearchParams({
+      universe: params.universe,
+      limit: String(params.limit ?? 50),
+    });
+    return request<StockRankingReadiness>(`/ingestion/ranking-readiness?${query.toString()}`);
+  },
   scheduleIngestion: (payload: IngestionSchedulePayload) =>
     request<ActionResult>("/ingestion/schedule", { method: "POST", body: JSON.stringify(payload) }),
   runIngestion: (payload: IngestionRunPayload) =>

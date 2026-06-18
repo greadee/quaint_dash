@@ -40,7 +40,6 @@ from dashboard.api.models import (
     IngestionRetryFailedRequest,
     IngestionRunRequest,
     IngestionScheduleRequest,
-    HoldingSignalsResponse,
     OverviewUpdatesResponse,
     Page,
     PortfolioCreate,
@@ -48,6 +47,8 @@ from dashboard.api.models import (
     PortfolioUpdate,
     PositionSummary,
     PricePointResponse,
+    StockRankingReadinessResponse,
+    StockRankingsResponse,
     TransactionSummary,
 )
 from dashboard.api.services import (
@@ -71,12 +72,25 @@ def overview_updates(conn=Depends(get_connection)):
     return PortfolioApiService(conn).overview_updates()
 
 
-@router.get("/holdings/signals", response_model=HoldingSignalsResponse)
-def holding_signals(
-    timeframe: str = Query(default="1d", pattern="^(1d|1w|1m|1y)$"),
+@router.get("/rankings/stocks", response_model=StockRankingsResponse)
+def stock_rankings(
+    factor: str = Query(
+        default="aggregate",
+        pattern="^(aggregate|share_price_momentum|news_sentiment|retail_sentiment|earnings_momentum|institutional_buying)$",
+    ),
+    universe: str = Query(default="tracked", pattern="^(tracked|all)$"),
+    direction: str = Query(default="buy", pattern="^(buy|sell)$"),
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     conn=Depends(get_connection),
 ):
-    return PortfolioApiService(conn).holding_signals(timeframe)
+    return PortfolioApiService(conn).stock_rankings(
+        factor=factor,
+        universe=universe,
+        direction=direction,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/comparison", response_model=ComparisonResponse)
@@ -444,6 +458,24 @@ def ingestion_background_status(request: Request):
     return request.app.state.ingestion_background_worker.status()
 
 
+@router.post("/ingestion/background/start", response_model=ActionResult)
+async def ingestion_background_start(request: Request):
+    request.app.state.ingestion_background_worker.enable()
+    return ActionResult(result=request.app.state.ingestion_background_worker.status())
+
+
+@router.post("/ingestion/background/stop", response_model=ActionResult)
+async def ingestion_background_stop(request: Request):
+    await request.app.state.ingestion_background_worker.disable()
+    return ActionResult(result=request.app.state.ingestion_background_worker.status())
+
+
+@router.post("/ingestion/background/tick", response_model=ActionResult)
+async def ingestion_background_tick(request: Request):
+    result = await request.app.state.ingestion_background_worker.tick()
+    return ActionResult(result=result)
+
+
 @router.get("/ingestion/readiness", response_model=IngestionReadinessResponse)
 def ingestion_readiness(conn=Depends(get_connection)):
     items = CommandApiService(conn).ingestion_readiness()
@@ -452,6 +484,15 @@ def ingestion_readiness(conn=Depends(get_connection)):
         total=len(items),
         ready_count=sum(1 for item in items if item.ready),
     )
+
+
+@router.get("/ingestion/ranking-readiness", response_model=StockRankingReadinessResponse)
+def ingestion_ranking_readiness(
+    universe: str = Query(default="tracked", pattern="^(tracked|all)$"),
+    limit: int = Query(default=50, ge=1, le=200),
+    conn=Depends(get_connection),
+):
+    return CommandApiService(conn).stock_ranking_readiness(universe=universe, limit=limit)
 
 
 @router.post("/ingestion/schedule", response_model=ActionResult)
@@ -467,6 +508,10 @@ def ingestion_schedule(
             max_assets=payload.max_assets,
             years=payload.years,
             prices_only=payload.prices_only,
+            ranking_factor=payload.ranking_factor,
+            ranking_universe=payload.ranking_universe,
+            missing_only=payload.missing_only,
+            stale_only=payload.stale_only,
         )
     return ActionResult(result={"scheduled_jobs": count})
 

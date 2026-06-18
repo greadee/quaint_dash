@@ -292,6 +292,31 @@ def test_ingestion_background_disabled_state_does_not_schedule_or_run(tmp_path, 
     assert calls == []
 
 
+def test_ingestion_background_start_stop_endpoints_toggle_worker(tmp_path, monkeypatch):
+    async def idle_loop(self):
+        if self._stop_event is not None:
+            await self._stop_event.wait()
+
+    monkeypatch.setattr(IngestionBackgroundWorker, "_run_loop", idle_loop)
+    app = create_app(tmp_path / "api.db")
+
+    with TestClient(app) as client:
+        initial = client.get("/api/v1/ingestion/background/status")
+        started = client.post("/api/v1/ingestion/background/start")
+        running = client.get("/api/v1/ingestion/background/status")
+        stopped = client.post("/api/v1/ingestion/background/stop")
+
+    assert initial.json()["enabled"] is False
+    assert initial.json()["running"] is False
+    assert started.status_code == 200
+    assert started.json()["result"]["enabled"] is True
+    assert running.json()["enabled"] is True
+    assert running.json()["running"] is True
+    assert stopped.status_code == 200
+    assert stopped.json()["result"]["enabled"] is False
+    assert stopped.json()["result"]["running"] is False
+
+
 def test_ingestion_background_enabled_tick_uses_capped_schedule_and_run(tmp_path, monkeypatch):
     calls: list[tuple[str, dict]] = []
 
@@ -332,6 +357,38 @@ def test_ingestion_background_enabled_tick_uses_capped_schedule_and_run(tmp_path
     assert status["last_schedule_count"] == 4
     assert status["last_completed_count"] == 2
     assert status["last_error"] is None
+
+
+def test_ingestion_background_tick_endpoint_runs_one_bounded_cycle(tmp_path, monkeypatch):
+    calls: list[tuple[str, dict]] = []
+
+    def fake_schedule(self, **kwargs):
+        calls.append(("schedule", kwargs))
+        return 3
+
+    def fake_run(self, **kwargs):
+        calls.append(("run", kwargs))
+        return 2
+
+    monkeypatch.setattr(CommandApiService, "schedule_due_routine_ingestion_jobs", fake_schedule)
+    monkeypatch.setattr(CommandApiService, "run_ingestion_jobs", fake_run)
+    app = create_app(tmp_path / "api.db")
+
+    with TestClient(app) as client:
+        response = client.post("/api/v1/ingestion/background/tick")
+        status = client.get("/api/v1/ingestion/background/status")
+
+    assert response.status_code == 200
+    assert response.json()["result"] == {"scheduled_jobs": 3, "completed_jobs": 2}
+    assert calls == [
+        (
+            "schedule",
+            {"max_assets": 25, "years": 10, "prices_only": False},
+        ),
+        ("run", {"domain": "all", "max_jobs": 2}),
+    ]
+    assert status.json()["last_schedule_count"] == 3
+    assert status.json()["last_completed_count"] == 2
 
 
 def test_ingestion_background_errors_are_captured(tmp_path, monkeypatch):
@@ -416,8 +473,8 @@ def test_ingestion_readiness_reports_portfolio_ticker_metric_inputs(tmp_path):
     assert by_asset["AAPL"]["ready"] is True
     assert by_asset["AAPL"]["missing"] == []
     assert by_asset["MSFT"]["ready"] is False
-    assert "One-year price history" in by_asset["MSFT"]["missing"]
-    assert "Cash flow statements" in by_asset["MSFT"]["missing"]
+    assert "Projection price history" in by_asset["MSFT"]["missing"]
+    assert "Cash flow statements" not in by_asset["MSFT"]["missing"]
 
 
 def test_ingestion_readiness_treats_successful_financial_statement_sync_as_checked(tmp_path):
@@ -471,6 +528,99 @@ def test_ingestion_readiness_treats_successful_financial_statement_sync_as_check
     assert item["missing"] == []
     assert by_requirement["income_statements"]["ready"] is True
     assert by_requirement["income_statements"]["detail"] == "coverage checked; no statements returned"
+
+
+def test_stock_ranking_readiness_reports_factor_gaps(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name, track)
+        VALUES ('AAPL', 'AAPL', 'stock', 'USD', 'Apple Inc.', TRUE)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'AAPL', TRUE, 'position')
+        """
+    )
+    for index in range(70):
+        db.conn.execute(
+            """
+            INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+            VALUES ('AAPL', DATE '2026-01-01' + CAST(? AS INTEGER), ?, ?, 'test')
+            """,
+            [index, 100 + index, 100 + index],
+        )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/ingestion/ranking-readiness?universe=tracked&limit=10")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["ready_count"] == 0
+    item = payload["items"][0]
+    by_requirement = {requirement["key"]: requirement for requirement in item["requirements"]}
+    assert by_requirement["share_price_momentum"]["ready"] is True
+    assert by_requirement["news_sentiment"]["ready"] is False
+    assert by_requirement["retail_sentiment"]["ready"] is False
+    assert by_requirement["earnings_momentum"]["ready"] is False
+    assert by_requirement["institutional_buying"]["detail"] == "Institutional buying data is not configured yet."
+
+
+def test_ranking_schedule_queues_missing_catalog_stock_inputs(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        """
+        INSERT INTO stock_catalog(asset_id, symbol, exchange_code, ccy, name)
+        VALUES ('CATONLY', 'CATONLY', 'NASDAQ', 'USD', 'Catalog Only')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/ingestion/schedule",
+            json={
+                "pipeline": "ranking",
+                "asset_id": "CATONLY",
+                "ranking_factor": "news_sentiment",
+                "ranking_universe": "all",
+                "missing_only": True,
+                "max_assets": 1,
+                "years": 3,
+                "prices_only": False,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["result"] == {"scheduled_jobs": 2}
+
+    db = DB(db_path)
+    asset = db.conn.execute(
+        "SELECT asset_id, symbol, track FROM asset WHERE asset_id = 'CATONLY'"
+    ).fetchone()
+    jobs = db.conn.execute(
+        """
+        SELECT job_type, dataset, status
+        FROM ingestion_job
+        WHERE asset_id = 'CATONLY'
+        ORDER BY job_type
+        """
+    ).fetchall()
+    db.conn.close()
+    assert asset == ("CATONLY", "CATONLY", False)
+    assert jobs == [
+        ("news_rss_refresh", "news", "pending"),
+        ("sentiment_daily_aggregate", "sentiment_daily", "pending"),
+    ]
 
 
 def test_retry_failed_ingestion_jobs_requeues_bounded_failures(tmp_path):

@@ -216,6 +216,47 @@ class HoldingSignalsResponse(BaseModel):
     items: list[HoldingSignalResponse]
 
 
+class StockRankingComponent(BaseModel):
+    name: str
+    metric: str
+    value: float | None = None
+    score: float | None = None
+    available: bool
+    detail: str
+
+
+class StockRankingItem(BaseModel):
+    asset_id: str
+    symbol: str
+    name: str | None
+    exchange_code: str | None = None
+    currency: str
+    latest_price: float | None = None
+    market_value: float | None = None
+    is_tracked: bool = False
+    is_held: bool = False
+    is_watchlisted: bool = False
+    score: float
+    score_strength: float
+    action: str
+    confidence: float
+    data_status: str
+    latest_data_date: date | None = None
+    missing_inputs: list[str] = Field(default_factory=list)
+    components: list[StockRankingComponent] = Field(default_factory=list)
+
+
+class StockRankingsResponse(BaseModel):
+    factor: str
+    universe: str
+    direction: str
+    as_of_date: date
+    methodology: str
+    total: int
+    data_complete_count: int
+    items: list[StockRankingItem]
+
+
 class ComparisonReturns(BaseModel):
     return_1d: float | None = None
     return_5d: float | None = None
@@ -536,6 +577,25 @@ class IngestionRequirementStatus(BaseModel):
     last_error: str | None = None
 
 
+class StockRankingReadinessItem(BaseModel):
+    asset_id: str
+    symbol: str
+    name: str | None = None
+    universe: str
+    ready: bool
+    complete_factor_count: int
+    total_factor_count: int
+    missing: list[str] = Field(default_factory=list)
+    requirements: list[IngestionRequirementStatus] = Field(default_factory=list)
+
+
+class StockRankingReadinessResponse(BaseModel):
+    universe: str
+    items: list[StockRankingReadinessItem]
+    total: int
+    ready_count: int
+
+
 class IngestionAssetReadiness(BaseModel):
     asset_id: str
     symbol: str
@@ -557,6 +617,13 @@ class IngestionScheduleRequest(BaseModel):
     max_assets: int = Field(default=25, ge=1, le=100)
     years: int = Field(default=10, ge=1, le=30)
     prices_only: bool = False
+    ranking_factor: str = Field(
+        default="aggregate",
+        pattern="^(aggregate|share_price_momentum|news_sentiment|retail_sentiment|earnings_momentum|institutional_buying)$",
+    )
+    ranking_universe: str = Field(default="tracked", pattern="^(tracked|all)$")
+    missing_only: bool = False
+    stale_only: bool = False
 
 
 class IngestionRunRequest(BaseModel):

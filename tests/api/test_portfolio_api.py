@@ -42,6 +42,103 @@ def test_portfolio_rename_conflicts_with_existing_name(tmp_path):
     assert conflict.json()["error"]["code"] == "conflict"
 
 
+def test_mapped_broker_portfolio_summary_uses_broker_positions_only(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'TFSA')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy)
+        VALUES
+            ('MU.TO', 'MU.TO', 'stock', 'CAD'),
+            ('OLD.TO', 'OLD.TO', 'stock', 'CAD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO broker_account(
+            provider,
+            provider_account_id,
+            provider_connection_id,
+            account_name,
+            account_type,
+            currency,
+            portfolio_id,
+            raw_json
+        )
+        VALUES ('snaptrade', 'acct-1', 'conn-1', 'TFSA', 'tfsa', 'CAD', 1, '{}')
+        """
+    )
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO txn(
+            txn_id, portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id
+        )
+        VALUES
+            (1, 1, '2026-01-02 10:00:00', 'buy', 'OLD.TO', 10, 50, 'CAD', 0, 1),
+            (2, 1, '2026-01-03 10:00:00', 'buy', 'MU.TO', 85, 25, 'CAD', 0, 1)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO broker_portfolio_position_map(
+            provider,
+            provider_account_id,
+            provider_position_id,
+            portfolio_id,
+            asset_id,
+            quantity,
+            book_cost,
+            currency
+        )
+        VALUES ('snaptrade', 'acct-1', 'pos-mu', 1, 'MU.TO', 85, 464.10, 'CAD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO broker_position_snapshot(
+            provider,
+            provider_account_id,
+            provider_position_id,
+            as_of_date,
+            asset_id,
+            symbol,
+            quantity,
+            market_value,
+            currency
+        )
+        VALUES ('snaptrade', 'acct-1', 'pos-mu', '2026-01-03', 'MU.TO', 'MU.TO', 85, 1200, 'CAD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+        VALUES ('MU.TO', '2026-01-04', 50, 50, 'test')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        portfolios = client.get("/api/v1/portfolios")
+        positions = client.get("/api/v1/portfolios/1/positions")
+
+    assert portfolios.status_code == 200
+    summary = portfolios.json()[0]
+    assert summary["position_count"] == 1
+    assert summary["market_value"] == 1200
+    assert summary["book_cost"] == 464.1
+    assert round(summary["unrealized_gain"] / summary["book_cost"], 4) == 1.5856
+
+    assert positions.status_code == 200
+    payload = positions.json()
+    assert [item["asset_id"] for item in payload] == ["MU.TO"]
+    assert payload[0]["market_value"] == 1200
+    assert payload[0]["latest_price"] == 1200 / 85
+    assert payload[0]["broker_linked"] is True
+
+
 def test_portfolio_overview_positions_and_transactions(tmp_path):
     db_path = tmp_path / "api.db"
     app = create_app(db_path)
@@ -584,7 +681,7 @@ def test_overview_updates_returns_all_price_movers(tmp_path):
     assert len(response.json()["price_movers"]) == 9
 
 
-def test_holding_signals_rank_buy_and_sell_signals_from_stored_metrics(tmp_path):
+def test_stock_rankings_rank_buy_and_sell_signals_from_stored_metrics(tmp_path):
     db_path = tmp_path / "api.db"
     app = create_app(db_path)
     db = DB(db_path)
@@ -608,9 +705,9 @@ def test_holding_signals_rank_buy_and_sell_signals_from_stored_metrics(tmp_path)
             [asset_id],
         )
     price_paths = {
-        "BUYME": [100, 104, 108, 112, 116, 120],
-        "SELLME": [100, 96, 92, 88, 84, 80],
-        "FLAT": [100, 100, 100, 100, 100, 100],
+        "BUYME": [100 + index for index in range(70)],
+        "SELLME": [170 - index for index in range(70)],
+        "FLAT": [100 for _index in range(70)],
     }
     for asset_id, closes in price_paths.items():
         for index, close in enumerate(closes):
@@ -621,31 +718,60 @@ def test_holding_signals_rank_buy_and_sell_signals_from_stored_metrics(tmp_path)
                 """,
                 [asset_id, index, close, close],
             )
+    db.conn.execute(
+        """
+        INSERT INTO stock_catalog(asset_id, symbol, exchange_code, ccy, name)
+        VALUES ('AAAACAT', 'AAAACAT', 'NYSE', 'USD', 'Catalog Only')
+        """
+    )
     db.conn.close()
 
     with TestClient(app) as client:
-        response = client.get("/api/v1/holdings/signals?timeframe=1w")
+        response = client.get(
+            "/api/v1/rankings/stocks?factor=share_price_momentum&universe=tracked&direction=buy"
+        )
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["timeframe"] == "1w"
-    assert "stored price momentum" in payload["methodology"]
+    assert payload["factor"] == "share_price_momentum"
+    assert payload["universe"] == "tracked"
+    assert "stored daily close momentum" in payload["methodology"]
     by_symbol = {item["symbol"]: item for item in payload["items"]}
-    assert set(list(by_symbol)[:2]) == {"BUYME", "SELLME"}
-    assert list(by_symbol)[-1] == "FLAT"
+    assert list(by_symbol)[0] == "BUYME"
     assert by_symbol["BUYME"]["action"] in {"Buy", "Strong Buy"}
     assert by_symbol["SELLME"]["action"] in {"Sell", "Strong Sell"}
-    assert round(by_symbol["BUYME"]["return_value"], 2) == 0.2
-    assert round(by_symbol["SELLME"]["return_value"], 2) == -0.2
-    assert by_symbol["BUYME"]["data_points"] == 6
-    assert by_symbol["BUYME"]["confidence"] == 0.67
+    assert by_symbol["BUYME"]["is_held"] is True
+    assert by_symbol["BUYME"]["confidence"] == 1
+    assert by_symbol["BUYME"]["data_status"] == "complete"
     assert [component["name"] for component in by_symbol["BUYME"]["components"]] == [
-        "Momentum",
-        "Valuation",
+        "Price trend",
         "Risk",
     ]
-    assert by_symbol["BUYME"]["components"][0]["contribution"] == 100
-    assert by_symbol["BUYME"]["components"][1]["contribution"] is None
+    assert by_symbol["BUYME"]["components"][0]["available"] is True
+    assert by_symbol["BUYME"]["components"][1]["available"] is True
+
+    with TestClient(app) as client:
+        sell_response = client.get(
+            "/api/v1/rankings/stocks?factor=share_price_momentum&universe=tracked&direction=sell"
+        )
+
+    assert sell_response.status_code == 200
+    assert sell_response.json()["items"][0]["symbol"] == "SELLME"
+
+    with TestClient(app) as client:
+        all_response = client.get(
+            "/api/v1/rankings/stocks?factor=aggregate&universe=all&direction=buy&limit=100"
+        )
+
+    all_payload = all_response.json()
+    assert all_response.status_code == 200
+    catalog_row = next(item for item in all_payload["items"] if item["symbol"] == "AAAACAT")
+    assert catalog_row["is_tracked"] is False
+    assert catalog_row["data_status"] == "missing"
+    assert any(
+        "Needs at least 22 stored daily closes for price momentum." in item
+        for item in catalog_row["missing_inputs"]
+    )
 
 
 def test_portfolio_positions_normalize_object_like_currency_code(tmp_path):
