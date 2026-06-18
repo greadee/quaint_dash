@@ -51,9 +51,11 @@ from dashboard.api.models import (
     StockRankingItem,
     StockRankingReadinessItem,
     StockRankingReadinessResponse,
+    StockRankingSnapshotRefreshResponse,
     StockRankingsResponse,
     TransactionSummary,
     ValuationContext,
+    WatchlistAssetResponse,
 )
 from dashboard.analytics import AnalyticsEngine, AnalyticsRepository, analytics_report_payload
 from dashboard.analytics.models import (
@@ -1955,6 +1957,119 @@ class PortfolioApiService:
             total=total,
             data_complete_count=sum(1 for item in items if item.data_status == "complete"),
             items=items[offset : offset + limit],
+        )
+
+    def refresh_stock_ranking_snapshots(
+        self,
+        *,
+        factor: str,
+        universe: str,
+        limit: int,
+    ) -> StockRankingSnapshotRefreshResponse:
+        factor = factor.lower().strip()
+        universe = universe.lower().strip()
+        if factor not in _STOCK_RANKING_FACTORS:
+            raise ValueError(f"Unsupported stock ranking factor: {factor}")
+        if universe not in {"tracked", "all"}:
+            raise ValueError("universe must be tracked or all")
+
+        snapshot_date = date.today()
+        rows = self._stock_ranking_universe(universe)[:limit]
+        refreshed = 0
+        for row in rows:
+            self._ensure_stock_asset(row["asset_id"])
+            item = self._stock_ranking_item(row, factor=factor)
+            self.conn.execute(
+                """
+                INSERT INTO stock_ranking_snapshot(
+                    asset_id, factor, snapshot_date, universe, score, action,
+                    confidence, data_status, latest_data_date, components_json,
+                    missing_inputs_json, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), now())
+                ON CONFLICT (asset_id, factor, snapshot_date)
+                DO UPDATE SET
+                    universe = EXCLUDED.universe,
+                    score = EXCLUDED.score,
+                    action = EXCLUDED.action,
+                    confidence = EXCLUDED.confidence,
+                    data_status = EXCLUDED.data_status,
+                    latest_data_date = EXCLUDED.latest_data_date,
+                    components_json = EXCLUDED.components_json,
+                    missing_inputs_json = EXCLUDED.missing_inputs_json,
+                    updated_at = now()
+                """,
+                [
+                    item.asset_id,
+                    factor,
+                    snapshot_date,
+                    universe,
+                    item.score,
+                    item.action,
+                    item.confidence,
+                    item.data_status,
+                    item.latest_data_date,
+                    json.dumps([component.model_dump(mode="json") for component in item.components]),
+                    json.dumps(item.missing_inputs),
+                ],
+            )
+            refreshed += 1
+        return StockRankingSnapshotRefreshResponse(
+            factor=factor,
+            universe=universe,
+            snapshot_date=snapshot_date,
+            refreshed_count=refreshed,
+        )
+
+    def add_to_watchlist(self, asset_id: str) -> WatchlistAssetResponse:
+        normalized = asset_id.upper().strip()
+        if not normalized:
+            raise LookupError("Asset not found")
+        self._ensure_stock_asset(normalized)
+        row = self.conn.execute(
+            "SELECT asset_id, COALESCE(symbol, asset_id) FROM asset WHERE asset_id = ?",
+            [normalized],
+        ).fetchone()
+        if row is None:
+            raise LookupError(f"Asset not found: {asset_id}")
+        self.conn.execute(
+            """
+            INSERT INTO watchlist_ticker(asset_id, is_active, source, created_at, updated_at)
+            VALUES (?, TRUE, 'manual', now(), now())
+            ON CONFLICT (asset_id)
+            DO UPDATE SET is_active = TRUE, source = 'manual', updated_at = now()
+            """,
+            [row[0]],
+        )
+        return WatchlistAssetResponse(asset_id=row[0], symbol=row[1], is_watchlisted=True)
+
+    def _ensure_stock_asset(self, asset_id: str) -> None:
+        exists = self.conn.execute(
+            "SELECT 1 FROM asset WHERE asset_id = ?",
+            [asset_id],
+        ).fetchone()
+        if exists:
+            return
+        row = self.conn.execute(
+            """
+            SELECT asset_id, symbol, exchange_code, asset_type, ccy, name, sector, industry, country, region
+            FROM stock_catalog
+            WHERE asset_id = ? OR UPPER(symbol) = UPPER(?)
+            LIMIT 1
+            """,
+            [asset_id, asset_id],
+        ).fetchone()
+        if row is None:
+            return
+        self.conn.execute(
+            """
+            INSERT INTO asset(
+                asset_id, symbol, exchange_code, asset_type, ccy, name,
+                sector, industry, country, region, track, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE, now(), now())
+            """,
+            list(row),
         )
 
     def _stock_ranking_universe(self, universe: str) -> list[dict[str, Any]]:

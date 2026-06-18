@@ -257,6 +257,28 @@ class StockRankingsResponse(BaseModel):
     items: list[StockRankingItem]
 
 
+class StockRankingSnapshotRefreshRequest(BaseModel):
+    factor: str = Field(
+        default="aggregate",
+        pattern="^(aggregate|share_price_momentum|news_sentiment|retail_sentiment|earnings_momentum|institutional_buying)$",
+    )
+    universe: str = Field(default="tracked", pattern="^(tracked|all)$")
+    limit: int = Field(default=100, ge=1, le=500)
+
+
+class StockRankingSnapshotRefreshResponse(BaseModel):
+    factor: str
+    universe: str
+    snapshot_date: date
+    refreshed_count: int
+
+
+class WatchlistAssetResponse(BaseModel):
+    asset_id: str
+    symbol: str
+    is_watchlisted: bool
+
+
 class ComparisonReturns(BaseModel):
     return_1d: float | None = None
     return_5d: float | None = None

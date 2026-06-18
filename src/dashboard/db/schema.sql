@@ -53,6 +53,22 @@ CREATE TABLE IF NOT EXISTS asset (
     updated_at TIMESTAMP NOT NULL DEFAULT now(),
 );
 
+CREATE TABLE IF NOT EXISTS stock_catalog (
+    asset_id TEXT PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    exchange_code TEXT NOT NULL,
+    asset_type TEXT NOT NULL DEFAULT 'stock',
+    ccy TEXT NOT NULL,
+    name TEXT NOT NULL,
+    sector TEXT,
+    industry TEXT,
+    country TEXT,
+    region TEXT,
+    source TEXT NOT NULL DEFAULT 'seed',
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
 ALTER TABLE asset ADD COLUMN IF NOT EXISTS symbol TEXT;
 ALTER TABLE asset ADD COLUMN IF NOT EXISTS exchange_code TEXT;
 ALTER TABLE asset ADD COLUMN IF NOT EXISTS asset_subtype TEXT;
@@ -85,6 +101,28 @@ CREATE TABLE IF NOT EXISTS watchlist_ticker (
 
     FOREIGN KEY (asset_id) REFERENCES asset(asset_id)
 );
+
+CREATE TABLE IF NOT EXISTS stock_ranking_snapshot (
+    asset_id TEXT NOT NULL,
+    factor TEXT NOT NULL,
+    snapshot_date DATE NOT NULL,
+    universe TEXT NOT NULL,
+    score DOUBLE PRECISION NOT NULL,
+    action TEXT NOT NULL,
+    confidence DOUBLE PRECISION NOT NULL,
+    data_status TEXT NOT NULL,
+    latest_data_date DATE,
+    components_json TEXT NOT NULL DEFAULT '[]',
+    missing_inputs_json TEXT NOT NULL DEFAULT '[]',
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (asset_id, factor, snapshot_date),
+    FOREIGN KEY (asset_id) REFERENCES asset(asset_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_ranking_snapshot_factor_date
+ON stock_ranking_snapshot(factor, snapshot_date);
 
 INSERT INTO portfolio_ticker (
     portfolio_id,

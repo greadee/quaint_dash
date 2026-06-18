@@ -156,6 +156,22 @@ export type StockRankingsResponse = {
   data_complete_count: number;
   items: StockRankingItem[];
 };
+export type StockRankingSnapshotRefreshPayload = {
+  factor: string;
+  universe: string;
+  limit?: number;
+};
+export type StockRankingSnapshotRefreshResponse = {
+  factor: string;
+  universe: string;
+  snapshot_date: string;
+  refreshed_count: number;
+};
+export type WatchlistAssetResponse = {
+  asset_id: string;
+  symbol: string;
+  is_watchlisted: boolean;
+};
 export type ComparisonReturns = {
   return_1d: number | null;
   return_5d: number | null;
@@ -487,6 +503,15 @@ export const api = {
     });
     return request<StockRankingsResponse>(`/rankings/stocks?${query.toString()}`);
   },
+  refreshStockRankingSnapshots: (payload: StockRankingSnapshotRefreshPayload) =>
+    request<StockRankingSnapshotRefreshResponse>("/rankings/stocks/snapshots", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  addWatchlistAsset: (assetId: string) =>
+    request<WatchlistAssetResponse>(`/watchlist/assets/${encodeURIComponent(assetId)}`, {
+      method: "POST",
+    }),
   comparison: (left: string, right?: string, benchmarkIndexId?: string) => {
     const params = new URLSearchParams({ left });
     if (right) params.set("right", right);

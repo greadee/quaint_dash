@@ -48,8 +48,11 @@ from dashboard.api.models import (
     PositionSummary,
     PricePointResponse,
     StockRankingReadinessResponse,
+    StockRankingSnapshotRefreshRequest,
+    StockRankingSnapshotRefreshResponse,
     StockRankingsResponse,
     TransactionSummary,
+    WatchlistAssetResponse,
 )
 from dashboard.api.services import (
     AssetApiService,
@@ -91,6 +94,26 @@ def stock_rankings(
         limit=limit,
         offset=offset,
     )
+
+
+@router.post("/rankings/stocks/snapshots", response_model=StockRankingSnapshotRefreshResponse)
+def refresh_stock_ranking_snapshots(
+    payload: StockRankingSnapshotRefreshRequest,
+    request: Request,
+    conn=Depends(get_connection),
+):
+    with request.app.state.write_lock:
+        return PortfolioApiService(conn).refresh_stock_ranking_snapshots(
+            factor=payload.factor,
+            universe=payload.universe,
+            limit=payload.limit,
+        )
+
+
+@router.post("/watchlist/assets/{asset_id}", response_model=WatchlistAssetResponse)
+def add_watchlist_asset(asset_id: str, request: Request, conn=Depends(get_connection)):
+    with request.app.state.write_lock:
+        return PortfolioApiService(conn).add_to_watchlist(asset_id)
 
 
 @router.get("/comparison", response_model=ComparisonResponse)

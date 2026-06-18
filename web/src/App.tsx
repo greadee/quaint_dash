@@ -205,7 +205,7 @@ export default function App() {
         </header>
         <RouteErrorBoundary key={location.pathname}>
           <Routes>
-            <Route path="/" element={<OverviewPage moverDefault={settings.moverDefault} />} />
+            <Route path="/" element={<OverviewPage moverDefault={settings.moverDefault} notify={notify} />} />
             <Route path="/portfolios" element={<PortfoliosPage notify={notify} />} />
             <Route path="/compare" element={<ComparePage />} />
             <Route path="/benchmarks" element={<BenchmarkBrowserPage notify={notify} />} />
@@ -274,7 +274,8 @@ class RouteErrorBoundary extends Component<{ children: ReactNode }, { error: Err
   }
 }
 
-function OverviewPage({ moverDefault }: { moverDefault: MoverDefault }) {
+function OverviewPage({ moverDefault, notify }: { moverDefault: MoverDefault; notify: (message: string, tone?: AppNotification["tone"]) => void }) {
+  const client = useQueryClient();
   const [showAllMovers, setShowAllMovers] = useState(moverDefault === "all");
   const [rankingFactor, setRankingFactor] = useState<StockRankingFactor>("aggregate");
   const [rankingUniverse, setRankingUniverse] = useState<StockRankingUniverse>("tracked");
@@ -292,6 +293,24 @@ function OverviewPage({ moverDefault }: { moverDefault: MoverDefault }) {
   const portfolios = useQuery({ queryKey: ["portfolios"], queryFn: api.portfolios });
   const brokers = useQuery({ queryKey: ["broker-accounts"], queryFn: api.brokerAccounts });
   const jobs = useQuery({ queryKey: ["jobs", "failed", ""], queryFn: () => api.ingestionJobs("failed") });
+  const snapshotRankings = useMutation({
+    mutationFn: () => api.refreshStockRankingSnapshots({
+      factor: rankingFactor,
+      universe: rankingUniverse,
+      limit: 100,
+    }),
+    onSuccess: (result) => notify(`Saved ${result.refreshed_count} ${stockRankingLabel(result.factor)} snapshot rows.`),
+    onError: (error) => notify(actionErrorMessage(error), "error"),
+  });
+  const addWatchlist = useMutation({
+    mutationFn: (assetId: string) => api.addWatchlistAsset(assetId),
+    onSuccess: (result) => {
+      notify(`${result.symbol} added to watchlist.`);
+      client.invalidateQueries({ queryKey: ["stock-rankings"] });
+      client.invalidateQueries({ queryKey: ["ranking-readiness"] });
+    },
+    onError: (error) => notify(actionErrorMessage(error), "error"),
+  });
   const portfolioCount = portfolios.data?.length ?? 0;
   const mappedAccounts = brokers.data?.filter((account) => account.portfolio_id != null).length ?? 0;
   const failedJobs = jobs.data?.length ?? 0;
@@ -327,6 +346,10 @@ function OverviewPage({ moverDefault }: { moverDefault: MoverDefault }) {
             <option value="buy">Best buys</option>
             <option value="sell">Best sells</option>
           </select>
+          <button onClick={() => snapshotRankings.mutate()} disabled={snapshotRankings.isPending}>
+            <Save size={14} />
+            Snapshot
+          </button>
           {stockRankingFactors.map((item) => (
             <button
               key={item.value}
@@ -346,7 +369,15 @@ function OverviewPage({ moverDefault }: { moverDefault: MoverDefault }) {
             <span>{signals.data.universe === "all" ? "all-stock catalog" : "tracked universe"}</span>
           </div>
           <div className="holding-signal-list">
-            {signals.data.items.map((item, index) => <StockRankingRow item={item} rank={index + 1} key={item.asset_id} />)}
+            {signals.data.items.map((item, index) => (
+              <StockRankingRow
+                item={item}
+                rank={index + 1}
+                key={item.asset_id}
+                onAddToWatchlist={(assetId) => addWatchlist.mutate(assetId)}
+                isAdding={addWatchlist.isPending && addWatchlist.variables === item.asset_id}
+              />
+            ))}
           </div>
           <p className="signal-methodology">{signals.data.methodology}</p>
         </>
@@ -386,17 +417,31 @@ function OverviewPage({ moverDefault }: { moverDefault: MoverDefault }) {
   </div>;
 }
 
-function StockRankingRow({ item, rank }: { item: StockRankingItem; rank: number }) {
+function stockRankingLabel(factor: string) {
+  return stockRankingFactors.find((item) => item.value === factor)?.label ?? factor;
+}
+
+function StockRankingRow({
+  item,
+  rank,
+  onAddToWatchlist,
+  isAdding,
+}: {
+  item: StockRankingItem;
+  rank: number;
+  onAddToWatchlist: (assetId: string) => void;
+  isAdding: boolean;
+}) {
   const tone = item.action.includes("Sell") ? "sell" : item.action.includes("Buy") ? "buy" : "hold";
   const scoreWidth = Math.min(100, Math.max(0, item.score_strength));
   const coverage = [item.is_held ? "held" : null, item.is_watchlisted ? "watchlist" : null, item.is_tracked ? "tracked" : null].filter(Boolean).join(" / ");
   return (
-    <Link to={`/asset/${item.asset_id}`} className={`holding-signal-row ${tone}`}>
+    <article className={`holding-signal-row ${tone}`}>
       <div className="signal-rank">{rank}</div>
-      <div className="signal-asset">
+      <Link to={`/asset/${item.asset_id}`} className="signal-asset">
         <strong>{item.symbol}</strong>
         <span>{[item.name ?? "Stock", item.exchange_code, coverage].filter(Boolean).join(" - ")}</span>
-      </div>
+      </Link>
       <div className={`signal-action ${tone}`}>
         <b>{item.action}</b>
         <span>{signedNumber(item.score, 0)} score</span>
@@ -416,10 +461,18 @@ function StockRankingRow({ item, rank }: { item: StockRankingItem; rank: number 
             <b>{component.name}</b>
             {component.score == null ? "missing" : signedNumber(component.score, 0)}
           </span>
-        ))}
+        ))}        
         {item.missing_inputs.slice(0, 2).map((missing) => <span className="missing" title={missing} key={missing}><b>Missing</b>{missing}</span>)}
       </div>
-    </Link>
+      <div className="signal-row-actions">
+        {item.is_watchlisted ? <span className="pill done">watchlist</span> : (
+          <button onClick={() => onAddToWatchlist(item.asset_id)} disabled={isAdding}>
+            <Plus size={14} />
+            Watchlist
+          </button>
+        )}
+      </div>
+    </article>
   );
 }
 

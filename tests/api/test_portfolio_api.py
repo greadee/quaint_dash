@@ -774,6 +774,90 @@ def test_stock_rankings_rank_buy_and_sell_signals_from_stored_metrics(tmp_path):
     )
 
 
+def test_stock_ranking_snapshot_refresh_persists_current_scores(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name, track)
+        VALUES ('AAPL', 'AAPL', 'stock', 'USD', 'Apple Inc.', TRUE)
+        """
+    )
+    for index in range(70):
+        db.conn.execute(
+            """
+            INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+            VALUES ('AAPL', DATE '2026-01-01' + CAST(? AS INTEGER), ?, ?, 'test')
+            """,
+            [index, 100 + index, 100 + index],
+        )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/rankings/stocks/snapshots",
+            json={"factor": "share_price_momentum", "universe": "tracked", "limit": 10},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["factor"] == "share_price_momentum"
+    assert payload["refreshed_count"] == 1
+
+    db = DB(db_path)
+    row = db.conn.execute(
+        """
+        SELECT factor, universe, score, action, data_status, components_json
+        FROM stock_ranking_snapshot
+        WHERE asset_id = 'AAPL'
+        """
+    ).fetchone()
+    db.conn.close()
+    assert row[0] == "share_price_momentum"
+    assert row[1] == "tracked"
+    assert row[2] > 0
+    assert row[3] in {"Strong Buy", "Buy"}
+    assert row[4] == "complete"
+    assert "Price trend" in row[5]
+
+
+def test_add_catalog_stock_to_watchlist_creates_untracked_asset(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        """
+        INSERT INTO stock_catalog(asset_id, symbol, exchange_code, ccy, name)
+        VALUES ('CATONLY', 'CATONLY', 'NASDAQ', 'USD', 'Catalog Only')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.post("/api/v1/watchlist/assets/CATONLY")
+        rankings = client.get("/api/v1/rankings/stocks?factor=aggregate&universe=tracked&direction=buy")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "asset_id": "CATONLY",
+        "symbol": "CATONLY",
+        "is_watchlisted": True,
+    }
+    assert any(item["asset_id"] == "CATONLY" and item["is_watchlisted"] for item in rankings.json()["items"])
+
+    db = DB(db_path)
+    asset = db.conn.execute(
+        "SELECT asset_id, symbol, track FROM asset WHERE asset_id = 'CATONLY'"
+    ).fetchone()
+    watchlist = db.conn.execute(
+        "SELECT asset_id, is_active, source FROM watchlist_ticker WHERE asset_id = 'CATONLY'"
+    ).fetchone()
+    db.conn.close()
+    assert asset == ("CATONLY", "CATONLY", False)
+    assert watchlist == ("CATONLY", True, "manual")
+
+
 def test_portfolio_positions_normalize_object_like_currency_code(tmp_path):
     db_path = tmp_path / "api.db"
     app = create_app(db_path)
