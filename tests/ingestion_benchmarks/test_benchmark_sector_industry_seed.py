@@ -84,3 +84,22 @@ def test_sector_universe_has_all_11_sector_benchmarks():
 
 def test_industry_theme_universe_is_not_empty():
     assert len(INDUSTRY_AND_THEME_INDICES) > 0
+
+
+def test_semiconductor_universe_keeps_smh_as_secondary_proxy_symbol():
+    semiconductor = next(
+        item for item in INDUSTRY_AND_THEME_INDICES if item["index_id"] == "IND_SEMICONDUCTORS"
+    )
+    smh_symbols = [
+        symbol for symbol in semiconductor["symbols"] if symbol["provider_symbol"] == "SMH"
+    ]
+
+    assert smh_symbols
+    assert {symbol["symbol_purpose"] for symbol in smh_symbols} == {
+        "price_daily",
+        "price_intraday",
+        "proxy_holdings",
+        "proxy_price",
+    }
+    assert all(symbol["is_proxy"] for symbol in smh_symbols)
+    assert not any(symbol["is_primary"] for symbol in smh_symbols)

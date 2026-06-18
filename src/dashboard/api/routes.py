@@ -21,6 +21,7 @@ from dashboard.api.models import (
     BenchmarkIndexDetail,
     BenchmarkIndexSummary,
     BenchmarkPricePoint,
+    BenchmarkReadinessResponse,
     BenchmarkRefreshRequest,
     BenchmarkSeedRequest,
     BrokerAccountMappingRequest,
@@ -165,6 +166,19 @@ def asset_benchmark_associations(asset_id: str, conn=Depends(get_connection)):
 @router.get("/benchmarks/defaults/portfolio/{portfolio_id}", response_model=BenchmarkDefaultResponse)
 def portfolio_default_benchmark(portfolio_id: int, conn=Depends(get_connection)):
     return BenchmarkApiService(conn).default_for_portfolio(portfolio_id)
+
+
+@router.get("/benchmarks/readiness", response_model=BenchmarkReadinessResponse)
+def benchmark_readiness(
+    category: str | None = Query(default=None, pattern="^(core_geo|sector|industry|theme|non_core|all)$"),
+    conn=Depends(get_connection),
+):
+    return BenchmarkApiService(conn).readiness(category=category)
+
+
+@router.get("/benchmarks/{index_id}/readiness", response_model=BenchmarkReadinessResponse)
+def benchmark_readiness_for_index(index_id: str, conn=Depends(get_connection)):
+    return BenchmarkApiService(conn).readiness(index_id=index_id)
 
 
 @router.get("/benchmarks/{index_id}", response_model=BenchmarkIndexDetail)

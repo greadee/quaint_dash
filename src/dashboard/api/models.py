@@ -397,6 +397,30 @@ class BenchmarkIndexDetail(BenchmarkIndexSummary):
     available_metric_range: BenchmarkAvailableMetricRange
 
 
+class BenchmarkReadinessRequirement(BaseModel):
+    key: str
+    label: str
+    ready: bool
+    detail: str
+    row_count: int = 0
+    latest_date: date | None = None
+
+
+class BenchmarkReadinessItem(BaseModel):
+    index_id: str
+    index_name: str
+    index_category: str
+    ready: bool
+    missing: list[str] = Field(default_factory=list)
+    requirements: list[BenchmarkReadinessRequirement] = Field(default_factory=list)
+
+
+class BenchmarkReadinessResponse(BaseModel):
+    items: list[BenchmarkReadinessItem]
+    total: int
+    ready_count: int
+
+
 class BenchmarkPricePoint(BaseModel):
     date: date
     open: float | None = None

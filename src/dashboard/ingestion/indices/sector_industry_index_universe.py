@@ -217,6 +217,10 @@ INDUSTRY_AND_THEME_INDICES = [
             {"provider": "yfinance", "provider_symbol": "SOXX", "symbol_purpose": "price_intraday", "is_primary": True, "is_proxy": True},
             {"provider": "fmp", "provider_symbol": "SOXX", "symbol_purpose": "proxy_holdings", "is_primary": True, "is_proxy": True},
             {"provider": "fmp", "provider_symbol": "SOXX", "symbol_purpose": "proxy_price", "is_primary": False, "is_proxy": True},
+            {"provider": "yfinance", "provider_symbol": "SMH", "symbol_purpose": "price_daily", "is_primary": False, "is_proxy": True},
+            {"provider": "yfinance", "provider_symbol": "SMH", "symbol_purpose": "price_intraday", "is_primary": False, "is_proxy": True},
+            {"provider": "fmp", "provider_symbol": "SMH", "symbol_purpose": "proxy_holdings", "is_primary": False, "is_proxy": True},
+            {"provider": "fmp", "provider_symbol": "SMH", "symbol_purpose": "proxy_price", "is_primary": False, "is_proxy": True},
         ],
     },
     {

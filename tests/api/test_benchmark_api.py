@@ -42,7 +42,10 @@ def _seed_benchmark(conn) -> None:
         )
         VALUES
             ('SP500', 'yfinance', '^GSPC', 'price_daily', TRUE, FALSE),
-            ('SP500', 'fmp', 'SPY', 'proxy_holdings', FALSE, TRUE)
+            ('SP500', 'fmp', 'SPY', 'proxy_holdings', FALSE, TRUE),
+            ('IND_SEMICONDUCTORS', 'yfinance', 'SOXX', 'price_daily', TRUE, TRUE),
+            ('IND_SEMICONDUCTORS', 'yfinance', 'SMH', 'price_daily', FALSE, TRUE),
+            ('IND_SEMICONDUCTORS', 'fmp', 'SMH', 'proxy_holdings', FALSE, TRUE)
         """
     )
     conn.execute(
@@ -180,6 +183,17 @@ def test_list_benchmarks_filters_and_latest_rollups(tmp_path):
     assert payload[0]["last_error"] == "proxy only"
 
 
+def test_list_benchmarks_searches_proxy_symbols_without_changing_canonical_index(tmp_path):
+    with _client_with_benchmarks(tmp_path) as client:
+        smh = client.get("/api/v1/benchmarks?q=SMH")
+        soxx = client.get("/api/v1/benchmarks?q=SOXX")
+
+    assert smh.status_code == 200
+    assert soxx.status_code == 200
+    assert [item["index_id"] for item in smh.json()] == ["IND_SEMICONDUCTORS"]
+    assert [item["index_id"] for item in soxx.json()] == ["IND_SEMICONDUCTORS"]
+
+
 def test_benchmark_detail_prices_metrics_constituents_and_exposures(tmp_path):
     with _client_with_benchmarks(tmp_path) as client:
         detail = client.get("/api/v1/benchmarks/SP500")
@@ -197,6 +211,24 @@ def test_benchmark_detail_prices_metrics_constituents_and_exposures(tmp_path):
     assert constituents.json()["total"] == 2
     assert constituents.json()["items"][0]["constituent_symbol"] == "MSFT"
     assert exposures.json()[0]["dimension_value"] == "Technology"
+
+
+def test_benchmark_readiness_reports_all_display_gaps(tmp_path):
+    with _client_with_benchmarks(tmp_path) as client:
+        response = client.get("/api/v1/benchmarks/readiness?category=core_geo")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    item = payload["items"][0]
+    by_key = {requirement["key"]: requirement for requirement in item["requirements"]}
+    assert item["index_id"] == "SP500"
+    assert item["ready"] is False
+    assert by_key["daily_prices"]["ready"] is False
+    assert by_key["daily_metrics"]["ready"] is True
+    assert by_key["composition"]["ready"] is True
+    assert by_key["constituents"]["ready"] is True
+    assert by_key["exposures"]["ready"] is True
 
 
 def test_missing_benchmark_returns_404(tmp_path):

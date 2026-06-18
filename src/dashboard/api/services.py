@@ -26,6 +26,9 @@ from dashboard.api.models import (
     BenchmarkIndexDetail,
     BenchmarkIndexSummary,
     BenchmarkPricePoint,
+    BenchmarkReadinessItem,
+    BenchmarkReadinessRequirement,
+    BenchmarkReadinessResponse,
     BenchmarkSymbol,
     BenchmarkSyncState,
     ComparisonAssetProfile,
@@ -197,10 +200,15 @@ class BenchmarkApiService:
             where.append(
                 "("
                 "LOWER(b.index_id) LIKE ? OR LOWER(b.index_name) LIKE ? OR "
-                "LOWER(b.index_family) LIKE ? OR LOWER(COALESCE(b.notes, '')) LIKE ?"
+                "LOWER(b.index_family) LIKE ? OR LOWER(COALESCE(b.notes, '')) LIKE ? OR "
+                "EXISTS ("
+                "SELECT 1 FROM benchmark_index_symbol sym "
+                "WHERE sym.index_id = b.index_id "
+                "AND (LOWER(sym.provider_symbol) LIKE ? OR LOWER(sym.provider) LIKE ? OR LOWER(sym.symbol_purpose) LIKE ?)"
+                ")"
                 ")"
             )
-            params.extend([like, like, like, like])
+            params.extend([like, like, like, like, like, like, like])
         if category:
             where.append("b.index_category = ?")
             params.append(category)
@@ -369,6 +377,169 @@ class BenchmarkApiService:
                 first_metric_date=metric_range[0],
                 last_metric_date=metric_range[1],
             ),
+        )
+
+    def readiness(
+        self,
+        *,
+        index_id: str | None = None,
+        category: str | None = None,
+    ) -> BenchmarkReadinessResponse:
+        where = ["b.is_active = TRUE"]
+        params: list[Any] = []
+        if index_id:
+            where.append("UPPER(b.index_id) = UPPER(?)")
+            params.append(index_id)
+        elif category and category != "all":
+            if category == "non_core":
+                where.append("b.index_category IN ('sector', 'industry', 'theme')")
+            else:
+                where.append("b.index_category = ?")
+                params.append(category)
+        rows = self.conn.execute(
+            f"""
+            SELECT b.index_id, b.index_name, b.index_category
+            FROM benchmark_index b
+            WHERE {" AND ".join(where)}
+            ORDER BY b.is_core DESC, b.index_category, b.index_id
+            """,
+            params,
+        ).fetchall()
+        items = [self._readiness_item(row[0], row[1], row[2]) for row in rows]
+        return BenchmarkReadinessResponse(
+            items=items,
+            total=len(items),
+            ready_count=sum(1 for item in items if item.ready),
+        )
+
+    def _readiness_item(
+        self,
+        index_id: str,
+        index_name: str,
+        index_category: str,
+    ) -> BenchmarkReadinessItem:
+        requirements = [
+            self._benchmark_price_requirement(index_id),
+            self._benchmark_metric_requirement(index_id),
+            self._benchmark_composition_requirement(index_id),
+            self._benchmark_constituent_requirement(index_id),
+            self._benchmark_exposure_requirement(index_id),
+        ]
+        missing = [requirement.label for requirement in requirements if not requirement.ready]
+        return BenchmarkReadinessItem(
+            index_id=index_id,
+            index_name=index_name,
+            index_category=index_category,
+            ready=not missing,
+            missing=missing,
+            requirements=requirements,
+        )
+
+    def _benchmark_price_requirement(self, index_id: str) -> BenchmarkReadinessRequirement:
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*), MAX(price_date)
+            FROM benchmark_index_daily_price
+            WHERE index_id = ?
+            """,
+            [index_id],
+        ).fetchone()
+        count = int(row[0])
+        return BenchmarkReadinessRequirement(
+            key="daily_prices",
+            label="252 daily prices",
+            ready=count >= 252,
+            detail=f"{count} daily price row(s)",
+            row_count=count,
+            latest_date=row[1],
+        )
+
+    def _benchmark_metric_requirement(self, index_id: str) -> BenchmarkReadinessRequirement:
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*), MAX(metric_date)
+            FROM benchmark_index_daily_metric
+            WHERE index_id = ?
+              AND return_252d IS NOT NULL
+              AND volatility_252d_ann IS NOT NULL
+            """,
+            [index_id],
+        ).fetchone()
+        count = int(row[0])
+        return BenchmarkReadinessRequirement(
+            key="daily_metrics",
+            label="252d return and volatility",
+            ready=count > 0,
+            detail=f"{count} complete 252d metric row(s)",
+            row_count=count,
+            latest_date=row[1],
+        )
+
+    def _benchmark_composition_requirement(self, index_id: str) -> BenchmarkReadinessRequirement:
+        row = self.conn.execute(
+            """
+            SELECT COALESCE(SUM(constituent_count), 0), MAX(snapshot_date)
+            FROM benchmark_index_composition_snapshot
+            WHERE index_id = ?
+            """,
+            [index_id],
+        ).fetchone()
+        count = int(row[0] or 0)
+        return BenchmarkReadinessRequirement(
+            key="composition",
+            label="Composition snapshot",
+            ready=count > 0,
+            detail=f"{count} constituent(s) reported by composition snapshot",
+            row_count=count,
+            latest_date=row[1],
+        )
+
+    def _benchmark_constituent_requirement(self, index_id: str) -> BenchmarkReadinessRequirement:
+        snap_date = self._latest_snapshot_date(index_id)
+        count = 0
+        if snap_date is not None:
+            count = int(
+                self.conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM benchmark_index_constituent
+                    WHERE index_id = ? AND snapshot_date = ?
+                    """,
+                    [index_id, snap_date],
+                ).fetchone()[0]
+            )
+        return BenchmarkReadinessRequirement(
+            key="constituents",
+            label="Constituent rows",
+            ready=count > 0,
+            detail=f"{count} constituent row(s) in latest snapshot",
+            row_count=count,
+            latest_date=snap_date,
+        )
+
+    def _benchmark_exposure_requirement(self, index_id: str) -> BenchmarkReadinessRequirement:
+        snap_date = self._latest_exposure_snapshot_date(index_id)
+        count = 0
+        if snap_date is not None:
+            count = int(
+                self.conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM benchmark_index_exposure_snapshot
+                    WHERE index_id = ?
+                      AND snapshot_date = ?
+                      AND dimension_type IN ('sector', 'industry', 'country', 'currency')
+                    """,
+                    [index_id, snap_date],
+                ).fetchone()[0]
+            )
+        return BenchmarkReadinessRequirement(
+            key="exposures",
+            label="Exposure rows",
+            ready=count > 0,
+            detail=f"{count} exposure row(s) in latest snapshot",
+            row_count=count,
+            latest_date=snap_date,
         )
 
     def prices(

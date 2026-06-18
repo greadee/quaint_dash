@@ -22,7 +22,7 @@ from dashboard.db.db_conn import DB, init_db
 from dashboard.models.storage import DashboardManager
 
 API_VERSION = "phase5.api.v1"
-DEFAULT_DB_PATH = Path("data/persistent_db.db")
+DEFAULT_DB_PATH = Path(os.getenv("DASHBOARD_DB_PATH", "data/persistent_db.db"))
 DEFAULT_WEB_DIST = Path(__file__).resolve().parents[3] / "web" / "dist"
 LOGGER = logging.getLogger(__name__)
 
