@@ -6,6 +6,10 @@ from fastapi.testclient import TestClient
 
 from dashboard.api.app import create_app
 from dashboard.db.db_conn import DB
+from dashboard.ingestion.indices.index_ingestion_service import BenchmarkIndexIngestionService
+from dashboard.ingestion.indices.index_models import IndexConstituent
+
+from tests.ingestion_benchmarks.benchmark_fakes import FakeDailyPriceProvider
 
 
 def _seed_benchmark(conn) -> None:
@@ -384,3 +388,103 @@ def test_bulk_refresh_uses_scheduler_path(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert response.json()["result"]["job_type"] == "core_daily_7"
     assert response.json()["result"]["target_count"] == 2
+
+
+def test_harden_selected_benchmark_populates_display_readiness(tmp_path, monkeypatch):
+    class DisplayReadyProvider(FakeDailyPriceProvider):
+        def __init__(self):
+            super().__init__(closes=[100 + index for index in range(253)])
+
+        def get_constituents(self, index_id, provider_symbol, is_proxy):
+            return [
+                IndexConstituent(
+                    index_id=index_id,
+                    constituent_symbol="MSFT",
+                    constituent_name="Microsoft",
+                    exchange_code="XNAS",
+                    country_code="US",
+                    currency="USD",
+                    sector="Technology",
+                    industry="Software",
+                    weight_pct=60.0,
+                    market_cap=3000,
+                    source="fake",
+                    is_proxy=is_proxy,
+                ),
+                IndexConstituent(
+                    index_id=index_id,
+                    constituent_symbol="NVDA",
+                    constituent_name="NVIDIA",
+                    exchange_code="XNAS",
+                    country_code="US",
+                    currency="USD",
+                    sector="Technology",
+                    industry="Semiconductors",
+                    weight_pct=40.0,
+                    market_cap=2500,
+                    source="fake",
+                    is_proxy=is_proxy,
+                ),
+            ]
+
+    def fake_service(conn):
+        provider = DisplayReadyProvider()
+        return BenchmarkIndexIngestionService(conn, {"fmp": provider, "yfinance": provider})
+
+    monkeypatch.setattr("dashboard.api.services.create_index_ingestion_service", fake_service)
+
+    app = create_app(tmp_path / "api.db")
+    with TestClient(app) as client:
+        result = client.post(
+            "/api/v1/benchmarks/SP500/harden",
+            json={"lookback_days": 253, "include_composition": True},
+        )
+        readiness = client.get("/api/v1/benchmarks/SP500/readiness")
+
+    assert result.status_code == 200
+    assert result.json()["result"]["daily_price_rows"] == 253
+    assert result.json()["result"]["metric_rows"] > 0
+    assert result.json()["result"]["composition_rows"] == 2
+    assert result.json()["result"]["ready"] is True
+    assert readiness.json()["ready_count"] == 1
+    assert readiness.json()["items"][0]["missing"] == []
+
+
+def test_bulk_harden_uses_category_and_reports_missing_count(tmp_path, monkeypatch):
+    calls: list[tuple[str, str]] = []
+
+    class FakeService:
+        def seed_all_universes(self):
+            calls.append(("seed", "all"))
+            return 2
+
+        def ingest_daily_prices(self, index_id, start, end):
+            calls.append(("prices", index_id))
+            return 2
+
+        def compute_daily_metrics(self, index_id):
+            calls.append(("metrics", index_id))
+            return 1
+
+        def ingest_composition(self, index_id, snapshot_date):
+            calls.append(("composition", index_id))
+            return 1
+
+        def compute_relative_metrics(self, index_id, comparison_index_id):
+            calls.append(("relative", index_id))
+            return 0
+
+    monkeypatch.setattr("dashboard.api.services.create_index_ingestion_service", lambda _conn: FakeService())
+
+    with _client_with_benchmarks(tmp_path) as client:
+        response = client.post(
+            "/api/v1/benchmarks/harden",
+            json={"category": "industry", "lookback_days": 253},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()["result"]
+    assert payload["category"] == "industry"
+    assert payload["target_count"] == 1
+    assert ("prices", "IND_SEMICONDUCTORS") in calls
+    assert ("composition", "IND_SEMICONDUCTORS") in calls

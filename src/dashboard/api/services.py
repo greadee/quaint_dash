@@ -898,6 +898,82 @@ class BenchmarkApiService:
             raise ValueError(f"Unsupported benchmark refresh category: {category}")
         return CommandApiService.action_result(result)
 
+    def harden_benchmark(
+        self,
+        *,
+        index_id: str,
+        lookback_days: int = 730,
+        include_composition: bool = True,
+        include_relative_metrics: bool = True,
+        comparison_index_id: str = "SP500",
+    ) -> dict[str, Any]:
+        service = create_index_ingestion_service(self.conn)
+        service.seed_all_universes()
+        self._require_benchmark(index_id)
+        end = date.today()
+        start = end - timedelta(days=lookback_days)
+        daily_price_rows = service.ingest_daily_prices(index_id, start, end)
+        metric_rows = service.compute_daily_metrics(index_id)
+        composition_rows = 0
+        if include_composition:
+            composition_rows = service.ingest_composition(index_id, end)
+        relative_metric_rows = 0
+        if include_relative_metrics and index_id.upper() != comparison_index_id.upper():
+            relative_metric_rows = service.compute_relative_metrics(index_id, comparison_index_id)
+        readiness = self.readiness(index_id=index_id)
+        ready = readiness.ready_count == readiness.total and readiness.total > 0
+        return {
+            "index_id": index_id,
+            "job_type": "benchmark_harden",
+            "target_count": 1,
+            "daily_price_rows": daily_price_rows,
+            "metric_rows": metric_rows,
+            "composition_rows": composition_rows,
+            "relative_metric_rows": relative_metric_rows,
+            "ready": ready,
+            "missing": readiness.items[0].missing if readiness.items else ["Benchmark not found"],
+        }
+
+    def harden_benchmarks(
+        self,
+        *,
+        category: str = "all",
+        lookback_days: int = 730,
+        include_composition: bool = True,
+        include_relative_metrics: bool = True,
+        comparison_index_id: str = "SP500",
+    ) -> dict[str, Any]:
+        service = create_index_ingestion_service(self.conn)
+        service.seed_all_universes()
+        index_ids = self._benchmark_ids_for_hardening(category)
+        totals = {
+            "daily_price_rows": 0,
+            "metric_rows": 0,
+            "composition_rows": 0,
+            "relative_metric_rows": 0,
+        }
+        end = date.today()
+        start = end - timedelta(days=lookback_days)
+        for current_id in index_ids:
+            totals["daily_price_rows"] += service.ingest_daily_prices(current_id, start, end)
+            totals["metric_rows"] += service.compute_daily_metrics(current_id)
+            if include_composition:
+                try:
+                    totals["composition_rows"] += service.ingest_composition(current_id, end)
+                except ValueError:
+                    pass
+            if include_relative_metrics and current_id.upper() != comparison_index_id.upper():
+                totals["relative_metric_rows"] += service.compute_relative_metrics(current_id, comparison_index_id)
+        readiness = self.readiness(category=category)
+        return {
+            "category": category,
+            "job_type": "benchmark_bulk_harden",
+            "target_count": len(index_ids),
+            **totals,
+            "ready_count": readiness.ready_count,
+            "missing_count": readiness.total - readiness.ready_count,
+        }
+
     def _run_core_refresh(self, scheduler, job_type: str, lookback_days: int, interval: str):
         if job_type == "daily_price":
             return scheduler.run_core_daily_refresh(lookback_days=lookback_days)
@@ -1101,6 +1177,29 @@ class BenchmarkApiService:
                 """
             ).fetchone()[0]
         )
+
+    def _benchmark_ids_for_hardening(self, category: str) -> list[str]:
+        if category == "all":
+            where = "is_active = TRUE"
+            params: list[Any] = []
+        elif category == "non_core":
+            where = "is_active = TRUE AND index_category IN ('sector', 'industry', 'theme')"
+            params = []
+        else:
+            where = "is_active = TRUE AND index_category = ?"
+            params = [category]
+        return [
+            row[0]
+            for row in self.conn.execute(
+                f"""
+                SELECT index_id
+                FROM benchmark_index
+                WHERE {where}
+                ORDER BY is_core DESC, index_category, index_id
+                """,
+                params,
+            ).fetchall()
+        ]
 
 
 _ENRICHED_ASSET_JOIN = """

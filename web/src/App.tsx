@@ -1022,6 +1022,28 @@ function BenchmarkBrowserPage({ notify }: { notify: (message: string, tone?: App
     },
     onError: (error) => notify(actionErrorMessage(error), "error"),
   });
+  const hardenSelected = useMutation({
+    mutationFn: (id: string) => api.hardenBenchmark(id, { lookback_days: 730 }),
+    onSuccess: (result) => {
+      notify(`Benchmark hardened: ${formatActionResult(result.result)}`);
+      client.invalidateQueries({ queryKey: ["benchmarks"] });
+      client.invalidateQueries({ queryKey: ["benchmark-detail"] });
+      client.invalidateQueries({ queryKey: ["benchmark-prices"] });
+      client.invalidateQueries({ queryKey: ["benchmark-metrics"] });
+      client.invalidateQueries({ queryKey: ["benchmark-exposures"] });
+      client.invalidateQueries({ queryKey: ["benchmark-constituents"] });
+    },
+    onError: (error) => notify(actionErrorMessage(error), "error"),
+  });
+  const hardenBroad = useMutation({
+    mutationFn: () => api.hardenBenchmarks({ category: "non_core", lookback_days: 730 }),
+    onSuccess: (result) => {
+      notify(`Non-core benchmarks hardened: ${formatActionResult(result.result)}`);
+      client.invalidateQueries({ queryKey: ["benchmarks"] });
+      client.invalidateQueries({ queryKey: ["benchmark-detail"] });
+    },
+    onError: (error) => notify(actionErrorMessage(error), "error"),
+  });
   const selectBenchmark = (id: string) => {
     setParams((current) => {
       const next = new URLSearchParams(current);
@@ -1036,7 +1058,9 @@ function BenchmarkBrowserPage({ notify }: { notify: (message: string, tone?: App
       <div><p className="eyebrow">Benchmark index browser</p><h1>Benchmarks</h1><p className="page-subtitle">Browse seeded indexes, inspect price and composition coverage, and run explicit refresh actions.</p></div>
       <div className="actions">
         <button disabled={seed.isPending} onClick={() => seed.mutate({ scope: "core" })}><Database size={16}/>Seed core</button>
+        <button disabled={seed.isPending} onClick={() => seed.mutate({ scope: "all" })}><Database size={16}/>Seed all</button>
         <button disabled={refreshBroad.isPending} onClick={() => window.confirm("Refresh daily prices for all core benchmarks?") && refreshBroad.mutate()}><RefreshCw size={16}/>Core daily</button>
+        <button disabled={hardenBroad.isPending} onClick={() => window.confirm("Harden all sector, industry, and theme benchmarks? This runs long lookback price, metrics, composition, and relative metric work.") && hardenBroad.mutate()}><ShieldCheck size={16}/>Harden non-core</button>
       </div>
     </div>
     <section className="card benchmark-layout">
@@ -1076,6 +1100,7 @@ function BenchmarkBrowserPage({ notify }: { notify: (message: string, tone?: App
             <button disabled={refreshOne.isPending} onClick={() => refreshOne.mutate({ id: detail.data.index_id, jobType: "daily_price" })}><RefreshCw size={16}/>Prices</button>
             <button disabled={refreshOne.isPending} onClick={() => refreshOne.mutate({ id: detail.data.index_id, jobType: "metrics" })}><Activity size={16}/>Metrics</button>
             <button disabled={refreshOne.isPending} onClick={() => window.confirm(`Refresh composition for ${detail.data.index_id}?`) && refreshOne.mutate({ id: detail.data.index_id, jobType: "composition" })}><Database size={16}/>Composition</button>
+            <button disabled={hardenSelected.isPending} onClick={() => window.confirm(`Harden all display data for ${detail.data.index_id}?`) && hardenSelected.mutate(detail.data.index_id)}><ShieldCheck size={16}/>Harden</button>
           </div>
           <div className="benchmark-data-grid">
             <AnalyticsBlock title="Metric range">

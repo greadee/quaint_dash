@@ -356,6 +356,15 @@ export type BenchmarkRefreshPayload = {
 export type BenchmarkBulkRefreshPayload = BenchmarkRefreshPayload & {
   category: "core_geo" | "sector" | "industry" | "theme" | "non_core" | "all";
 };
+export type BenchmarkHardenPayload = {
+  lookback_days?: number;
+  include_composition?: boolean;
+  include_relative_metrics?: boolean;
+  comparison_index_id?: string;
+};
+export type BenchmarkBulkHardenPayload = BenchmarkHardenPayload & {
+  category: "core_geo" | "sector" | "industry" | "theme" | "non_core" | "all";
+};
 export type ComparisonResponse = {
   left: ComparisonAsset;
   right: ComparisonAsset | null;
@@ -566,6 +575,13 @@ export const api = {
     }),
   refreshBenchmarks: (payload: BenchmarkBulkRefreshPayload) =>
     request<ActionResult>("/benchmarks/refresh", { method: "POST", body: JSON.stringify(payload) }),
+  hardenBenchmark: (id: string, payload: BenchmarkHardenPayload) =>
+    request<ActionResult>(`/benchmarks/${encodeURIComponent(id)}/harden`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  hardenBenchmarks: (payload: BenchmarkBulkHardenPayload) =>
+    request<ActionResult>("/benchmarks/harden", { method: "POST", body: JSON.stringify(payload) }),
   portfolios: () => request<Portfolio[]>("/portfolios"),
   aggregatePortfolio: () => request<Portfolio>("/portfolios/aggregate/overview"),
   positions: (id: number) => request<Position[]>(`/portfolios/${id}/positions`),

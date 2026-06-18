@@ -13,6 +13,7 @@ from dashboard.api.models import (
     AssetDetail,
     AssetHoldingSummary,
     AssetSearchResult,
+    BenchmarkBulkHardenRequest,
     BenchmarkBulkRefreshRequest,
     BenchmarkConstituent,
     BenchmarkDailyMetric,
@@ -23,6 +24,7 @@ from dashboard.api.models import (
     BenchmarkPricePoint,
     BenchmarkReadinessResponse,
     BenchmarkRefreshRequest,
+    BenchmarkHardenRequest,
     BenchmarkSeedRequest,
     BrokerAccountMappingRequest,
     BrokerAccountResponse,
@@ -176,6 +178,23 @@ def benchmark_readiness(
     return BenchmarkApiService(conn).readiness(category=category)
 
 
+@router.post("/benchmarks/harden", response_model=ActionResult)
+def benchmark_bulk_harden(
+    payload: BenchmarkBulkHardenRequest,
+    request: Request,
+    conn=Depends(get_connection),
+):
+    with request.app.state.write_lock:
+        result = BenchmarkApiService(conn).harden_benchmarks(
+            category=payload.category,
+            lookback_days=payload.lookback_days,
+            include_composition=payload.include_composition,
+            include_relative_metrics=payload.include_relative_metrics,
+            comparison_index_id=payload.comparison_index_id,
+        )
+    return ActionResult(result=result)
+
+
 @router.get("/benchmarks/{index_id}/readiness", response_model=BenchmarkReadinessResponse)
 def benchmark_readiness_for_index(index_id: str, conn=Depends(get_connection)):
     return BenchmarkApiService(conn).readiness(index_id=index_id)
@@ -249,6 +268,24 @@ def benchmark_refresh(
             job_type=payload.job_type,
             lookback_days=payload.lookback_days,
             interval=payload.interval,
+            comparison_index_id=payload.comparison_index_id,
+        )
+    return ActionResult(result=result)
+
+
+@router.post("/benchmarks/{index_id}/harden", response_model=ActionResult)
+def benchmark_harden(
+    index_id: str,
+    payload: BenchmarkHardenRequest,
+    request: Request,
+    conn=Depends(get_connection),
+):
+    with request.app.state.write_lock:
+        result = BenchmarkApiService(conn).harden_benchmark(
+            index_id=index_id,
+            lookback_days=payload.lookback_days,
+            include_composition=payload.include_composition,
+            include_relative_metrics=payload.include_relative_metrics,
             comparison_index_id=payload.comparison_index_id,
         )
     return ActionResult(result=result)

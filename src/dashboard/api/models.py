@@ -517,6 +517,17 @@ class BenchmarkBulkRefreshRequest(BenchmarkRefreshRequest):
     category: str = Field(pattern="^(core_geo|sector|industry|theme|non_core|all)$")
 
 
+class BenchmarkHardenRequest(BaseModel):
+    lookback_days: int = Field(default=730, ge=252, le=3650)
+    include_composition: bool = True
+    include_relative_metrics: bool = True
+    comparison_index_id: str = Field(default="SP500", min_length=1, max_length=64)
+
+
+class BenchmarkBulkHardenRequest(BenchmarkHardenRequest):
+    category: str = Field(default="all", pattern="^(core_geo|sector|industry|theme|non_core|all)$")
+
+
 class BrokerUserCreate(BaseModel):
     user_key: str = Field(min_length=1, max_length=100)
 
