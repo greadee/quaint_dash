@@ -38,6 +38,7 @@ import {
   type BenchmarkIndexSummary,
   type BenchmarkPricePoint,
   type ComparisonAsset,
+  type SectorComparisonContext,
   type IngestionReadiness,
   type IngestionBackgroundStatus,
   type Portfolio,
@@ -770,6 +771,7 @@ function ComparePage() {
       </section>
       <CompareMetricMatrix left={data.left} right={data.right} />
       <section className="compare-grid">
+        <CompareSectorContextCard context={data.sector_context} left={data.left} right={data.right} />
         <section className="card">
           <div className="card-heading"><div><p className="eyebrow">Insights</p><h2>Plain English readout</h2></div><span>{data.insights.length} notes</span></div>
           {data.insights.length ? <div className="insight-list">{data.insights.map((item) => <p key={item}>{item}</p>)}</div> : <EmptyRow text="Not enough comparison data yet. Add price history and income statements for richer insights." />}
@@ -852,6 +854,28 @@ function CompareMetricMatrix({ left, right }: { left: ComparisonAsset; right: Co
         <strong className={row.delta.className}>{row.delta.label}</strong>
       </div>)}
     </div>
+  </section>;
+}
+
+function CompareSectorContextCard({ context, left, right }: { context: SectorComparisonContext | null; left: ComparisonAsset; right: ComparisonAsset | null }) {
+  const diff = (value: number | null | undefined, kind: "money" | "number" | "percent" = "number") => {
+    if (value == null) return "Unavailable";
+    if (kind === "money") return money(value, left.currency);
+    if (kind === "percent") return percent(value);
+    return signedNumber(value, 2);
+  };
+  return <section className="card">
+    <div className="card-heading"><div><p className="eyebrow">Sector context</p><h2>{context?.sector ?? left.sector ?? "Unclassified"}</h2></div><span>{context?.benchmark?.index_id ?? "no sector benchmark"}</span></div>
+    {context ? <div className="comparison-table">
+      <ComparisonRow label="Median P/E" left={ratio(context.median.pe_ratio)} right={`Diff ${diff(context.left_diff_to_median.pe_ratio)}`} />
+      <ComparisonRow label="Median price/sales" left={ratio(context.median.price_to_sales)} right={`Diff ${diff(context.left_diff_to_median.price_to_sales)}`} />
+      <ComparisonRow label="Median market cap" left={money(context.median.market_cap, left.currency)} right={`Diff ${diff(context.left_diff_to_median.market_cap, "money")}`} />
+      <ComparisonRow label="Median beta" left={number(context.median.beta)} right={`Diff ${diff(context.left_diff_to_median.beta)}`} />
+      <ComparisonRow label="Median 21d return" left={percent(context.median.return_21d)} right={`Diff ${diff(context.left_diff_to_median.return_21d, "percent")}`} />
+      {right && context.right_diff_to_median ? <ComparisonRow label={`${right.symbol} 21d diff`} left={diff(context.right_diff_to_median.return_21d, "percent")} /> : null}
+      <ComparisonRow label="Sector benchmark 21d" left={percent(context.benchmark?.return_21d)} right={context.benchmark?.name ?? "Unavailable"} />
+      <ComparisonRow label="Sector benchmark 252d" left={percent(context.benchmark?.return_252d)} right={percent(context.benchmark?.volatility_252d)} />
+    </div> : <EmptyRow text="Add sector classification and same-sector peers to show sector median context." />}
   </section>;
 }
 

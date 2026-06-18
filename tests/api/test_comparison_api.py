@@ -43,13 +43,17 @@ def test_asset_comparison_returns_valuation_context_and_benchmark(tmp_path):
     db.conn.execute(
         """
         INSERT INTO benchmark_index(index_id, index_name, index_family, index_category, currency, is_core)
-        VALUES ('SP500', 'S&P 500', 'Core', 'core_geo', 'USD', TRUE)
+        VALUES
+            ('SP500', 'S&P 500', 'Core', 'core_geo', 'USD', TRUE),
+            ('SEC_TECH', 'Information Technology Sector', 'Select Sector SPDR', 'sector', 'USD', FALSE)
         """
     )
     db.conn.execute(
         """
         INSERT INTO benchmark_index_daily_metric(index_id, metric_date, return_1d, return_21d, return_252d, volatility_252d_ann)
-        VALUES ('SP500', '2026-01-02', 0.01, 0.03, 0.11, 0.18)
+        VALUES
+            ('SP500', '2026-01-02', 0.01, 0.03, 0.11, 0.18),
+            ('SEC_TECH', '2026-01-02', 0.02, 0.05, 0.15, 0.24)
         """
     )
     db.conn.close()
@@ -69,7 +73,37 @@ def test_asset_comparison_returns_valuation_context_and_benchmark(tmp_path):
     assert round(payload["left"]["valuation"]["sector_pe_premium"], 4) == -0.0244
     assert payload["left"]["returns"]["return_1d"] == 20 / 18 - 1
     assert payload["benchmark"]["return_252d"] == 0.11
+    assert payload["sector_context"]["sector"] == "Technology"
+    assert payload["sector_context"]["benchmark"]["index_id"] == "SEC_TECH"
+    assert payload["sector_context"]["benchmark"]["return_252d"] == 0.15
+    assert payload["sector_context"]["median"]["pe_ratio"] == 20
+    assert round(payload["sector_context"]["median"]["price_to_sales"], 4) == 1.7778
+    assert payload["sector_context"]["median"]["market_cap"] == 2000
+    assert payload["sector_context"]["median"]["beta"] == 1.5
+    assert payload["sector_context"]["left_diff_to_median"]["pe_ratio"] == 0
+    assert payload["sector_context"]["right_diff_to_median"]["pe_ratio"] == 5
     assert any("historical P/E average" in item for item in payload["insights"])
+
+
+def test_comparison_keeps_sector_context_null_without_sector(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name, sector, industry, country, mkt_cap, market_beta)
+        VALUES ('CASHLIKE', 'CASHLIKE', 'stock', 'USD', 'Unclassified Holding', NULL, NULL, 'US', NULL, NULL)
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/comparison?left=CASHLIKE")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["left"]["symbol"] == "CASHLIKE"
+    assert payload["sector_context"] is None
 
 
 def test_comparison_requires_existing_asset(tmp_path):

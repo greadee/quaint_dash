@@ -218,6 +218,22 @@ export type BenchmarkComparison = {
   return_252d: number | null;
   volatility_252d: number | null;
 };
+export type SectorComparisonValues = {
+  pe_ratio: number | null;
+  price_to_sales: number | null;
+  market_cap: number | null;
+  beta: number | null;
+  return_1d: number | null;
+  return_21d: number | null;
+  return_252d: number | null;
+};
+export type SectorComparisonContext = {
+  sector: string;
+  median: SectorComparisonValues;
+  left_diff_to_median: SectorComparisonValues;
+  right_diff_to_median: SectorComparisonValues | null;
+  benchmark: BenchmarkComparison | null;
+};
 export type BenchmarkIndexSummary = {
   index_id: string;
   index_name: string;
@@ -369,6 +385,7 @@ export type ComparisonResponse = {
   left: ComparisonAsset;
   right: ComparisonAsset | null;
   benchmark: BenchmarkComparison | null;
+  sector_context: SectorComparisonContext | null;
   insights: string[];
 };
 export type Transaction = {

@@ -4,6 +4,7 @@ from dataclasses import asdict
 from datetime import date, timedelta
 import json
 import re
+import statistics
 from typing import Any
 
 from dashboard.api.models import (
@@ -35,6 +36,8 @@ from dashboard.api.models import (
     ComparisonFundamentals,
     ComparisonResponse,
     ComparisonReturns,
+    SectorComparisonContext,
+    SectorComparisonValues,
     HoldingSignalComponent,
     HoldingSignalResponse,
     HoldingSignalsResponse,
@@ -3126,11 +3129,13 @@ class ComparisonApiService:
         left = self.asset_profile(left_asset_id)
         right = self.asset_profile(right_asset_id) if right_asset_id else None
         benchmark = self.benchmark_profile(benchmark_index_id) if benchmark_index_id else None
+        sector_context = self._sector_context(left, right)
         return ComparisonResponse(
             left=left,
             right=right,
             benchmark=benchmark,
-            insights=self._insights(left, right, benchmark),
+            sector_context=sector_context,
+            insights=self._insights(left, right, benchmark, sector_context),
         )
 
     def asset_profile(self, asset_id: str) -> ComparisonAssetProfile:
@@ -3306,11 +3311,78 @@ class ComparisonApiService:
         eps = _first_number(statements[0], "eps", "epsdiluted", "dilutedEPS", "eps_actual") if statements else None
         return latest_price / eps if latest_price is not None and eps and eps > 0 else None
 
+    def _sector_context(
+        self,
+        left: ComparisonAssetProfile,
+        right: ComparisonAssetProfile | None,
+    ) -> SectorComparisonContext | None:
+        if not left.sector:
+            return None
+        peer_rows = self.conn.execute(
+            """
+            SELECT asset_id, mkt_cap, market_beta
+            FROM asset
+            WHERE sector = ?
+              AND asset_type = 'stock'
+            ORDER BY asset_id
+            """,
+            [left.sector],
+        ).fetchall()
+        peer_values = [self._sector_metric_values(row[0], row[1], row[2]) for row in peer_rows]
+        median = SectorComparisonValues(
+            pe_ratio=_median_present([value.pe_ratio for value in peer_values]),
+            price_to_sales=_median_present([value.price_to_sales for value in peer_values]),
+            market_cap=_median_present([value.market_cap for value in peer_values]),
+            beta=_median_present([value.beta for value in peer_values]),
+            return_1d=_median_present([value.return_1d for value in peer_values]),
+            return_21d=_median_present([value.return_21d for value in peer_values]),
+            return_252d=_median_present([value.return_252d for value in peer_values]),
+        )
+        benchmark = None
+        benchmark_id = _sector_benchmark_candidate(left.sector)
+        if benchmark_id:
+            try:
+                benchmark = self.benchmark_profile(benchmark_id)
+            except LookupError:
+                benchmark = None
+        return SectorComparisonContext(
+            sector=left.sector,
+            median=median,
+            left_diff_to_median=_diff_to_sector_median(_profile_sector_values(left), median),
+            right_diff_to_median=_diff_to_sector_median(_profile_sector_values(right), median) if right else None,
+            benchmark=benchmark,
+        )
+
+    def _sector_metric_values(
+        self,
+        asset_id: str,
+        market_cap: float | None,
+        market_beta: float | None,
+    ) -> SectorComparisonValues:
+        prices = self._prices(asset_id)
+        latest_price = prices[0][1] if prices else None
+        statements = self._income_statements(asset_id)
+        latest_statement = statements[0] if statements else {}
+        eps = _first_number(latest_statement, "eps", "epsdiluted", "dilutedEPS", "eps_actual")
+        revenue = _first_number(latest_statement, "revenue", "totalRevenue", "revenue_actual")
+        pe_ratio = latest_price / eps if latest_price is not None and eps and eps > 0 else None
+        price_to_sales = market_cap / revenue if market_cap is not None and revenue and revenue > 0 else None
+        return SectorComparisonValues(
+            pe_ratio=pe_ratio,
+            price_to_sales=price_to_sales,
+            market_cap=_float_or_none(market_cap),
+            beta=_float_or_none(market_beta),
+            return_1d=_period_return(prices, 1),
+            return_21d=_period_return(prices, 21),
+            return_252d=_period_return(prices, 252),
+        )
+
     def _insights(
         self,
         left: ComparisonAssetProfile,
         right: ComparisonAssetProfile | None,
         benchmark: BenchmarkComparisonProfile | None,
+        sector_context: SectorComparisonContext | None = None,
     ) -> list[str]:
         insights: list[str] = []
         discount = left.valuation.historical_pe_discount
@@ -3329,6 +3401,13 @@ class ComparisonApiService:
             gap = left.returns.return_252d - benchmark.return_252d
             direction = "beat" if gap >= 0 else "lagged"
             insights.append(f"{left.symbol} {direction} {benchmark.index_id} by {abs(gap) * 100:.1f}% over 252 trading days.")
+        sector_benchmark = sector_context.benchmark if sector_context else None
+        if sector_benchmark and left.returns.return_252d is not None and sector_benchmark.return_252d is not None:
+            gap = left.returns.return_252d - sector_benchmark.return_252d
+            direction = "beat" if gap >= 0 else "lagged"
+            insights.append(
+                f"{left.symbol} {direction} its sector benchmark {sector_benchmark.index_id} by {abs(gap) * 100:.1f}% over 252 trading days."
+            )
         return insights
 
 
@@ -3905,6 +3984,43 @@ def _core_benchmark_candidate(country: str | None, currency: str | None) -> str 
 
 def _sector_benchmark_candidate(sector: str | None) -> str | None:
     return _SECTOR_BENCHMARK_BY_KEY.get(_normalized_lookup_key(sector))
+
+
+def _profile_sector_values(profile: ComparisonAssetProfile | None) -> SectorComparisonValues:
+    if profile is None:
+        return SectorComparisonValues()
+    return SectorComparisonValues(
+        pe_ratio=profile.fundamentals.pe_ratio,
+        price_to_sales=profile.fundamentals.price_to_sales,
+        market_cap=profile.market_cap,
+        beta=profile.market_beta,
+        return_1d=profile.returns.return_1d,
+        return_21d=profile.returns.return_21d,
+        return_252d=profile.returns.return_252d,
+    )
+
+
+def _diff_to_sector_median(values: SectorComparisonValues, median: SectorComparisonValues) -> SectorComparisonValues:
+    return SectorComparisonValues(
+        pe_ratio=_absolute_gap(values.pe_ratio, median.pe_ratio),
+        price_to_sales=_absolute_gap(values.price_to_sales, median.price_to_sales),
+        market_cap=_absolute_gap(values.market_cap, median.market_cap),
+        beta=_absolute_gap(values.beta, median.beta),
+        return_1d=_absolute_gap(values.return_1d, median.return_1d),
+        return_21d=_absolute_gap(values.return_21d, median.return_21d),
+        return_252d=_absolute_gap(values.return_252d, median.return_252d),
+    )
+
+
+def _median_present(values: list[float | None]) -> float | None:
+    present = [float(value) for value in values if value is not None]
+    return float(statistics.median(present)) if present else None
+
+
+def _absolute_gap(value: float | None, baseline: float | None) -> float | None:
+    if value is None or baseline is None:
+        return None
+    return float(value - baseline)
 
 
 def _industry_benchmark_candidate(industry: str | None) -> str | None:

@@ -330,10 +330,29 @@ class BenchmarkComparisonProfile(BaseModel):
     volatility_252d: float | None = None
 
 
+class SectorComparisonValues(BaseModel):
+    pe_ratio: float | None = None
+    price_to_sales: float | None = None
+    market_cap: float | None = None
+    beta: float | None = None
+    return_1d: float | None = None
+    return_21d: float | None = None
+    return_252d: float | None = None
+
+
+class SectorComparisonContext(BaseModel):
+    sector: str
+    median: SectorComparisonValues
+    left_diff_to_median: SectorComparisonValues
+    right_diff_to_median: SectorComparisonValues | None = None
+    benchmark: BenchmarkComparisonProfile | None = None
+
+
 class ComparisonResponse(BaseModel):
     left: ComparisonAssetProfile
     right: ComparisonAssetProfile | None = None
     benchmark: BenchmarkComparisonProfile | None = None
+    sector_context: SectorComparisonContext | None = None
     insights: list[str] = Field(default_factory=list)
 
 
