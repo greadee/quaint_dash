@@ -415,6 +415,23 @@ class BrokerSyncRepository:
             ],
         )
 
+    def replace_position_snapshots(
+        self,
+        provider: str,
+        provider_account_id: str,
+        positions: list[BrokerPosition],
+    ) -> None:
+        self.conn.execute(
+            """
+            DELETE FROM broker_position_snapshot
+            WHERE provider = ?
+              AND provider_account_id = ?
+            """,
+            [provider, provider_account_id],
+        )
+        for position in positions:
+            self.upsert_position_snapshot(position)
+
     def upsert_transaction(self, transaction: BrokerTransaction) -> None:
         self.conn.execute(
             """

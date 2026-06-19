@@ -152,6 +152,7 @@ class IngestionCommands:
         calendar_year: int | None = None,
         ranking_factor: str = "aggregate",
         ranking_universe: str = "tracked",
+        ranking_timeframe: str = "monthly",
         missing_only: bool = False,
         stale_only: bool = False,
     ) -> int:
@@ -232,6 +233,7 @@ class IngestionCommands:
                 asset_id=asset_id,
                 max_assets=max_assets,
                 years=years,
+                timeframe=ranking_timeframe,
                 missing_only=missing_only,
                 stale_only=stale_only,
             )
@@ -672,6 +674,7 @@ class IngestionCommands:
         asset_id: str | None = None,
         max_assets: int = 25,
         years: int = 10,
+        timeframe: str = "monthly",
         missing_only: bool = False,
         stale_only: bool = False,
     ) -> int:
@@ -684,6 +687,7 @@ class IngestionCommands:
                 "news_sentiment",
                 "retail_sentiment",
                 "earnings_momentum",
+                "institutional_buying",
             ]:
                 total += self.schedule_ranking_input_jobs(
                     factor=child_factor,
@@ -691,6 +695,7 @@ class IngestionCommands:
                     asset_id=asset_id,
                     max_assets=max_assets,
                     years=years,
+                    timeframe=timeframe,
                     missing_only=missing_only,
                     stale_only=stale_only,
                 )
@@ -732,7 +737,26 @@ class IngestionCommands:
                 stale_only=stale_only,
             )
         if factor == "institutional_buying":
-            return 0
+            from dashboard.api.services import PortfolioApiService
+
+            rows = [
+                {
+                    "asset_id": asset_id,
+                    "symbol": asset_id,
+                    "exchange_code": None,
+                    "currency": "USD",
+                    "latest_price": None,
+                    "market_value": None,
+                    "is_tracked": True,
+                    "is_held": False,
+                    "is_watchlisted": False,
+                    "latest_price_date": None,
+                    "catalog_only": False,
+                }
+                for asset_id in asset_ids
+            ]
+            PortfolioApiService(self.conn)._ensure_stock_ranking_inputs(rows)
+            return len(rows)
         raise ValueError(f"Unsupported ranking factor: {factor}")
 
     def _ranking_asset_ids(
@@ -1006,6 +1030,18 @@ class IngestionCommands:
                 [asset_id],
             ).fetchone()
             return int(statements[0]) < 2 and int(events[0]) == 0
+        if factor == "institutional_buying":
+            row = self.conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM institutional_buying_daily
+                WHERE asset_id = ?
+                  AND net_flow_score IS NOT NULL
+                  AND accumulation_score IS NOT NULL
+                """,
+                [asset_id],
+            ).fetchone()
+            return int(row[0]) == 0
         return True
 
     def _ranking_factor_stale(self, asset_id: str, factor: str) -> bool:
@@ -1031,6 +1067,12 @@ class IngestionCommands:
                 [asset_id],
             ).fetchone()
             return row[0] is None or row[0] < date.today() - timedelta(days=150)
+        if factor == "institutional_buying":
+            row = self.conn.execute(
+                "SELECT MAX(date) FROM institutional_buying_daily WHERE asset_id = ?",
+                [asset_id],
+            ).fetchone()
+            return row[0] is None or row[0] < date.today() - timedelta(days=5)
         return True
 
     def _open_ranking_job_count(

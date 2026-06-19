@@ -425,6 +425,53 @@ def test_broker_sync_service_persists_provider_data_and_sync_run(tmp_path):
     assert db.conn.execute("SELECT user_key FROM broker_sync_run").fetchone()[0] == "default"
 
 
+def test_broker_sync_replaces_stale_positions_and_reprojects_mapped_portfolio(tmp_path):
+    db = DB(str(tmp_path / "broker_sync_replaces_positions.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Broker')")
+    repo = BrokerSyncRepository(db.conn)
+    cipher = LocalSecretCipher("test-key")
+    repo.upsert_broker_user(
+        BrokerUser("snaptrade", "default", "user-1", "secret"),
+        cipher,
+    )
+    provider = SequencedPositionBrokerProvider()
+    service = BrokerSyncService(repo, provider, cipher)
+
+    service.sync_user("default")
+    repo.map_account_to_portfolio("snaptrade", "acct-1", 1)
+    BrokerPortfolioIntegrationService(db.conn).project_account_positions("acct-1", 1)
+    provider.positions = [
+        BrokerPosition(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_position_id="acct-1:MSFT",
+            symbol="MSFT",
+            description="Microsoft Corp.",
+            quantity=1.0,
+            market_value=300.0,
+            currency="USD",
+            as_of_date=date(2026, 1, 6),
+        )
+    ]
+
+    service.sync_user("default")
+
+    snapshots = db.conn.execute(
+        "SELECT symbol, quantity FROM broker_position_snapshot ORDER BY symbol"
+    ).fetchall()
+    mapped = db.conn.execute(
+        "SELECT asset_id, quantity FROM broker_portfolio_position_map ORDER BY asset_id"
+    ).fetchall()
+    positions = db.conn.execute(
+        "SELECT asset_id, qty FROM position ORDER BY asset_id"
+    ).fetchall()
+
+    assert snapshots == [("MSFT", 1.0)]
+    assert mapped == [("MSFT", 1.0)]
+    assert positions == [("MSFT", 1.0)]
+
+
 def test_broker_sync_scheduler_syncs_due_users_once_per_day(tmp_path):
     db = DB(str(tmp_path / "broker_scheduler.db"))
     init_db(db)
@@ -814,7 +861,7 @@ def test_broker_projected_positions_skip_closed_zero_value_or_weight_rows(tmp_pa
     assert active_positions == [("ACTIVE", 10.0, 500.0)]
 
 
-def test_broker_projected_positions_prefer_transaction_cost_over_reported_average(tmp_path):
+def test_broker_projected_positions_prefer_reported_average_over_transaction_cost(tmp_path):
     db = DB(str(tmp_path / "broker_projected_activity_basis.db"))
     init_db(db)
     db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Broker')")
@@ -852,7 +899,7 @@ def test_broker_projected_positions_prefer_transaction_cost_over_reported_averag
 
     assert db.conn.execute(
         "SELECT quantity, book_cost FROM broker_portfolio_position_map WHERE asset_id = 'MU.TO'"
-    ).fetchone() == (85.0, 2125.0)
+    ).fetchone() == (85.0, 464.1)
 
 
 def test_broker_projected_positions_use_raw_activity_payload_for_missing_price(tmp_path):
@@ -1259,6 +1306,46 @@ class FakeBrokerProvider:
 
     def disconnect(self, user: BrokerUser, connection: BrokerConnection) -> None:
         return None
+
+
+class SequencedPositionBrokerProvider(FakeBrokerProvider):
+    def __init__(self) -> None:
+        self.positions = [
+            BrokerPosition(
+                provider=self.provider_name,
+                provider_account_id="acct-1",
+                provider_position_id="acct-1:AAPL",
+                symbol="AAPL",
+                description="Apple Inc.",
+                quantity=2.0,
+                market_value=400.0,
+                currency="USD",
+                as_of_date=date(2026, 1, 5),
+            ),
+            BrokerPosition(
+                provider=self.provider_name,
+                provider_account_id="acct-1",
+                provider_position_id="acct-1:MSFT",
+                symbol="MSFT",
+                description="Microsoft Corp.",
+                quantity=1.0,
+                market_value=300.0,
+                currency="USD",
+                as_of_date=date(2026, 1, 5),
+            ),
+        ]
+
+    def list_positions(self, user: BrokerUser, account: BrokerAccount) -> list[BrokerPosition]:
+        return self.positions
+
+    def list_transactions(
+        self,
+        user: BrokerUser,
+        account: BrokerAccount,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> list[BrokerTransaction]:
+        return []
 
 
 class FakeSnapTradeResponse:

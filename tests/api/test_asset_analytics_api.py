@@ -48,6 +48,41 @@ def test_asset_detail_and_price_history(tmp_path):
     assert prices.json() == [{"date": "2026-01-03", "close": 125.0}]
 
 
+def test_asset_search_includes_seeded_tsx_and_nyse_catalog(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+
+    with TestClient(app) as client:
+        tsx = client.get("/api/v1/assets?q=shop.to")
+        nyse = client.get("/api/v1/assets?q=jpm")
+        tsx_detail = client.get("/api/v1/assets/SHOP.TO")
+
+    assert tsx.status_code == 200
+    assert tsx.json()[0]["asset_id"] == "SHOP.TO"
+    assert tsx.json()[0]["currency"] == "CAD"
+    assert nyse.status_code == 200
+    assert nyse.json()[0]["asset_id"] == "JPM"
+    assert nyse.json()[0]["currency"] == "USD"
+    assert tsx_detail.status_code == 200
+    assert tsx_detail.json()["exchange_code"] == "XTSE"
+
+
+def test_seeded_stock_catalog_does_not_expand_ingestion_universe(tmp_path):
+    db_path = tmp_path / "api.db"
+    create_app(db_path)
+    db = DB(db_path)
+
+    rows = db.conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM asset
+        WHERE track = TRUE
+        """
+    ).fetchone()
+
+    assert rows == (0,)
+
+
 def test_asset_and_portfolio_analytics_preserve_phase3_contract(tmp_path):
     db_path = tmp_path / "api.db"
     app = create_app(db_path)

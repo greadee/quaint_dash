@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from dashboard.brokers.models import (
+    BrokerAccount,
     BrokerProvider,
     BrokerSyncResult,
     BrokerUser,
@@ -74,9 +75,14 @@ class BrokerSyncService:
                 for account in accounts:
                     self.repo.upsert_account(account)
                     run_accounts += 1
-                    for position in self.provider.list_positions(user, account):
-                        self.repo.upsert_position_snapshot(position)
-                        run_positions += 1
+                    positions = self.provider.list_positions(user, account)
+                    self.repo.replace_position_snapshots(
+                        self.provider.provider_name,
+                        account.provider_account_id,
+                        positions,
+                    )
+                    run_positions += len(positions)
+                    self._project_mapped_account(account)
                     for transaction in self.provider.list_transactions(
                         user,
                         account,
@@ -123,4 +129,23 @@ class BrokerSyncService:
             positions_seen=positions_seen,
             transactions_seen=transactions_seen,
             failed_connections=failed_connections,
+        )
+
+    def _project_mapped_account(self, account: BrokerAccount) -> None:
+        stored = next(
+            (
+                item
+                for item in self.repo.list_accounts(self.provider.provider_name)
+                if item.provider_account_id == account.provider_account_id
+            ),
+            None,
+        )
+        if stored is None or stored.portfolio_id is None:
+            return
+        from dashboard.brokers.portfolio import BrokerPortfolioIntegrationService
+
+        BrokerPortfolioIntegrationService(self.repo.conn).project_account_positions(
+            provider_account_id=stored.provider_account_id,
+            portfolio_id=stored.portfolio_id,
+            provider=self.provider.provider_name,
         )

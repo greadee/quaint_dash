@@ -401,8 +401,8 @@ class BrokerPortfolioIntegrationService:
 
     def _projected_book_cost(self, position: "_NormalizedBrokerPosition") -> float:
         return (
-            self._book_cost_from_broker_transactions(position)
-            or self._book_cost_from_position_snapshot(position)
+            self._book_cost_from_position_snapshot(position)
+            or self._book_cost_from_broker_transactions(position)
             or position.book_cost
         )
 
@@ -526,6 +526,11 @@ class BrokerPortfolioIntegrationService:
                 FROM txn
                 WHERE txn_type IN ('buy', 'sell')
                   AND asset_id IS NOT NULL
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM broker_portfolio_position_map mapped_positions
+                    WHERE mapped_positions.portfolio_id = txn.portfolio_id
+                  )
                   AND NOT EXISTS (
                     SELECT 1
                     FROM broker_portfolio_txn_map tm

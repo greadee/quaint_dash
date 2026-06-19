@@ -745,7 +745,8 @@ def test_worker_deactivates_fundamental_subscription_on_fmp_402():
     next_job_ids = service.schedule_due_fundamental_subscription_refreshes(max_assets=10)
 
     assert processed == 1
-    assert subscription_row == (False, None)
+    assert subscription_row[0] is False
+    assert str(subscription_row[1]).startswith("9999-12-31")
     assert job_row[0] == "failed"
     assert "FMP HTTP error 402" in job_row[1]
     assert "FMP HTTP error 402" in sync_error
@@ -790,4 +791,5 @@ def test_scheduler_deactivates_existing_fmp_402_subscriptions_before_refresh():
     ).fetchone()
 
     assert job_ids == []
-    assert subscription_row == (False, None)
+    assert subscription_row[0] is False
+    assert str(subscription_row[1]).startswith("9999-12-31")

@@ -155,6 +155,7 @@ class AssetImporter:
         returns - dict containing SQL parameter values for UPSERT_ASSET_METADATA.
         """
         market_cap = self._to_float(profile.get("marketCap"))
+        shares_outstanding = self._shares_outstanding_from_profile(profile, market_cap)
 
         asset_type = self._infer_asset_type(profile)
         size = self._infer_size(market_cap)
@@ -172,8 +173,29 @@ class AssetImporter:
             "description": profile.get("description"),
             "market_beta": self._to_float(profile.get("beta")),
             "mkt_cap": market_cap,
-            "shares_outstanding": None,
+            "shares_outstanding": shares_outstanding,
         }
+
+    def _shares_outstanding_from_profile(
+        self,
+        profile: dict[str, Any],
+        market_cap: float | None,
+    ) -> float | None:
+        for key in (
+            "sharesOutstanding",
+            "shares_outstanding",
+            "weightedAverageShsOut",
+            "weightedAverageShsOutDil",
+        ):
+            value = self._to_float(profile.get(key))
+            if value is not None and value > 0:
+                return value
+
+        price = self._to_float(profile.get("price"))
+        if market_cap is not None and market_cap > 0 and price is not None and price > 0:
+            return market_cap / price
+
+        return None
 
     def _infer_asset_type(self, profile: dict[str, Any]) -> str:
         """

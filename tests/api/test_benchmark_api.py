@@ -217,6 +217,47 @@ def test_benchmark_detail_prices_metrics_constituents_and_exposures(tmp_path):
     assert exposures.json()[0]["dimension_value"] == "Technology"
 
 
+def test_benchmark_prices_preserve_proxy_metadata_and_date_filters(tmp_path):
+    with _client_with_benchmarks(tmp_path) as client:
+        response = client.get(
+            "/api/v1/benchmarks/SP500/prices?start_date=2026-01-02&end_date=2026-01-02&limit=10"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["date"] for item in payload] == ["2026-01-02"]
+    assert payload[0]["close"] == 102
+    assert payload[0]["source_symbol"] == "^GSPC"
+    assert payload[0]["is_proxy"] is False
+
+
+def test_benchmark_missing_history_returns_empty_series_not_zeroes(tmp_path):
+    with _client_with_benchmarks(tmp_path) as client:
+        prices = client.get("/api/v1/benchmarks/SEC_TECH/prices")
+        metrics = client.get("/api/v1/benchmarks/SEC_TECH/metrics")
+        detail = client.get("/api/v1/benchmarks/SEC_TECH")
+
+    assert prices.status_code == 200
+    assert metrics.status_code == 200
+    assert detail.status_code == 200
+    assert prices.json() == []
+    assert metrics.json() == []
+    assert detail.json()["latest_close"] is None
+    assert detail.json()["return_252d"] is None
+
+
+def test_benchmark_exposure_filter_preserves_source_and_proxy_disclosure(tmp_path):
+    with _client_with_benchmarks(tmp_path) as client:
+        country = client.get("/api/v1/benchmarks/SP500/exposures?dimension_type=country")
+
+    assert country.status_code == 200
+    payload = country.json()
+    assert len(payload) == 1
+    assert payload[0]["dimension_value"] == "US"
+    assert payload[0]["source_type"] == "computed_from_constituents"
+    assert payload[0]["is_proxy"] is True
+
+
 def test_benchmark_readiness_reports_all_display_gaps(tmp_path):
     with _client_with_benchmarks(tmp_path) as client:
         response = client.get("/api/v1/benchmarks/readiness?category=core_geo")

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 
-from dashboard.api.services import CommandApiService
+from dashboard.api.services import CommandApiService, PortfolioApiService
 from dashboard.db.db_conn import DB, init_db
 
 LOGGER = logging.getLogger(__name__)
@@ -46,6 +46,7 @@ class IngestionBackgroundWorker:
         self.config = config
         self._task: asyncio.Task | None = None
         self._stop_event: asyncio.Event | None = None
+        self._enabled = config.enabled
         self._running = False
         self.last_schedule_at: datetime | None = None
         self.last_schedule_count: int | None = None
@@ -58,13 +59,18 @@ class IngestionBackgroundWorker:
         return self._running and self._task is not None and not self._task.done()
 
     def start(self) -> None:
-        if not self.config.enabled:
+        if not self._enabled:
             return
         if self._task is not None and not self._task.done():
             return
         self._stop_event = asyncio.Event()
         self._task = asyncio.create_task(self._run_loop(), name="ingestion-background-worker")
         self._running = True
+
+    def enable(self) -> None:
+        """Enable routine ingestion for this API process and start the loop."""
+        self._enabled = True
+        self.start()
 
     async def stop(self) -> None:
         if self._stop_event is not None:
@@ -76,6 +82,17 @@ class IngestionBackgroundWorker:
             except asyncio.CancelledError:
                 pass
         self._running = False
+
+    async def disable(self) -> None:
+        """Disable routine ingestion for this API process and stop the loop."""
+        self._enabled = False
+        await self.stop()
+
+    async def tick(self) -> dict[str, int]:
+        """Run one bounded schedule-and-work cycle immediately."""
+        scheduled = await self.tick_schedule()
+        completed = await self.tick_run()
+        return {"scheduled_jobs": scheduled, "completed_jobs": completed}
 
     async def _run_loop(self) -> None:
         next_schedule_delay = 0.0
@@ -130,11 +147,20 @@ class IngestionBackgroundWorker:
             db = DB(self.db_path)
             try:
                 init_db(db)
-                return CommandApiService(db.conn).schedule_due_routine_ingestion_jobs(
+                count = CommandApiService(db.conn).schedule_due_routine_ingestion_jobs(
                     max_assets=self.config.max_assets_per_schedule,
                     years=self.config.years,
                     prices_only=self.config.prices_only,
                 )
+                PortfolioApiService(db.conn).stock_rankings(
+                    factor="aggregate",
+                    universe="tracked",
+                    direction="buy",
+                    timeframe="monthly",
+                    limit=self.config.max_assets_per_schedule,
+                    offset=0,
+                )
+                return count
             finally:
                 db.conn.close()
 
@@ -152,7 +178,7 @@ class IngestionBackgroundWorker:
 
     def status(self) -> dict:
         return {
-            "enabled": self.config.enabled,
+            "enabled": self._enabled,
             "running": self.running,
             "last_schedule_at": self.last_schedule_at,
             "last_schedule_count": self.last_schedule_count,

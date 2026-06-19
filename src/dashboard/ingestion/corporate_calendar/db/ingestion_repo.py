@@ -247,7 +247,7 @@ class CorporateCalendarIngestionRepository:
             UPDATE fundamental_subscription
             SET
                 is_active = FALSE,
-                next_refresh_at = NULL,
+                next_refresh_at = TIMESTAMP '9999-12-31 00:00:00',
                 updated_at = now()
             WHERE asset_id = ?
             """,

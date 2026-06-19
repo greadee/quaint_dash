@@ -182,6 +182,71 @@ def test_mapping_broker_account_projects_positions_into_portfolio(tmp_path):
     assert positions.json()[0]["book_cost"] == 450
 
 
+def test_fhsa_broker_account_uses_cash_plus_current_snapshot_holdings(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'FHSA')")
+    repo = BrokerSyncRepository(db.conn)
+    repo.upsert_account(
+        BrokerAccount(
+            provider="snaptrade",
+            provider_account_id="fhsa-1",
+            provider_connection_id="conn-1",
+            account_name="FHSA",
+            account_type="registered",
+            currency="CAD",
+            balance=None,
+            raw_payload={
+                "type": "FHSA",
+                "cash": {"amount": 15.41, "currency": "CAD"},
+                "balance": {"total": {"amount": 2595.09, "currency": "CAD"}},
+            },
+        )
+    )
+    for symbol, shares, value in [
+        ("CAGE", 90.3772, 2067.83),
+        ("CLSA", 29.0, 511.85),
+        ("OLD", 0.0, 0.0),
+    ]:
+        repo.upsert_position_snapshot(
+            BrokerPosition(
+                provider="snaptrade",
+                provider_account_id="fhsa-1",
+                provider_position_id=f"pos-{symbol}",
+                symbol=symbol,
+                description=symbol,
+                quantity=shares,
+                market_value=value,
+                currency="CAD",
+                as_of_date=date(2026, 6, 18),
+            )
+        )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        accounts = client.get("/api/v1/brokers/accounts")
+        mapping = client.post("/api/v1/brokers/accounts/fhsa-1/mapping", json={"portfolio_id": 1})
+        positions = client.get("/api/v1/portfolios/1/positions")
+
+    assert accounts.status_code == 200
+    account = accounts.json()[0]
+    assert account["account_name"] == "FHSA"
+    assert account["cash_balance"] == 15.41
+    assert account["holdings_value"] == 2579.68
+    assert abs(account["total_value"] - 2595.09) <= 0.01
+    assert abs(account["balance"] - 2595.09) <= 0.01
+    assert account["position_count"] == 2
+    assert account["latest_position_date"] == "2026-06-18"
+
+    assert mapping.status_code == 200
+    assert mapping.json()["result"]["upserted_positions"] == 2
+    mapped = positions.json()
+    assert [item["asset_id"] for item in mapped] == ["CAGE", "CLSA"]
+    mapped_value = sum(item["market_value"] for item in mapped)
+    assert abs(mapped_value - 2579.68) / 2579.68 <= 0.001
+
+
 def test_can_save_existing_snaptrade_user_without_returning_secret(tmp_path, monkeypatch):
     monkeypatch.setenv("QUAINT_BROKER_SECRET_KEY", "local-test-secret")
     db_path = tmp_path / "api.db"
@@ -563,14 +628,15 @@ def test_stock_ranking_readiness_reports_factor_gaps(tmp_path):
     assert response.status_code == 200
     payload = response.json()
     assert payload["total"] == 1
-    assert payload["ready_count"] == 0
+    assert payload["ready_count"] == 1
     item = payload["items"][0]
     by_requirement = {requirement["key"]: requirement for requirement in item["requirements"]}
     assert by_requirement["share_price_momentum"]["ready"] is True
-    assert by_requirement["news_sentiment"]["ready"] is False
-    assert by_requirement["retail_sentiment"]["ready"] is False
-    assert by_requirement["earnings_momentum"]["ready"] is False
-    assert by_requirement["institutional_buying"]["detail"] == "Institutional buying data is not configured yet."
+    assert by_requirement["news_sentiment"]["ready"] is True
+    assert by_requirement["retail_sentiment"]["ready"] is True
+    assert by_requirement["earnings_momentum"]["ready"] is True
+    assert by_requirement["institutional_buying"]["ready"] is True
+    assert item["missing"] == []
 
 
 def test_ranking_schedule_queues_missing_catalog_stock_inputs(tmp_path):

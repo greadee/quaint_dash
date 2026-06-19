@@ -208,6 +208,35 @@ def test_metadata_scheduler_respects_max_assets(manager, monkeypatch):
     assert len(FakeAssetImporter.calls[0]) == 1
 
 
+def test_metadata_refresh_pipeline_forces_all_ingestible_assets(manager, monkeypatch):
+    """
+    metadata-refresh bypasses due checks so fixed metadata mappings can repair
+    already-synced asset rows.
+    """
+
+    FakeAssetImporter.calls = []
+
+    insert_asset(manager, "BN.TO")
+    insert_asset(manager, "AAPL", ccy="USD")
+
+    manager.conn.execute(
+        """
+        UPDATE asset_metadata_sync
+        SET sync_status = 'synced', last_succeeded_at = now()
+        """
+    )
+
+    monkeypatch.setattr(
+        "dashboard.services.asset_importer.AssetImporter",
+        FakeAssetImporter,
+    )
+
+    n_synced = manager.schedule_ingestion_jobs(pipeline="metadata-refresh")
+
+    assert n_synced == 2
+    assert FakeAssetImporter.calls == [["AAPL", "BN.TO"]] or FakeAssetImporter.calls == [["BN.TO", "AAPL"]]
+
+
 def test_price_history_scheduler_enqueues_backfill_jobs(manager):
     """
     schedule_due_price_history_backfills should enqueue backfill jobs for tracked

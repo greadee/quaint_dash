@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { Link, NavLink, Route, Routes, useLocation, useParams, useSearchParams } from "react-router-dom";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { BenchmarkDetailPage, BenchmarksWorkspacePage } from "./benchmarks";
 import {
   api,
   type AssetActivity,
@@ -36,9 +37,6 @@ import {
   type AssetSearchResult,
   type BenchmarkAssociation,
   type BenchmarkDefaultResponse,
-  type BenchmarkExposure,
-  type BenchmarkIndexSummary,
-  type BenchmarkPricePoint,
   type ComparisonAsset,
   type SectorComparisonContext,
   type IngestionReadiness,
@@ -107,12 +105,6 @@ const compareHelp: HelpItem[] = [
   { term: "Vs history/sector/industry", detail: "Shows whether the company looks expensive or cheap versus its own past and similar companies." },
   { term: "Returns", detail: "Short and long period price movement. Good for context, but one period should not decide the investment case." },
   { term: "Spread", detail: "The gap between the left and right ticker. It helps show which company is stronger on a given metric." },
-];
-const benchmarkHelp: HelpItem[] = [
-  { term: "Benchmark", detail: "A reference basket, like an index, used to judge whether a company or portfolio is doing better than the market it belongs to." },
-  { term: "Volatility", detail: "How jumpy the benchmark has been. Higher volatility means a wider range of normal outcomes." },
-  { term: "Composition", detail: "The companies or groups inside the benchmark. This explains what the benchmark is actually exposed to." },
-  { term: "Exposures", detail: "Breakdowns by sector, region, or other traits. Use them to see what is driving benchmark behavior." },
 ];
 const portfolioAnalyticsHelp: HelpItem[] = [
   { term: "Modified Dietz", detail: "A portfolio return estimate that adjusts for deposits and withdrawals, so cash movement does not distort performance as much." },
@@ -213,7 +205,8 @@ export default function App() {
             <Route path="/signals" element={<StockRankingsPage notify={notify} />} />
             <Route path="/signals/:signalId" element={<SignalDetailPage notify={notify} />} />
             <Route path="/compare" element={<ComparePage />} />
-            <Route path="/benchmarks" element={<BenchmarkBrowserPage notify={notify} />} />
+            <Route path="/benchmarks" element={<BenchmarksWorkspacePage notify={notify} />} />
+            <Route path="/benchmarks/:benchmarkId" element={<BenchmarkDetailPage notify={notify} />} />
             <Route path="/assets/:assetId" element={<AssetDetailPage notify={notify} />} />
             <Route path="/asset/:assetId" element={<AssetDetailPage notify={notify} />} />
             <Route path="/brokers" element={<BrokersPage notify={notify} />} />
@@ -1332,8 +1325,6 @@ const percentDelta = (left: number | null | undefined, right: number | null | un
   const delta = left - right;
   return { label: percent(delta), className: delta >= 0 ? "positive" : "negative" };
 };
-const weightToRatio = (value: number | null | undefined) => value == null ? null : value > 1 ? value / 100 : value;
-const weightLabel = (value: number | null | undefined) => value == null ? "Unavailable" : value > 1 ? `${value.toFixed(1)}%` : percent(value);
 const gapLabel = (value: number | null | undefined, label: string) => {
   if (value == null) return "Unavailable";
   const direction = value >= 0 ? "above" : "below";
@@ -1370,223 +1361,6 @@ function groupPositions(positions: Position[], dimension: TrancheDimension) {
   return Array.from(grouped.values())
     .map((item) => ({ ...item, weight: total ? item.marketValue / total : 0 }))
     .sort((a, b) => b.marketValue - a.marketValue);
-}
-
-function BenchmarkBrowserPage({ notify }: { notify: (message: string, tone?: AppNotification["tone"]) => void }) {
-  const client = useQueryClient();
-  const [params, setParams] = useSearchParams();
-  const [query, setQuery] = useState("");
-  const [category, setCategory] = useState("");
-  const [currency, setCurrency] = useState("");
-  const [coreOnly, setCoreOnly] = useState(false);
-  const selectedId = params.get("index") ?? "";
-  const benchmarks = useQuery({
-    queryKey: ["benchmarks", query, category, currency, coreOnly],
-    queryFn: () => api.benchmarks({
-      q: query.trim() || undefined,
-      category: category || undefined,
-      currency: currency.trim().toUpperCase() || undefined,
-      is_core: coreOnly ? true : undefined,
-      is_active: true,
-      limit: 100,
-    }),
-  });
-  const firstId = benchmarks.data?.[0]?.index_id ?? "";
-  const activeId = selectedId || firstId;
-  const detail = useQuery({
-    queryKey: ["benchmark-detail", activeId],
-    queryFn: () => api.benchmark(activeId),
-    enabled: Boolean(activeId),
-  });
-  const prices = useQuery({
-    queryKey: ["benchmark-prices", activeId],
-    queryFn: () => api.benchmarkPrices(activeId, { limit: 365 }),
-    enabled: Boolean(activeId),
-  });
-  const metrics = useQuery({
-    queryKey: ["benchmark-metrics", activeId],
-    queryFn: () => api.benchmarkMetrics(activeId, 120),
-    enabled: Boolean(activeId),
-  });
-  const exposures = useQuery({
-    queryKey: ["benchmark-exposures", activeId],
-    queryFn: () => api.benchmarkExposures(activeId),
-    enabled: Boolean(activeId),
-  });
-  const constituents = useQuery({
-    queryKey: ["benchmark-constituents", activeId],
-    queryFn: () => api.benchmarkConstituents(activeId, { limit: 10 }),
-    enabled: Boolean(activeId),
-  });
-  const seed = useMutation({
-    mutationFn: api.seedBenchmarks,
-    onSuccess: () => {
-      notify("Core benchmarks seeded.");
-      client.invalidateQueries({ queryKey: ["benchmarks"] });
-    },
-    onError: (error) => notify(actionErrorMessage(error), "error"),
-  });
-  const refreshOne = useMutation({
-    mutationFn: ({ id, jobType }: { id: string; jobType: "daily_price" | "composition" | "metrics" }) =>
-      api.refreshBenchmark(id, { job_type: jobType }),
-    onSuccess: (_result, variables) => {
-      notify(`${variables.id} ${variables.jobType.replace(/_/g, " ")} refresh started.`);
-      client.invalidateQueries({ queryKey: ["benchmarks"] });
-      client.invalidateQueries({ queryKey: ["benchmark-detail"] });
-      client.invalidateQueries({ queryKey: ["benchmark-prices"] });
-      client.invalidateQueries({ queryKey: ["benchmark-metrics"] });
-      client.invalidateQueries({ queryKey: ["benchmark-exposures"] });
-      client.invalidateQueries({ queryKey: ["benchmark-constituents"] });
-    },
-    onError: (error) => notify(actionErrorMessage(error), "error"),
-  });
-  const refreshBroad = useMutation({
-    mutationFn: () => api.refreshBenchmarks({ category: "core_geo", job_type: "daily_price", lookback_days: 10 }),
-    onSuccess: () => {
-      notify("Core benchmark daily refresh started.");
-      client.invalidateQueries({ queryKey: ["benchmarks"] });
-    },
-    onError: (error) => notify(actionErrorMessage(error), "error"),
-  });
-  const hardenSelected = useMutation({
-    mutationFn: (id: string) => api.hardenBenchmark(id, { lookback_days: 730 }),
-    onSuccess: (result) => {
-      notify(`Benchmark hardened: ${formatActionResult(result.result)}`);
-      client.invalidateQueries({ queryKey: ["benchmarks"] });
-      client.invalidateQueries({ queryKey: ["benchmark-detail"] });
-      client.invalidateQueries({ queryKey: ["benchmark-prices"] });
-      client.invalidateQueries({ queryKey: ["benchmark-metrics"] });
-      client.invalidateQueries({ queryKey: ["benchmark-exposures"] });
-      client.invalidateQueries({ queryKey: ["benchmark-constituents"] });
-    },
-    onError: (error) => notify(actionErrorMessage(error), "error"),
-  });
-  const hardenBroad = useMutation({
-    mutationFn: () => api.hardenBenchmarks({ category: "non_core", lookback_days: 730 }),
-    onSuccess: (result) => {
-      notify(`Non-core benchmarks hardened: ${formatActionResult(result.result)}`);
-      client.invalidateQueries({ queryKey: ["benchmarks"] });
-      client.invalidateQueries({ queryKey: ["benchmark-detail"] });
-    },
-    onError: (error) => notify(actionErrorMessage(error), "error"),
-  });
-  const selectBenchmark = (id: string) => {
-    setParams((current) => {
-      const next = new URLSearchParams(current);
-      next.set("index", id);
-      return next;
-    }, { replace: true });
-  };
-  const latestMetric = metrics.data?.at(-1);
-
-  return <div className="page">
-    <div className="page-title">
-      <div><p className="eyebrow">Benchmark index browser</p><h1>Benchmarks</h1><p className="page-subtitle">Browse seeded indexes, inspect price and composition coverage, and run explicit refresh actions.</p></div>
-      <div className="actions">
-        <button disabled={seed.isPending} onClick={() => seed.mutate({ scope: "core" })}><Database size={16}/>Seed core</button>
-        <button disabled={seed.isPending} onClick={() => seed.mutate({ scope: "all" })}><Database size={16}/>Seed all</button>
-        <button disabled={refreshBroad.isPending} onClick={() => window.confirm("Refresh daily prices for all core benchmarks?") && refreshBroad.mutate()}><RefreshCw size={16}/>Core daily</button>
-        <button disabled={hardenBroad.isPending} onClick={() => window.confirm("Harden all sector, industry, and theme benchmarks? This runs long lookback price, metrics, composition, and relative metric work.") && hardenBroad.mutate()}><ShieldCheck size={16}/>Harden non-core</button>
-      </div>
-    </div>
-    <section className="card benchmark-layout">
-      <div className="benchmark-list-panel">
-        <div className="benchmark-filters">
-          <label>Search<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="SP500" /></label>
-          <label>Category<select value={category} onChange={(event) => setCategory(event.target.value)}><option value="">All</option><option value="core_geo">Core geo</option><option value="sector">Sector</option><option value="industry">Industry</option><option value="theme">Theme</option></select></label>
-          <label>Currency<input value={currency} onChange={(event) => setCurrency(event.target.value.toUpperCase())} placeholder="USD" /></label>
-          <label className="check-row compact"><input type="checkbox" checked={coreOnly} onChange={(event) => setCoreOnly(event.target.checked)} />Core</label>
-        </div>
-        {benchmarks.isLoading ? <Loading compact /> : benchmarks.data?.length ? <div className="benchmark-table">
-          <table>
-            <thead><tr><th>Index</th><th>Category</th><th>Return</th><th>Data</th></tr></thead>
-            <tbody>{benchmarks.data.map((item) => <tr key={item.index_id} className={activeId === item.index_id ? "selected-row" : ""} onClick={() => selectBenchmark(item.index_id)}>
-              <td><button className="link-button" onClick={(event) => { event.stopPropagation(); selectBenchmark(item.index_id); }}>{item.index_id}</button><span>{item.index_name}</span></td>
-              <td>{item.index_category}<span>{item.currency}</span></td>
-              <td>{percent(item.return_252d)}<span>{percent(item.volatility_252d_ann)} vol</span></td>
-              <td><BenchmarkQuality item={item} /></td>
-            </tr>)}</tbody>
-          </table>
-        </div> : <EmptyRow text="No benchmarks match the current filters." />}
-      </div>
-      <div className="benchmark-detail-panel">
-        {!activeId ? <EmptyRow text="Select a benchmark to inspect details." /> : detail.error ? <ErrorPanel error={detail.error} /> : detail.isLoading ? <Loading compact /> : detail.data ? <>
-          <div className="card-heading benchmark-detail-heading">
-            <div><p className="eyebrow">{detail.data.index_category}</p><h2>{detail.data.index_name}</h2></div>
-            <div className="card-tools"><HelpDisclosure title="Benchmark analytics" items={benchmarkHelp} /><span>{detail.data.index_id}</span></div>
-          </div>
-          <div className="benchmark-summary-grid">
-            <Signal label="Latest close" value={money(detail.data.latest_close, detail.data.currency)} />
-            <Signal label="1 day" value={percent(detail.data.return_1d)} />
-            <Signal label="252 days" value={percent(detail.data.return_252d)} />
-            <Signal label="Volatility" value={percent(detail.data.volatility_252d_ann)} />
-          </div>
-          <div className="benchmark-chart"><BenchmarkPriceChart prices={prices.data ?? []} /></div>
-          <div className="benchmark-actions">
-            <button disabled={refreshOne.isPending} onClick={() => refreshOne.mutate({ id: detail.data.index_id, jobType: "daily_price" })}><RefreshCw size={16}/>Prices</button>
-            <button disabled={refreshOne.isPending} onClick={() => refreshOne.mutate({ id: detail.data.index_id, jobType: "metrics" })}><Activity size={16}/>Metrics</button>
-            <button disabled={refreshOne.isPending} onClick={() => window.confirm(`Refresh composition for ${detail.data.index_id}?`) && refreshOne.mutate({ id: detail.data.index_id, jobType: "composition" })}><Database size={16}/>Composition</button>
-            <button disabled={hardenSelected.isPending} onClick={() => window.confirm(`Harden all display data for ${detail.data.index_id}?`) && hardenSelected.mutate(detail.data.index_id)}><ShieldCheck size={16}/>Harden</button>
-          </div>
-          <div className="benchmark-data-grid">
-            <AnalyticsBlock title="Metric range">
-              <MetricLine label="Latest metric" value={detail.data.latest_metric_date ?? "Unavailable"} />
-              <MetricLine label="5 day return" value={percent(latestMetric?.return_5d)} />
-              <MetricLine label="YTD return" value={percent(latestMetric?.return_ytd)} />
-              <MetricLine label="52w drawdown" value={percent(latestMetric?.drawdown_from_52w_high)} />
-            </AnalyticsBlock>
-            <AnalyticsBlock title="Composition">
-              <MetricLine label="Snapshot" value={detail.data.latest_composition_date ?? "Unavailable"} />
-              <MetricLine label="Constituents" value={String(detail.data.constituent_count ?? "Unavailable")} />
-              <MetricLine label="Quality" value={detail.data.composition_quality ?? "Unavailable"} />
-              <MetricLine label="Symbols" value={String(detail.data.symbols.length)} />
-            </AnalyticsBlock>
-            <AnalyticsBlock title="Sync state">
-              {Object.values(detail.data.sync_state).length ? Object.values(detail.data.sync_state).slice(0, 4).map((item) => <MetricLine key={item.job_type} label={item.job_type} value={item.last_error ? "error" : item.last_success_date ?? "pending"} />) : <span className="muted-copy">No sync state yet.</span>}
-            </AnalyticsBlock>
-          </div>
-          <div className="benchmark-data-grid wide">
-            <AnalyticsBlock title="Exposures">
-              <BenchmarkExposureBars exposures={exposures.data ?? []} />
-            </AnalyticsBlock>
-            <AnalyticsBlock title="Top constituents">
-              {constituents.data?.items.length ? constituents.data.items.map((item) => <MetricLine key={item.constituent_symbol} label={item.constituent_symbol} value={percent(weightToRatio(item.weight_pct))} />) : <span className="muted-copy">No constituents available.</span>}
-            </AnalyticsBlock>
-          </div>
-          {detail.data.last_error ? <div className="benchmark-error">{detail.data.last_error}</div> : null}
-        </> : null}
-      </div>
-    </section>
-  </div>;
-}
-
-function BenchmarkQuality({ item }: { item: BenchmarkIndexSummary }) {
-  const stale = item.latest_metric_date ? (Date.now() - new Date(item.latest_metric_date).getTime()) / 86400000 > 14 : true;
-  const label = item.last_error ? "error" : !item.latest_close ? "no price" : !item.latest_composition_date ? "no composition" : item.composition_quality === "proxy" ? "proxy" : stale ? "stale" : "ready";
-  const tone = item.last_error ? "failed" : label === "ready" ? "done" : "running";
-  return <span className={`pill ${tone}`}>{label}</span>;
-}
-
-function BenchmarkPriceChart({ prices }: { prices: BenchmarkPricePoint[] }) {
-  if (!prices.length) return <EmptyRow text="No price history has been ingested for this benchmark." />;
-  return <ResponsiveContainer width="100%" height="100%">
-    <AreaChart data={prices}>
-      <defs><linearGradient id="benchmarkPrice" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#497d8f" stopOpacity={0.35}/><stop offset="100%" stopColor="#497d8f" stopOpacity={0}/></linearGradient></defs>
-      <XAxis dataKey="date" hide />
-      <YAxis hide domain={["dataMin", "dataMax"]} />
-      <Tooltip />
-      <Area type="monotone" dataKey="close" stroke="#497d8f" fill="url(#benchmarkPrice)" strokeWidth={2} />
-    </AreaChart>
-  </ResponsiveContainer>;
-}
-
-function BenchmarkExposureBars({ exposures }: { exposures: BenchmarkExposure[] }) {
-  const shown = exposures.filter((item) => item.dimension_type === "sector").slice(0, 6);
-  if (!shown.length) return <span className="muted-copy">No exposure snapshot available.</span>;
-  return <div className="exposure-bars">{shown.map((item) => {
-    const width = Math.max(2, Math.min(100, item.weight_pct));
-    return <div key={`${item.dimension_type}-${item.dimension_value}`}><p><span>{item.dimension_value}</span><b>{weightLabel(item.weight_pct)}</b></p><div className="bar"><span style={{ width: `${width}%` }} /></div></div>;
-  })}</div>;
 }
 
 function TickerPicker({
