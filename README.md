@@ -137,6 +137,10 @@ dashboard           # or python -m dashboard
 - React and TypeScript browser dashboard focused on portfolio analysis
 - Asset detail, broker account, and ingestion operations pages
 - Stable Phase 3 analytics payload reuse and redacted broker responses
+- Dedicated portfolio-management routes for aggregate, portfolio list, fundamentals, portfolio
+  detail, holdings, performance, risk, optimization preview, and asset detail
+- Backend-owned portfolio performance, risk, fundamentals, and constrained optimization preview
+  endpoints; the browser does not calculate authoritative CAGR, Sharpe, beta, or target weights
 - Local-first runtime designed for future hosted, mobile, and desktop clients
 ```
 

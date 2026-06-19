@@ -10,6 +10,10 @@ export type Portfolio = {
   projected_value_low: number | null;
   projected_value_high: number | null;
   projected_horizon_years: number | null;
+  as_of?: string | null;
+  source?: string;
+  display_currency?: string | null;
+  fx_missing?: string[];
 };
 
 export type Position = {
@@ -30,6 +34,122 @@ export type Position = {
   weight: number | null;
   broker_linked: boolean;
   broker_account_count: number;
+  native_market_value?: number | null;
+  base_market_value?: number | null;
+  native_book_cost?: number | null;
+  base_book_cost?: number | null;
+  price_timestamp?: string | null;
+  price_source?: string | null;
+  price_session?: string | null;
+  stale_price?: boolean;
+  stale_reason?: string | null;
+  data_status?: string;
+};
+
+export type PortfolioPerformancePoint = {
+  date: string;
+  portfolio_value: number | null;
+  portfolio_return_index: number | null;
+  benchmark_return_index: number | null;
+};
+export type PortfolioPerformance = {
+  portfolio_id: number;
+  benchmark: string | null;
+  base_currency: string;
+  start_date: string | null;
+  end_date: string | null;
+  range: string;
+  methodology: string;
+  calendar_alignment: string;
+  normalized_initial_value: number;
+  actual_twr_cagr: number | null;
+  historical_cumulative_return: number | null;
+  benchmark_cagr: number | null;
+  excess_cagr: number | null;
+  observation_count: number;
+  coverage: number | null;
+  missing_inputs: string[];
+  points: PortfolioPerformancePoint[];
+  as_of: string;
+};
+export type PortfolioRisk = {
+  portfolio_id: number;
+  benchmark: string | null;
+  risk_free_rate: number;
+  risk_free_rate_source: string;
+  annualized_return: number | null;
+  annualized_volatility: number | null;
+  sharpe_ratio: number | null;
+  sortino_ratio: number | null;
+  beta: number | null;
+  alpha: number | null;
+  correlation: number | null;
+  maximum_drawdown: number | null;
+  downside_deviation: number | null;
+  observation_count: number;
+  effective_number_of_holdings: number | null;
+  largest_position: number | null;
+  hhi: number | null;
+  weight_balance_score: number | null;
+  sector_concentration: Record<string, number>;
+  geographic_concentration: Record<string, number>;
+  currency_concentration: Record<string, number>;
+  average_pairwise_correlation: number | null;
+  risk_contribution_concentration: number | null;
+  missing_inputs: string[];
+  as_of: string;
+};
+export type PortfolioMetricValue = { value: number | null; reason: string | null; coverage: number | null };
+export type PortfolioFundamentalHolding = {
+  asset_id: string;
+  symbol: string;
+  market_value: number | null;
+  weight: number | null;
+  expected_cagr: number | null;
+  expected_cagr_contribution: number | null;
+  pe_ratio: number | null;
+  price_to_free_cash_flow: number | null;
+  dividend_yield: number | null;
+  margin_of_safety: number | null;
+  coverage_status: string;
+  missing_inputs: string[];
+};
+export type PortfolioFundamentals = {
+  portfolio_id: number;
+  base_currency: string;
+  horizon_years: number;
+  weighted_expected_cagr: PortfolioMetricValue;
+  pe_ratio: PortfolioMetricValue;
+  price_to_free_cash_flow: PortfolioMetricValue;
+  dividend_yield: PortfolioMetricValue;
+  margin_of_safety: PortfolioMetricValue;
+  holdings: PortfolioFundamentalHolding[];
+  missing_inputs: string[];
+  as_of: string;
+};
+export type OptimizationConstraints = {
+  max_weight?: number;
+  max_turnover?: number | null;
+  locked_assets?: string[];
+  excluded_assets?: string[];
+};
+export type OptimizationPreview = {
+  portfolio_id: number;
+  objective: "max_expected_cagr" | "max_risk_adjusted_return";
+  status: string;
+  solver_message: string;
+  current_weights: Record<string, number>;
+  optimized_weights: Record<string, number>;
+  weight_deltas: Record<string, number>;
+  before: { expected_cagr: number | null; expected_volatility: number | null; expected_sharpe: number | null; concentration_hhi: number | null };
+  after: { expected_cagr: number | null; expected_volatility: number | null; expected_sharpe: number | null; concentration_hhi: number | null };
+  estimated_turnover: number | null;
+  binding_constraints: string[];
+  excluded_assets: string[];
+  input_coverage: Record<string, number>;
+  warnings: string[];
+  assumptions: string[];
+  calculation_timestamp: string;
 };
 
 export type AssetHolding = Position & {
@@ -150,6 +270,7 @@ export type StockRankingsResponse = {
   factor: string;
   universe: string;
   direction: string;
+  timeframe: string;
   as_of_date: string;
   methodology: string;
   total: number;
@@ -159,6 +280,7 @@ export type StockRankingsResponse = {
 export type StockRankingSnapshotRefreshPayload = {
   factor: string;
   universe: string;
+  timeframe?: string;
   limit?: number;
 };
 export type StockRankingSnapshotRefreshResponse = {
@@ -171,6 +293,144 @@ export type WatchlistAssetResponse = {
   asset_id: string;
   symbol: string;
   is_watchlisted: boolean;
+};
+export type SignalEvidenceItem = {
+  label: string;
+  metric: string;
+  value: number | null;
+  score: number | null;
+  detail: string;
+  source: string;
+  as_of: string | null;
+};
+export type SignalPortfolioImpact = {
+  portfolio_id: number;
+  portfolio_name: string;
+  weight: number | null;
+  market_value: number | null;
+  currency: string;
+  concentration_note: string;
+};
+export type SignalEfficacyMetadata = {
+  label: string;
+  sample_size: number;
+  prior_occurrences: number | null;
+  median_forward_return: number | null;
+  median_excess_return: number | null;
+  hit_rate: number | null;
+  max_adverse_excursion: number | null;
+  benchmark: string | null;
+  methodology_version: string;
+  warning: string | null;
+};
+export type SignalRow = {
+  signal_id: string;
+  definition_id: string;
+  asset_id: string;
+  ticker: string;
+  company_name: string | null;
+  exchange: string | null;
+  signal_name: string;
+  summary: string;
+  category: string;
+  direction: "positive" | "negative" | "neutral";
+  status: string;
+  strength: number;
+  confidence: number;
+  portfolio_priority: number;
+  raw_observed_value: number | null;
+  normalized_value: number | null;
+  trigger_threshold: number | null;
+  lookback_period: string;
+  first_detected_at: string | null;
+  confirmation_at: string | null;
+  last_evaluated_at: string;
+  data_as_of: string | null;
+  expires_at: string | null;
+  resolved_at: string | null;
+  resolution_reason: string | null;
+  methodology_version: string;
+  source: string;
+  missing_data_status: string;
+  supporting_evidence: SignalEvidenceItem[];
+  contradicting_evidence: SignalEvidenceItem[];
+  affected_portfolios: SignalPortfolioImpact[];
+  current_portfolio_weight: number | null;
+  historical_efficacy: SignalEfficacyMetadata;
+  related_signal_ids: string[];
+  reviewed: boolean;
+  muted: boolean;
+};
+export type SignalSummaryMetric = {
+  key: string;
+  label: string;
+  value: number;
+  filter_params: Record<string, string>;
+};
+export type SignalHistoryPoint = {
+  date: string;
+  strength: number;
+  confidence: number;
+  raw_value: number;
+  action: string;
+};
+export type SignalLifecycleEvent = {
+  status: string;
+  timestamp: string | null;
+  label: string;
+  detail: string;
+};
+export type SignalUserState = {
+  reviewed_at: string | null;
+  muted_until: string | null;
+  dismissed_until: string | null;
+  note: string | null;
+  alert_rule_id: number | null;
+};
+export type SignalsSummaryResponse = {
+  items: SignalRow[];
+  total: number;
+  limit: number;
+  offset: number;
+  metrics: SignalSummaryMetric[];
+  needs_attention: SignalRow[];
+  top_opportunities: SignalRow[];
+  generated_at: string;
+  data_as_of: string | null;
+  last_successful_computation_at: string | null;
+  partial_provider_failures: string[];
+  stale_cached_results: boolean;
+  model_version: string;
+  methodology: string;
+};
+export type SignalDetailResponse = SignalRow & {
+  lifecycle: SignalLifecycleEvent[];
+  strength_history: SignalHistoryPoint[];
+  related_news: NewsItem[];
+  methodology: string;
+  links: Record<string, string>;
+  user_state: SignalUserState;
+};
+export type SignalUserStatePayload = {
+  reviewed?: boolean;
+  muted_until?: string | null;
+  dismissed_until?: string | null;
+  note?: string | null;
+};
+export type SignalAlertRulePayload = {
+  condition?: string;
+  threshold?: number | null;
+  channel?: string;
+};
+export type SignalAlertRuleResponse = {
+  alert_rule_id: number;
+  signal_id: string;
+  definition_id: string;
+  asset_id: string;
+  condition: string;
+  threshold: number | null;
+  channel: string;
+  is_active: boolean;
 };
 export type ComparisonReturns = {
   return_1d: number | null;
@@ -410,6 +670,11 @@ export type BrokerAccount = {
   account_type: string | null;
   currency: string | null;
   balance: number | null;
+  cash_balance: number | null;
+  holdings_value: number | null;
+  total_value: number | null;
+  position_count: number;
+  latest_position_date: string | null;
   portfolio_id: number | null;
 };
 export type BrokerConnection = {
@@ -499,6 +764,7 @@ export type IngestionSchedulePayload = {
   prices_only: boolean;
   ranking_factor?: string;
   ranking_universe?: string;
+  ranking_timeframe?: string;
   missing_only?: boolean;
   stale_only?: boolean;
 };
@@ -519,11 +785,31 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   overviewUpdates: () => request<OverviewUpdates>("/overview/updates"),
-  stockRankings: (params: { factor: string; universe: string; direction: string; limit?: number; offset?: number }) => {
+  signals: (params: Record<string, string | number | null | undefined> = {}) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") query.set(key, String(value));
+    });
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return request<SignalsSummaryResponse>(`/signals${suffix}`);
+  },
+  signalDetail: (signalId: string) => request<SignalDetailResponse>(`/signals/${encodeURIComponent(signalId)}`),
+  updateSignalUserState: (signalId: string, payload: SignalUserStatePayload) =>
+    request<SignalUserState>(`/signals/${encodeURIComponent(signalId)}/user-state`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  createSignalAlert: (signalId: string, payload: SignalAlertRulePayload) =>
+    request<SignalAlertRuleResponse>(`/signals/${encodeURIComponent(signalId)}/alerts`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  stockRankings: (params: { factor: string; universe: string; direction: string; timeframe?: string; limit?: number; offset?: number }) => {
     const query = new URLSearchParams({
       factor: params.factor,
       universe: params.universe,
       direction: params.direction,
+      timeframe: params.timeframe ?? "monthly",
       limit: String(params.limit ?? 25),
       offset: String(params.offset ?? 0),
     });
@@ -601,6 +887,7 @@ export const api = {
     request<ActionResult>("/benchmarks/harden", { method: "POST", body: JSON.stringify(payload) }),
   portfolios: () => request<Portfolio[]>("/portfolios"),
   aggregatePortfolio: () => request<Portfolio>("/portfolios/aggregate/overview"),
+  portfolio: (id: number) => request<Portfolio>(`/portfolios/${id}`),
   positions: (id: number) => request<Position[]>(`/portfolios/${id}/positions`),
   aggregatePositions: () => request<Position[]>("/portfolios/aggregate/positions"),
   transactions: (id: number, limit = 8, offset = 0) =>
@@ -613,6 +900,23 @@ export const api = {
     const suffix = params.toString() ? `?${params.toString()}` : "";
     return request<Record<string, unknown>>(`/portfolios/${id}/analytics${suffix}`);
   },
+  portfolioPerformance: (id: number, params: { benchmark?: string; range?: string } = {}) => {
+    const query = new URLSearchParams({ range: params.range ?? "3Y" });
+    if (params.benchmark) query.set("benchmark", params.benchmark);
+    return request<PortfolioPerformance>(`/portfolios/${id}/performance?${query.toString()}`);
+  },
+  portfolioRisk: (id: number, params: { benchmark?: string; riskFreeRate?: number; lookback?: string } = {}) => {
+    const query = new URLSearchParams({ lookback: params.lookback ?? "3Y", risk_free_rate: String(params.riskFreeRate ?? 0) });
+    if (params.benchmark) query.set("benchmark", params.benchmark);
+    return request<PortfolioRisk>(`/portfolios/${id}/risk?${query.toString()}`);
+  },
+  portfolioFundamentals: (id: number, horizonYears = 5) =>
+    request<PortfolioFundamentals>(`/portfolios/${id}/fundamentals?horizon_years=${horizonYears}`),
+  optimizePortfolio: (id: number, objective: OptimizationPreview["objective"], constraints: OptimizationConstraints = {}) =>
+    request<OptimizationPreview>(`/portfolios/${id}/optimization/preview`, {
+      method: "POST",
+      body: JSON.stringify({ objective, constraints }),
+    }),
   createPortfolio: (name: string, baseCcy = "CAD") =>
     request<Portfolio>("/portfolios", { method: "POST", body: JSON.stringify({ name, base_ccy: baseCcy }) }),
   updatePortfolio: (id: number, name: string) =>

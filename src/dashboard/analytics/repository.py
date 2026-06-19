@@ -203,10 +203,10 @@ class AnalyticsRepository:
     def latest_price(self, asset_id: str) -> float | None:
         row = self.conn.execute(
             """
-            SELECT COALESCE(adj_close, close)
+            SELECT close
             FROM asset_quote_daily
             WHERE asset_id = ?
-              AND COALESCE(adj_close, close) IS NOT NULL
+              AND close IS NOT NULL
             ORDER BY date DESC
             LIMIT 1
             """,

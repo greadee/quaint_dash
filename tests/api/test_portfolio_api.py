@@ -27,6 +27,118 @@ def test_portfolio_create_list_and_conflict(tmp_path):
     assert listed.json()[0]["name"] == "Core"
 
 
+def test_portfolio_management_endpoints_are_backend_driven_and_deterministic(tmp_path):
+    db_path = tmp_path / "portfolio_management.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name, base_ccy) VALUES (1, 'Core', 'USD')")
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, sector, country, shares_outstanding)
+        VALUES
+            ('AAA', 'AAA', 'stock', 'USD', 'Technology', 'US', 100),
+            ('BBB', 'BBB', 'stock', 'USD', 'Healthcare', 'US', 100)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO position(portfolio_id, asset_id, qty, book_cost, created_at, updated_at)
+        VALUES
+            (1, 'AAA', 10, 100, now(), now()),
+            (1, 'BBB', 10, 100, now(), now())
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO txn(txn_id, portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, cash_amt, fee_amt, batch_id)
+        VALUES
+            (1, 1, '2025-01-01 09:30:00', 'buy', 'AAA', 10, 10, 'USD', NULL, 0, 1),
+            (2, 1, '2025-01-01 09:30:00', 'buy', 'BBB', 10, 10, 'USD', NULL, 0, 1),
+            (3, 1, '2025-01-03 09:30:00', 'deposit', NULL, NULL, NULL, 'USD', 50, 0, 1)
+        """
+    )
+    for asset_id, first, second, third, net_income, fcf in [
+        ("AAA", 10.0, 11.0, 12.0, 120.0, 120.0),
+        ("BBB", 10.0, 10.5, 10.0, 80.0, 80.0),
+    ]:
+        db.conn.execute(
+            """
+            INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+            VALUES
+                (?, DATE '2025-01-01', ?, ?, 'test'),
+                (?, DATE '2025-01-02', ?, ?, 'test'),
+                (?, DATE '2025-01-03', ?, ?, 'test')
+            """,
+            [asset_id, first, first, asset_id, second, second, asset_id, third, third],
+        )
+        db.conn.execute(
+            """
+            INSERT INTO financial_statement(asset_id, statement_type, year, quarter, data_json, source)
+            VALUES
+                (?, 'income', 2024, 4, ?, 'test'),
+                (?, 'balance', 2024, 4, ?, 'test'),
+                (?, 'cashflow', 2024, 4, ?, 'test'),
+                (?, 'cashflow', 2023, 4, ?, 'test')
+            """,
+            [
+                asset_id,
+                f'{{"revenue":500,"netIncome":{net_income},"eps":{net_income / 100}}}',
+                asset_id,
+                '{"totalStockholdersEquity":250,"totalAssets":500,"totalDebt":50}',
+                asset_id,
+                f'{{"freeCashFlow":{fcf}}}',
+                asset_id,
+                f'{{"freeCashFlow":{fcf * 0.9}}}',
+            ],
+        )
+    db.conn.execute(
+        """
+        INSERT INTO benchmark_index(index_id, index_name, index_family, index_category, currency, is_core, is_active)
+        VALUES ('SP500', 'S&P 500', 'S&P', 'core_geo', 'USD', TRUE, TRUE)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO benchmark_index_daily_price(index_id, price_date, close, adj_close, source, source_symbol, is_proxy)
+        VALUES
+            ('SP500', DATE '2025-01-01', 100, 100, 'test', 'SPY', FALSE),
+            ('SP500', DATE '2025-01-02', 101, 101, 'test', 'SPY', FALSE),
+            ('SP500', DATE '2025-01-03', 102, 102, 'test', 'SPY', FALSE)
+        """
+    )
+
+    with TestClient(app) as client:
+        performance = client.get("/api/v1/portfolios/1/performance?benchmark=SP500&range=MAX")
+        risk = client.get("/api/v1/portfolios/1/risk?benchmark=SP500&risk_free_rate=0.02")
+        fundamentals = client.get("/api/v1/portfolios/1/fundamentals?horizon_years=5")
+        max_cagr = client.post(
+            "/api/v1/portfolios/1/optimization/preview",
+            json={"objective": "max_expected_cagr", "constraints": {"max_weight": 0.75}},
+        )
+        max_risk_adjusted = client.post(
+            "/api/v1/portfolios/1/optimization/preview",
+            json={"objective": "max_risk_adjusted_return", "constraints": {"max_weight": 0.75}},
+        )
+
+    assert performance.status_code == 200
+    assert performance.json()["methodology"].startswith("actual daily transaction-aware")
+    assert performance.json()["points"][0]["portfolio_return_index"] == 100
+    assert performance.json()["benchmark"] == "SP500"
+    assert risk.status_code == 200
+    assert risk.json()["risk_free_rate"] == 0.02
+    assert "weight_balance_score" in risk.json()
+    assert fundamentals.status_code == 200
+    assert fundamentals.json()["weighted_expected_cagr"]["coverage"] > 0
+    assert max_cagr.status_code == 200
+    assert max_risk_adjusted.status_code == 200
+    for payload in [max_cagr.json(), max_risk_adjusted.json()]:
+        assert payload["status"] == "success"
+        assert abs(sum(payload["current_weights"].values()) - 1.0) < 0.0001
+        assert abs(sum(payload["optimized_weights"].values()) - 1.0) < 0.0001
+        assert payload["calculation_timestamp"]
+
+
 def test_portfolio_rename_conflicts_with_existing_name(tmp_path):
     app = create_app(tmp_path / "api.db")
 
@@ -735,6 +847,7 @@ def test_stock_rankings_rank_buy_and_sell_signals_from_stored_metrics(tmp_path):
     payload = response.json()
     assert payload["factor"] == "share_price_momentum"
     assert payload["universe"] == "tracked"
+    assert payload["timeframe"] == "monthly"
     assert "stored daily close momentum" in payload["methodology"]
     by_symbol = {item["symbol"]: item for item in payload["items"]}
     assert list(by_symbol)[0] == "BUYME"
@@ -767,11 +880,15 @@ def test_stock_rankings_rank_buy_and_sell_signals_from_stored_metrics(tmp_path):
     assert all_response.status_code == 200
     catalog_row = next(item for item in all_payload["items"] if item["symbol"] == "AAAACAT")
     assert catalog_row["is_tracked"] is False
-    assert catalog_row["data_status"] == "missing"
-    assert any(
-        "Needs at least 22 stored daily closes for price momentum." in item
-        for item in catalog_row["missing_inputs"]
-    )
+    assert catalog_row["data_status"] == "complete"
+    assert catalog_row["missing_inputs"] == []
+    assert [component["name"] for component in catalog_row["components"]] == [
+        "Share price momentum",
+        "News sentiment",
+        "Retail sentiment",
+        "Earnings momentum",
+        "Institutional buying",
+    ]
 
 
 def test_stock_ranking_snapshot_refresh_persists_current_scores(tmp_path):

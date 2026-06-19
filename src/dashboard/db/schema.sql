@@ -17,6 +17,17 @@ CREATE TABLE IF NOT EXISTS portfolio (
     base_ccy TEXT DEFAULT 'CAD'
 );
 
+CREATE TABLE IF NOT EXISTS fx_rate (
+    from_ccy TEXT NOT NULL,
+    to_ccy TEXT NOT NULL,
+    rate_date DATE NOT NULL,
+    rate DOUBLE PRECISION NOT NULL,
+    source TEXT NOT NULL DEFAULT 'manual',
+    as_of_ts TIMESTAMP NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (from_ccy, to_ccy, rate_date)
+);
+
 CREATE TABLE IF NOT EXISTS position ( 
     portfolio_id BIGINT, 
     asset_id TEXT, 
@@ -123,6 +134,139 @@ CREATE TABLE IF NOT EXISTS stock_ranking_snapshot (
 
 CREATE INDEX IF NOT EXISTS idx_stock_ranking_snapshot_factor_date
 ON stock_ranking_snapshot(factor, snapshot_date);
+
+CREATE TABLE IF NOT EXISTS signal_definition (
+    definition_id TEXT PRIMARY KEY,
+    signal_name TEXT NOT NULL,
+    category TEXT NOT NULL,
+    factor TEXT NOT NULL,
+    description TEXT NOT NULL,
+    trigger_threshold DOUBLE PRECISION,
+    lookback_period TEXT NOT NULL,
+    methodology_version TEXT NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS signal_evaluation (
+    signal_id TEXT PRIMARY KEY,
+    definition_id TEXT NOT NULL,
+    asset_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    strength DOUBLE PRECISION NOT NULL,
+    confidence DOUBLE PRECISION NOT NULL,
+    portfolio_priority DOUBLE PRECISION NOT NULL,
+    raw_observed_value DOUBLE PRECISION,
+    normalized_value DOUBLE PRECISION,
+    trigger_threshold DOUBLE PRECISION,
+    first_detected_at TIMESTAMP,
+    confirmation_at TIMESTAMP,
+    last_evaluated_at TIMESTAMP NOT NULL DEFAULT now(),
+    data_as_of TIMESTAMP,
+    expires_at TIMESTAMP,
+    resolved_at TIMESTAMP,
+    resolution_reason TEXT,
+    model_version TEXT NOT NULL,
+    source TEXT NOT NULL,
+    missing_data_status TEXT NOT NULL,
+    input_data_timestamps_json TEXT NOT NULL DEFAULT '{}',
+    missing_inputs_json TEXT NOT NULL DEFAULT '[]',
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    FOREIGN KEY (definition_id) REFERENCES signal_definition(definition_id),
+    FOREIGN KEY (asset_id) REFERENCES asset(asset_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_signal_evaluation_summary
+ON signal_evaluation(status, direction, portfolio_priority, confidence, last_evaluated_at);
+
+CREATE TABLE IF NOT EXISTS signal_evidence (
+    signal_id TEXT NOT NULL,
+    evidence_id TEXT NOT NULL,
+    evidence_type TEXT NOT NULL,
+    label TEXT NOT NULL,
+    metric TEXT NOT NULL,
+    value DOUBLE PRECISION,
+    score DOUBLE PRECISION,
+    detail TEXT NOT NULL,
+    source TEXT NOT NULL,
+    as_of TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (signal_id, evidence_id),
+    FOREIGN KEY (signal_id) REFERENCES signal_evaluation(signal_id)
+);
+
+CREATE TABLE IF NOT EXISTS signal_portfolio_impact (
+    signal_id TEXT NOT NULL,
+    portfolio_id BIGINT NOT NULL,
+    portfolio_name TEXT NOT NULL,
+    weight DOUBLE PRECISION,
+    market_value DOUBLE PRECISION,
+    currency TEXT NOT NULL DEFAULT 'CAD',
+    concentration_note TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (signal_id, portfolio_id),
+    FOREIGN KEY (signal_id) REFERENCES signal_evaluation(signal_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_signal_portfolio_impact_portfolio
+ON signal_portfolio_impact(portfolio_id, weight);
+
+CREATE TABLE IF NOT EXISTS signal_user_state (
+    signal_id TEXT PRIMARY KEY,
+    definition_id TEXT NOT NULL,
+    asset_id TEXT NOT NULL,
+    reviewed_at TIMESTAMP,
+    muted_until TIMESTAMP,
+    dismissed_until TIMESTAMP,
+    note TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE SEQUENCE IF NOT EXISTS seq_signal_alert_rule_id START 1;
+
+CREATE TABLE IF NOT EXISTS signal_alert_rule (
+    alert_rule_id BIGINT PRIMARY KEY DEFAULT nextval('seq_signal_alert_rule_id'),
+    signal_id TEXT NOT NULL,
+    definition_id TEXT NOT NULL,
+    asset_id TEXT NOT NULL,
+    condition TEXT NOT NULL,
+    threshold DOUBLE PRECISION,
+    channel TEXT NOT NULL DEFAULT 'in_app',
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_signal_alert_rule_signal
+ON signal_alert_rule(signal_id, is_active);
+
+CREATE TABLE IF NOT EXISTS institutional_buying_daily (
+    asset_id TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    date DATE NOT NULL,
+    net_flow_score DOUBLE NOT NULL,
+    accumulation_score DOUBLE NOT NULL,
+    volume_ratio DOUBLE,
+    buy_volume_proxy DOUBLE,
+    sell_volume_proxy DOUBLE,
+    source TEXT NOT NULL DEFAULT 'ranking_local_estimate',
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (asset_id, date),
+    FOREIGN KEY (asset_id) REFERENCES asset(asset_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_institutional_buying_daily_asset_date
+ON institutional_buying_daily(asset_id, date);
 
 INSERT INTO portfolio_ticker (
     portfolio_id,

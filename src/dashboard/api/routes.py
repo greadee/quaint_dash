@@ -46,10 +46,21 @@ from dashboard.api.models import (
     OverviewUpdatesResponse,
     Page,
     PortfolioCreate,
+    OptimizationPreviewRequest,
+    OptimizationPreviewResponse,
+    PortfolioFundamentalsResponse,
+    PortfolioPerformanceResponse,
+    PortfolioRiskResponse,
     PortfolioSummary,
     PortfolioUpdate,
     PositionSummary,
     PricePointResponse,
+    SignalAlertRuleRequest,
+    SignalAlertRuleResponse,
+    SignalDetailResponse,
+    SignalUserState,
+    SignalUserStateRequest,
+    SignalsSummaryResponse,
     StockRankingReadinessResponse,
     StockRankingSnapshotRefreshRequest,
     StockRankingSnapshotRefreshResponse,
@@ -78,6 +89,80 @@ def overview_updates(conn=Depends(get_connection)):
     return PortfolioApiService(conn).overview_updates()
 
 
+@router.get("/signals", response_model=SignalsSummaryResponse)
+def signals_summary(
+    q: str | None = Query(default=None, max_length=80),
+    portfolio_id: int | None = Query(default=None, ge=0),
+    owned: str | None = Query(default=None, pattern="^(owned|unowned)$"),
+    category: str | None = Query(default=None, max_length=64),
+    direction: str | None = Query(default=None, pattern="^(positive|negative|neutral)$"),
+    status: str | None = Query(
+        default=None,
+        pattern="^(candidate|confirmed|active|weakening|resolved|invalidated|expired|unavailable)$",
+    ),
+    min_strength: float | None = Query(default=None, ge=0, le=1),
+    min_confidence: float | None = Query(default=None, ge=0, le=1),
+    min_priority: float | None = Query(default=None, ge=0, le=1),
+    sector: str | None = Query(default=None, max_length=80),
+    industry: str | None = Query(default=None, max_length=120),
+    freshness: str | None = Query(default=None, pattern="^(fresh|stale)$"),
+    completeness: str | None = Query(default=None, pattern="^(complete|incomplete)$"),
+    triggered_after: date | None = None,
+    triggered_before: date | None = None,
+    sort: str = Query(default="priority", pattern="^(priority|triggered|strength|confidence|portfolio_weight|score_change|efficacy|ticker|market_cap)$"),
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    conn=Depends(get_connection),
+):
+    return PortfolioApiService(conn).signals_summary(
+        q=q,
+        portfolio_id=portfolio_id,
+        owned=owned,
+        category=category,
+        direction=direction,
+        status=status,
+        min_strength=min_strength,
+        min_confidence=min_confidence,
+        min_priority=min_priority,
+        sector=sector,
+        industry=industry,
+        freshness=freshness,
+        completeness=completeness,
+        triggered_after=triggered_after,
+        triggered_before=triggered_before,
+        sort=sort,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/signals/{signal_id:path}", response_model=SignalDetailResponse)
+def signal_detail(signal_id: str, conn=Depends(get_connection)):
+    return PortfolioApiService(conn).signal_detail(signal_id)
+
+
+@router.put("/signals/{signal_id:path}/user-state", response_model=SignalUserState)
+def update_signal_user_state(
+    signal_id: str,
+    payload: SignalUserStateRequest,
+    request: Request,
+    conn=Depends(get_connection),
+):
+    with request.app.state.write_lock:
+        return PortfolioApiService(conn).update_signal_user_state(signal_id, payload)
+
+
+@router.post("/signals/{signal_id:path}/alerts", response_model=SignalAlertRuleResponse)
+def create_signal_alert_rule(
+    signal_id: str,
+    payload: SignalAlertRuleRequest,
+    request: Request,
+    conn=Depends(get_connection),
+):
+    with request.app.state.write_lock:
+        return PortfolioApiService(conn).create_signal_alert_rule(signal_id, payload)
+
+
 @router.get("/rankings/stocks", response_model=StockRankingsResponse)
 def stock_rankings(
     factor: str = Query(
@@ -86,6 +171,7 @@ def stock_rankings(
     ),
     universe: str = Query(default="tracked", pattern="^(tracked|all)$"),
     direction: str = Query(default="buy", pattern="^(buy|sell)$"),
+    timeframe: str = Query(default="monthly", pattern="^(daily|weekly|monthly|yearly)$"),
     limit: int = Query(default=25, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     conn=Depends(get_connection),
@@ -94,6 +180,7 @@ def stock_rankings(
         factor=factor,
         universe=universe,
         direction=direction,
+        timeframe=timeframe,
         limit=limit,
         offset=offset,
     )
@@ -109,6 +196,7 @@ def refresh_stock_ranking_snapshots(
         return PortfolioApiService(conn).refresh_stock_ranking_snapshots(
             factor=payload.factor,
             universe=payload.universe,
+            timeframe=payload.timeframe,
             limit=payload.limit,
         )
 
@@ -338,6 +426,11 @@ def portfolio_overview(portfolio_id: int, conn=Depends(get_connection)):
     return PortfolioApiService(conn).get_portfolio(portfolio_id)
 
 
+@router.get("/portfolios/{portfolio_id}", response_model=PortfolioSummary)
+def portfolio_detail(portfolio_id: int, conn=Depends(get_connection)):
+    return PortfolioApiService(conn).get_portfolio(portfolio_id)
+
+
 @router.patch("/portfolios/{portfolio_id}", response_model=PortfolioSummary)
 def update_portfolio(
     portfolio_id: int,
@@ -371,6 +464,48 @@ def portfolio_analytics(
     conn=Depends(get_connection),
 ):
     return PortfolioApiService(conn).analytics(portfolio_id, benchmark_index_id)
+
+
+@router.get("/portfolios/{portfolio_id}/performance", response_model=PortfolioPerformanceResponse)
+def portfolio_performance(
+    portfolio_id: int,
+    benchmark: str | None = Query(default=None, min_length=1, max_length=64),
+    range: str = Query(default="3Y", pattern="^(1Y|3Y|5Y|10Y|Max|MAX)$"),
+    conn=Depends(get_connection),
+):
+    return PortfolioApiService(conn).performance(portfolio_id, benchmark, range.upper())
+
+
+@router.get("/portfolios/{portfolio_id}/risk", response_model=PortfolioRiskResponse)
+def portfolio_risk(
+    portfolio_id: int,
+    benchmark: str | None = Query(default=None, min_length=1, max_length=64),
+    risk_free_rate: float = Query(default=0.0, ge=-0.05, le=0.25),
+    lookback: str = Query(default="3Y", pattern="^(1Y|3Y|5Y|10Y|Max|MAX)$"),
+    conn=Depends(get_connection),
+):
+    return PortfolioApiService(conn).risk(portfolio_id, benchmark, risk_free_rate, lookback.upper())
+
+
+@router.get("/portfolios/{portfolio_id}/fundamentals", response_model=PortfolioFundamentalsResponse)
+def portfolio_fundamentals(
+    portfolio_id: int,
+    horizon_years: int = Query(default=5, ge=3, le=10),
+    conn=Depends(get_connection),
+):
+    return PortfolioApiService(conn).fundamentals(portfolio_id, horizon_years)
+
+
+@router.post(
+    "/portfolios/{portfolio_id}/optimization/preview",
+    response_model=OptimizationPreviewResponse,
+)
+def portfolio_optimization_preview(
+    portfolio_id: int,
+    payload: OptimizationPreviewRequest,
+    conn=Depends(get_connection),
+):
+    return PortfolioApiService(conn).optimization_preview(portfolio_id, payload)
 
 
 @router.delete("/portfolios/{portfolio_id}", response_model=ActionResult)
@@ -584,6 +719,7 @@ def ingestion_schedule(
             prices_only=payload.prices_only,
             ranking_factor=payload.ranking_factor,
             ranking_universe=payload.ranking_universe,
+            ranking_timeframe=payload.ranking_timeframe,
             missing_only=payload.missing_only,
             stale_only=payload.stale_only,
         )

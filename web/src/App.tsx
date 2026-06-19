@@ -4,6 +4,7 @@ import {
   Activity,
   ArrowUpRight,
   BarChart3,
+  Bell,
   Building2,
   ChartNoAxesCombined,
   CheckCircle2,
@@ -21,6 +22,7 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  SlidersHorizontal,
   Trash2,
   WalletCards,
   X,
@@ -41,10 +43,15 @@ import {
   type SectorComparisonContext,
   type IngestionReadiness,
   type IngestionBackgroundStatus,
+  type OptimizationPreview,
   type Portfolio,
+  type PortfolioFundamentals,
+  type PortfolioPerformance,
+  type PortfolioRisk,
   type Position,
+  type SignalDetailResponse,
+  type SignalRow,
   type StockRankingReadiness,
-  type StockRankingItem,
 } from "./api";
 
 const percent = (value: number | null | undefined) =>
@@ -73,7 +80,6 @@ type ThemeMode = "light" | "dark";
 type MoverDefault = "8" | "all";
 type StockRankingFactor = "aggregate" | "share_price_momentum" | "news_sentiment" | "retail_sentiment" | "earnings_momentum" | "institutional_buying";
 type StockRankingUniverse = "tracked" | "all";
-type StockRankingDirection = "buy" | "sell";
 type AppNotification = { id: number; tone: "success" | "error"; message: string };
 type HelpItem = { term: string; detail: string };
 type AppSettings = {
@@ -95,12 +101,6 @@ const stockRankingFactors: { value: StockRankingFactor; label: string }[] = [
   { value: "retail_sentiment", label: "Retail" },
   { value: "earnings_momentum", label: "Earnings" },
   { value: "institutional_buying", label: "Institutions" },
-];
-const signalHelp: HelpItem[] = [
-  { term: "Aggregate", detail: "A blended score from available price, news, retail, earnings, and institutional inputs. Missing factors reduce confidence." },
-  { term: "Factor tabs", detail: "Each tab ranks stocks by one unique input so buy ideas and sell risks are easy to separate." },
-  { term: "Universe", detail: "Tracked focuses on portfolio/watchlist assets. All expands to the available stock catalog and shows missing coverage honestly." },
-  { term: "Confidence", detail: "How much usable data backs the ranking. Missing snapshots and incomplete inputs lower confidence instead of becoming neutral scores." },
 ];
 const compareHelp: HelpItem[] = [
   { term: "P/E and price/sales", detail: "Simple valuation ratios. Lower can mean cheaper, but only if the business quality and growth are comparable." },
@@ -190,6 +190,7 @@ export default function App() {
         <nav>
           <NavLink to="/" end><LayoutDashboard />Overview</NavLink>
           <NavLink to="/portfolios"><WalletCards />Portfolios</NavLink>
+          <NavLink to="/signals"><Activity />Signals</NavLink>
           <NavLink to="/compare"><BarChart3 />Compare</NavLink>
           <NavLink to="/benchmarks"><Search />Benchmarks</NavLink>
           <NavLink to="/brokers"><Building2 />Brokers</NavLink>
@@ -206,12 +207,16 @@ export default function App() {
         </header>
         <RouteErrorBoundary key={location.pathname}>
           <Routes>
-            <Route path="/" element={<OverviewPage moverDefault={settings.moverDefault} notify={notify} />} />
-            <Route path="/portfolios" element={<PortfoliosPage notify={notify} />} />
+            <Route path="/" element={<OverviewPage moverDefault={settings.moverDefault} />} />
+            <Route path="/portfolios" element={<PortfolioWorkspacePage />} />
+            <Route path="/portfolios/:portfolioId" element={<PortfolioDetailPage />} />
+            <Route path="/signals" element={<StockRankingsPage notify={notify} />} />
+            <Route path="/signals/:signalId" element={<SignalDetailPage notify={notify} />} />
             <Route path="/compare" element={<ComparePage />} />
             <Route path="/benchmarks" element={<BenchmarkBrowserPage notify={notify} />} />
-            <Route path="/asset/:assetId" element={<AssetPage notify={notify} />} />
-            <Route path="/brokers" element={<BrokersPage />} />
+            <Route path="/assets/:assetId" element={<AssetDetailPage notify={notify} />} />
+            <Route path="/asset/:assetId" element={<AssetDetailPage notify={notify} />} />
+            <Route path="/brokers" element={<BrokersPage notify={notify} />} />
             <Route path="/operations" element={<OperationsPage />} />
             <Route path="/settings" element={<SettingsPage settings={settings} onChange={updateSettings} />} />
           </Routes>
@@ -275,46 +280,16 @@ class RouteErrorBoundary extends Component<{ children: ReactNode }, { error: Err
   }
 }
 
-function OverviewPage({ moverDefault, notify }: { moverDefault: MoverDefault; notify: (message: string, tone?: AppNotification["tone"]) => void }) {
-  const client = useQueryClient();
+function OverviewPage({ moverDefault }: { moverDefault: MoverDefault }) {
   const [showAllMovers, setShowAllMovers] = useState(moverDefault === "all");
-  const [rankingFactor, setRankingFactor] = useState<StockRankingFactor>("aggregate");
-  const [rankingUniverse, setRankingUniverse] = useState<StockRankingUniverse>("tracked");
-  const [rankingDirection, setRankingDirection] = useState<StockRankingDirection>("buy");
   const updates = useQuery({ queryKey: ["overview-updates"], queryFn: api.overviewUpdates });
-  const signals = useQuery({
-    queryKey: ["stock-rankings", rankingFactor, rankingUniverse, rankingDirection],
-    queryFn: () => api.stockRankings({
-      factor: rankingFactor,
-      universe: rankingUniverse,
-      direction: rankingDirection,
-      limit: 25,
-    }),
-  });
   const portfolios = useQuery({ queryKey: ["portfolios"], queryFn: api.portfolios });
   const brokers = useQuery({ queryKey: ["broker-accounts"], queryFn: api.brokerAccounts });
   const jobs = useQuery({ queryKey: ["jobs", "failed", ""], queryFn: () => api.ingestionJobs("failed") });
-  const snapshotRankings = useMutation({
-    mutationFn: () => api.refreshStockRankingSnapshots({
-      factor: rankingFactor,
-      universe: rankingUniverse,
-      limit: 100,
-    }),
-    onSuccess: (result) => notify(`Saved ${result.refreshed_count} ${stockRankingLabel(result.factor)} snapshot rows.`),
-    onError: (error) => notify(actionErrorMessage(error), "error"),
-  });
-  const addWatchlist = useMutation({
-    mutationFn: (assetId: string) => api.addWatchlistAsset(assetId),
-    onSuccess: (result) => {
-      notify(`${result.symbol} added to watchlist.`);
-      client.invalidateQueries({ queryKey: ["stock-rankings"] });
-      client.invalidateQueries({ queryKey: ["ranking-readiness"] });
-    },
-    onError: (error) => notify(actionErrorMessage(error), "error"),
-  });
   const portfolioCount = portfolios.data?.length ?? 0;
   const mappedAccounts = brokers.data?.filter((account) => account.portfolio_id != null).length ?? 0;
   const failedJobs = jobs.data?.length ?? 0;
+  const openAccounts = brokers.data?.length ?? 0;
   const topMover = updates.data?.price_movers[0];
   const movers = updates.data?.price_movers ?? [];
   const visibleMovers = showAllMovers ? movers : movers.slice(0, 8);
@@ -325,64 +300,36 @@ function OverviewPage({ moverDefault, notify }: { moverDefault: MoverDefault; no
 
   return <div className="page">
     <div className="page-title">
-      <div><p className="eyebrow">Today at a glance</p><h1>Overview</h1><p className="page-subtitle">The landing page is now for updates, attention items, and fresh market context. Portfolio organization lives in its own workspace.</p></div>
-      <div className="actions"><Link className="button-link" to="/portfolios"><WalletCards size={17}/>Open portfolios</Link><Link className="button-link primary" to="/brokers"><Building2 size={17}/>Broker setup</Link></div>
+      <div><p className="eyebrow">Today at a glance</p><h1>Overview</h1><p className="page-subtitle">A compact status screen for account coverage, tracked value, recent movement, and anything that needs attention.</p></div>
+      <div className="actions"><Link className="button-link" to="/signals"><Activity size={17}/>Review signals</Link><Link className="button-link primary" to="/portfolios"><WalletCards size={17}/>Open portfolios</Link></div>
     </div>
     <section className="metric-grid">
       <Metric icon={<CircleDollarSign />} label="Total market value" value={money(updates.data?.total_market_value)} />
       <Metric icon={<Activity />} label="Active holdings" value={String(updates.data?.position_count ?? 0)} />
       <Metric icon={<WalletCards />} label="Portfolios" value={String(portfolioCount)} />
+      <Metric icon={<Building2 />} label="Broker accounts" value={`${mappedAccounts}/${openAccounts}`} detail="mapped" positive={Boolean(mappedAccounts)} />
       <Metric icon={<Database />} label="Attention items" value={String(failedJobs)} detail={failedJobs ? "failed jobs" : "data healthy"} positive={!failedJobs} />
     </section>
-    <section className="card holding-signals-card">
-      <div className="card-heading">
-        <div><p className="eyebrow">Stock rank</p><h2>Best {rankingDirection === "buy" ? "buy" : "sell"} candidates</h2></div>
-        <div className="card-tools signal-timeframes ranking-tools">
-          <HelpDisclosure title="How to read rankings" items={signalHelp} note="Use rankings to choose what deserves review first. Confirm the thesis, valuation, taxes, and position size before acting." />
-          <select value={rankingUniverse} onChange={(event) => setRankingUniverse(event.target.value as StockRankingUniverse)}>
-            <option value="tracked">Tracked</option>
-            <option value="all">All stocks</option>
-          </select>
-          <select value={rankingDirection} onChange={(event) => setRankingDirection(event.target.value as StockRankingDirection)}>
-            <option value="buy">Best buys</option>
-            <option value="sell">Best sells</option>
-          </select>
-          <button onClick={() => snapshotRankings.mutate()} disabled={snapshotRankings.isPending}>
-            <Save size={14} />
-            Snapshot
-          </button>
-          {stockRankingFactors.map((item) => (
-            <button
-              key={item.value}
-              className={rankingFactor === item.value ? "selected" : ""}
-              onClick={() => setRankingFactor(item.value)}
-            >
-              {item.label}
-            </button>
-          ))}
+    <section className="overview-focus-grid">
+      <section className="card overview-primary">
+        <div className="card-heading">
+          <div><p className="eyebrow">Largest move</p><h2>{topMover?.symbol ?? "Waiting for prices"}</h2></div>
+          <span>{topMover ? percent(topMover.change_percent) : "no data"}</span>
         </div>
-      </div>
-      {signals.isLoading ? <Loading compact /> : signals.data?.items.length ? (
-        <>
-          <div className="ranking-summary">
-            <span>{signals.data.total} ranked</span>
-            <span>{signals.data.data_complete_count} complete</span>
-            <span>{signals.data.universe === "all" ? "all-stock catalog" : "tracked universe"}</span>
-          </div>
-          <div className="holding-signal-list">
-            {signals.data.items.map((item, index) => (
-              <StockRankingRow
-                item={item}
-                rank={index + 1}
-                key={item.asset_id}
-                onAddToWatchlist={(assetId) => addWatchlist.mutate(assetId)}
-                isAdding={addWatchlist.isPending && addWatchlist.variables === item.asset_id}
-              />
-            ))}
-          </div>
-          <p className="signal-methodology">{signals.data.methodology}</p>
-        </>
-      ) : <EmptyRow text="No stock rankings yet. Schedule ranking input ingestion or add tracked assets to populate this list." />}
+        <div className="overview-hero-value">
+          <strong>{topMover ? money(topMover.change) : "No movement yet"}</strong>
+          <p>{topMover ? `${topMover.name ?? topMover.asset_id} represents ${percent(topMover.weight)} of tracked holdings.` : "Once held assets have at least two prices, this panel shows the most important daily movement."}</p>
+          {topMover ? <Link className="portal-link" to={`/asset/${topMover.asset_id}`}>Open asset detail</Link> : <Link className="portal-link" to="/operations">Refresh market data</Link>}
+        </div>
+      </section>
+      <section className="card overview-primary">
+        <div className="card-heading"><div><p className="eyebrow">Next action</p><h2>{failedJobs ? "Fix failed data jobs" : mappedAccounts ? "Review portfolio exposure" : "Connect a broker account"}</h2></div><span>{failedJobs ? `${failedJobs} failed` : `${mappedAccounts} mapped`}</span></div>
+        <div className="overview-hero-value">
+          <strong>{failedJobs ? "Data attention" : mappedAccounts ? "Portfolio review" : "Broker setup"}</strong>
+          <p>{failedJobs ? "Operations has the failed job list and retry controls." : mappedAccounts ? "Portfolios contains holdings, exposure, analytics, and account mapping views." : "Broker setup stays in the broker workspace so account connection steps are not mixed into overview."}</p>
+          <Link className="portal-link" to={failedJobs ? "/operations" : mappedAccounts ? "/portfolios" : "/brokers"}>{failedJobs ? "Open operations" : mappedAccounts ? "Open portfolio workspace" : "Start broker setup"}</Link>
+        </div>
+      </section>
     </section>
     <section className="update-grid">
       <section className="card">
@@ -400,81 +347,535 @@ function OverviewPage({ moverDefault, notify }: { moverDefault: MoverDefault; no
         {updates.isLoading ? <Loading compact /> : updates.data?.news.length ? <div className="news-list">{updates.data.news.map((item, index) => <a href={item.url ?? undefined} target="_blank" rel="noreferrer" className="news-row" key={`${item.title}-${index}`}><div><strong>{item.title}</strong><span>{[item.symbol, item.provider, item.published_at ? new Date(item.published_at).toLocaleDateString() : null].filter(Boolean).join(" - ")}</span></div></a>)}</div> : <EmptyRow text="No local news found yet. Run sentiment/news ingestion to populate this panel." />}
       </section>
     </section>
-    <section className="update-grid slim">
-      <section className="card">
-        <div className="card-heading"><div><p className="eyebrow">Next best action</p><h2>{mappedAccounts ? "Review imported portfolios" : "Connect a broker account"}</h2></div><span>{mappedAccounts} mapped</span></div>
-        <div className="broker-help">
-          <p>{mappedAccounts ? "Your broker accounts are mapped. Use Portfolios to review exposure by sector, geography, industry, and currency." : "Connect a broker, sync accounts, and map them to local portfolios so the dashboard can organize everything automatically."}</p>
-          <Link className="portal-link" to={mappedAccounts ? "/portfolios" : "/brokers"}>{mappedAccounts ? "Open portfolio workspace" : "Start broker setup"}</Link>
+  </div>;
+}
+
+function StockRankingsPage({ notify }: { notify: (message: string, tone?: AppNotification["tone"]) => void }) {
+  const client = useQueryClient();
+  const [params, setParams] = useSearchParams();
+  const [expandedId, setExpandedId] = useState<string | null>(params.get("signal"));
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const filters = signalFiltersFromParams(params);
+  const signals = useQuery({
+    queryKey: ["signals", filters],
+    queryFn: () => api.signals(filters),
+    placeholderData: (previous) => previous,
+  });
+  const detail = useQuery({
+    queryKey: ["signal-detail", expandedId],
+    queryFn: () => api.signalDetail(expandedId ?? ""),
+    enabled: Boolean(expandedId),
+  });
+  const markReviewed = useMutation({
+    mutationFn: (signalId: string) => api.updateSignalUserState(signalId, { reviewed: true }),
+    onSuccess: () => {
+      notify("Signal marked reviewed.");
+      client.invalidateQueries({ queryKey: ["signals"] });
+      if (expandedId) client.invalidateQueries({ queryKey: ["signal-detail", expandedId] });
+    },
+    onError: (error) => notify(actionErrorMessage(error), "error"),
+  });
+  const addWatchlist = useMutation({
+    mutationFn: (assetId: string) => api.addWatchlistAsset(assetId),
+    onSuccess: (result) => {
+      notify(`${result.symbol} added to watchlist.`);
+      client.invalidateQueries({ queryKey: ["signals"] });
+      client.invalidateQueries({ queryKey: ["ranking-readiness"] });
+    },
+    onError: (error) => notify(actionErrorMessage(error), "error"),
+  });
+  const createAlert = useMutation({
+    mutationFn: (signalId: string) => api.createSignalAlert(signalId, { condition: "status_active", channel: "in_app" }),
+    onSuccess: () => {
+      notify("Alert rule created.");
+      if (expandedId) client.invalidateQueries({ queryKey: ["signal-detail", expandedId] });
+    },
+    onError: (error) => notify(actionErrorMessage(error), "error"),
+  });
+  const updateFilter = (key: string, value: string) => {
+    const next = new URLSearchParams(params);
+    if (value) next.set(key, value); else next.delete(key);
+    if (key !== "offset") next.delete("offset");
+    setParams(next);
+  };
+  const applyMetric = (metric: Record<string, string>) => {
+    const next = new URLSearchParams(params);
+    Object.entries(metric).forEach(([key, value]) => next.set(key, value));
+    next.delete("offset");
+    setParams(next);
+  };
+  const openSignal = (signalId: string) => {
+    setExpandedId(signalId);
+    const next = new URLSearchParams(params);
+    next.set("signal", signalId);
+    setParams(next);
+  };
+  const closeSignal = () => {
+    setExpandedId(null);
+    const next = new URLSearchParams(params);
+    next.delete("signal");
+    setParams(next);
+  };
+  useEffect(() => {
+    document.title = "Signals - Quaint Dash";
+  }, []);
+  return <div className="page">
+    <div className="page-title signals-title">
+      <div>
+        <p className="eyebrow">Decision support</p>
+        <h1>Signals</h1>
+        <p className="page-subtitle">Meaningful changes in stored market, sentiment, earnings, and portfolio data. Each signal separates strength, confidence, and portfolio priority so evidence is visible before action.</p>
+        <div className="signals-meta" aria-live="polite">
+          <span>Market status: local close-based data</span>
+          <span>Computed: {formatDateTime(signals.data?.last_successful_computation_at)}</span>
+          <span>Data as of: {formatDateTime(signals.data?.data_as_of)}</span>
+          <span>Model: {signals.data?.model_version ?? "loading"}</span>
         </div>
-      </section>
-      <section className="card">
-        <div className="card-heading"><div><p className="eyebrow">Largest move</p><h2>{topMover?.symbol ?? "Waiting for prices"}</h2></div><span>{topMover ? percent(topMover.change_percent) : "no data"}</span></div>
-        <div className="broker-help">
-          <p>{topMover ? `${topMover.name ?? topMover.asset_id} moved ${money(topMover.change)} since the prior close and represents ${percent(topMover.weight)} of tracked holdings.` : "Once held assets have at least two prices, this card will show what changed most."}</p>
+      </div>
+      <div className="actions">
+        <button onClick={() => signals.refetch()} disabled={signals.isFetching}><RefreshCw size={17} />Refresh</button>
+        <button onClick={() => notify("Saved views use URL filters in this local build.")}><Save size={17}/>Saved view</button>
+        <a className="button-link" href="#signal-methodology"><Info size={17}/>Methodology</a>
+      </div>
+    </div>
+    <section className="signal-summary-strip" aria-label="Signal summary">
+      {signals.isLoading ? Array.from({ length: 6 }).map((_item, index) => <div className="signal-summary-tile skeleton" key={index} />) : signals.data?.metrics.map((metric) => (
+        <button key={metric.key} className="signal-summary-tile" onClick={() => applyMetric(metric.filter_params)}>
+          <span>{metric.label}</span>
+          <strong>{metric.value}</strong>
+        </button>
+      ))}
+    </section>
+    {signals.data?.partial_provider_failures.length ? <div className="signal-degraded" role="status">Partial provider coverage: {signals.data.partial_provider_failures.join(", ")}. Valid cached signals remain visible.</div> : null}
+    {signals.isError ? <ErrorPanel error={signals.error} /> : null}
+    <section className="signal-priority-grid">
+      <SignalPrioritySection title="Needs attention" items={signals.data?.needs_attention ?? []} empty="No high-priority risks currently meet the filters." onOpen={openSignal} />
+      <SignalPrioritySection title="Top opportunities" items={signals.data?.top_opportunities ?? []} empty="No high-confidence opportunities currently meet the filters." onOpen={openSignal} />
+    </section>
+    <section className="card signal-explorer">
+      <div className="signal-explorer-toolbar">
+        <div>
+          <p className="eyebrow">Signal explorer</p>
+          <h2>{signals.isLoading ? "Loading signals" : `${signals.data?.total ?? 0} matching signals`}</h2>
         </div>
-      </section>
+        <button className="mobile-filter-button" onClick={() => setMobileFiltersOpen(true)}><SlidersHorizontal size={17}/>Filters</button>
+      </div>
+      <SignalFilterPanel filters={filters} updateFilter={updateFilter} mobileOpen={mobileFiltersOpen} onClose={() => setMobileFiltersOpen(false)} />
+      <ActiveSignalFilters filters={filters} onClear={(key) => updateFilter(key, "")} onClearAll={() => setParams(new URLSearchParams())} />
+      {signals.isLoading ? <SignalTableSkeleton /> : signals.data?.items.length ? (
+        <>
+          <div className="signal-table-wrap">
+            <table className="signal-table">
+              <caption className="sr-only">Signals sorted by {filters.sort ?? "portfolio priority"}</caption>
+              <thead>
+                <tr>
+                  {[
+                    ["Asset", "ticker"],
+                    ["Signal", "priority"],
+                    ["Direction", "direction"],
+                    ["Strength", "strength"],
+                    ["Confidence", "confidence"],
+                    ["Trigger", "triggered"],
+                    ["Portfolio impact", "portfolio_weight"],
+                    ["Age", "triggered"],
+                    ["Trend", "score_change"],
+                    ["Actions", ""],
+                  ].map(([label, sortKey]) => (
+                    <th key={label} scope="col">
+                      {sortKey ? <button className="sort-header" onClick={() => updateFilter("sort", sortKey)} aria-label={`Sort by ${label}`}>{label}{filters.sort === sortKey ? " desc" : ""}</button> : label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {signals.data.items.map((item) => (
+                  <SignalTableRow
+                    key={item.signal_id}
+                    item={item}
+                    expanded={expandedId === item.signal_id}
+                    detail={expandedId === item.signal_id ? detail.data : undefined}
+                    onOpen={() => openSignal(item.signal_id)}
+                    onClose={closeSignal}
+                    onReview={() => markReviewed.mutate(item.signal_id)}
+                    onAlert={() => createAlert.mutate(item.signal_id)}
+                    onWatchlist={() => addWatchlist.mutate(item.asset_id)}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="signal-mobile-list">
+            {signals.data.items.map((item) => <SignalMobileCard key={item.signal_id} item={item} onOpen={() => openSignal(item.signal_id)} />)}
+          </div>
+        </>
+      ) : <EmptyRow text={Object.keys(filters).length ? "No signals match the selected filters. Clear filters or broaden the confidence and priority thresholds." : "No active signals. Stored ranking inputs are not available for the tracked universe yet."} />}
+      {signals.isFetching && !signals.isLoading ? <p className="signal-refreshing" role="status">Refreshing signals while keeping current results visible.</p> : null}
+      <p id="signal-methodology" className="signal-methodology">{signals.data?.methodology ?? "Signal methodology loads with the server-side signal response."}</p>
     </section>
   </div>;
 }
 
-function stockRankingLabel(factor: string) {
-  return stockRankingFactors.find((item) => item.value === factor)?.label ?? factor;
+function signalFiltersFromParams(params: URLSearchParams) {
+  const keys = ["q", "portfolio_id", "owned", "category", "direction", "status", "min_strength", "min_confidence", "min_priority", "sector", "industry", "freshness", "completeness", "triggered_after", "triggered_before", "sort", "limit", "offset"];
+  return Object.fromEntries(keys.map((key) => [key, params.get(key) ?? undefined]).filter((entry) => entry[1])) as Record<string, string>;
 }
 
-function StockRankingRow({
-  item,
-  rank,
-  onAddToWatchlist,
-  isAdding,
-}: {
-  item: StockRankingItem;
-  rank: number;
-  onAddToWatchlist: (assetId: string) => void;
-  isAdding: boolean;
-}) {
-  const tone = item.action.includes("Sell") ? "sell" : item.action.includes("Buy") ? "buy" : "hold";
-  const scoreWidth = Math.min(100, Math.max(0, item.score_strength));
-  const coverage = [item.is_held ? "held" : null, item.is_watchlisted ? "watchlist" : null, item.is_tracked ? "tracked" : null].filter(Boolean).join(" / ");
-  return (
-    <article className={`holding-signal-row ${tone}`}>
-      <div className="signal-rank">{rank}</div>
-      <Link to={`/asset/${item.asset_id}`} className="signal-asset">
-        <strong>{item.symbol}</strong>
-        <span>{[item.name ?? "Stock", item.exchange_code, coverage].filter(Boolean).join(" - ")}</span>
-      </Link>
-      <div className={`signal-action ${tone}`}>
-        <b>{item.action}</b>
-        <span>{signedNumber(item.score, 0)} score</span>
+function SignalPrioritySection({ title, items, empty, onOpen }: { title: string; items: SignalRow[]; empty: string; onOpen: (id: string) => void }) {
+  return <section className="card signal-priority-section">
+    <div className="card-heading"><div><p className="eyebrow">Priority</p><h2>{title}</h2></div><span>{items.length}</span></div>
+    {items.length ? <div className="signal-priority-list">{items.map((item) => (
+      <button key={item.signal_id} onClick={() => onOpen(item.signal_id)} className="signal-priority-item">
+        <div><strong>{item.ticker}</strong><span>{item.company_name ?? item.exchange ?? "Tracked asset"}</span></div>
+        <p>{item.summary}</p>
+        <b>{percent(item.confidence)} confidence</b>
+        <span>{percent(item.current_portfolio_weight)} exposure</span>
+        <span>{timeAgo(item.first_detected_at)}</span>
+      </button>
+    ))}</div> : <EmptyRow text={empty} />}
+  </section>;
+}
+
+function SignalFilterPanel({ filters, updateFilter, mobileOpen, onClose }: { filters: Record<string, string>; updateFilter: (key: string, value: string) => void; mobileOpen: boolean; onClose: () => void }) {
+  return <div className={mobileOpen ? "signal-filter-panel open" : "signal-filter-panel"}>
+    <div className="signal-filter-heading"><strong>Filters</strong><button onClick={onClose} aria-label="Close filters"><X size={16}/></button></div>
+    <label>Search<input value={filters.q ?? ""} onChange={(event) => updateFilter("q", event.target.value)} placeholder="Ticker, company, signal" /></label>
+    <label>Portfolio ID<input value={filters.portfolio_id ?? ""} onChange={(event) => updateFilter("portfolio_id", event.target.value)} inputMode="numeric" /></label>
+    <label>Owned<select value={filters.owned ?? ""} onChange={(event) => updateFilter("owned", event.target.value)}><option value="">Any</option><option value="owned">Owned</option><option value="unowned">Watchlist/unowned</option></select></label>
+    <label>Category<select value={filters.category ?? ""} onChange={(event) => updateFilter("category", event.target.value)}><option value="">Any</option>{["momentum","sentiment","news_event_activity","earnings_revisions","analyst_broker_activity","market_regime","portfolio_concentration","risk","valuation","quality","growth","correlation"].map((item) => <option key={item} value={item}>{labelize(item)}</option>)}</select></label>
+    <label>Direction<select value={filters.direction ?? ""} onChange={(event) => updateFilter("direction", event.target.value)}><option value="">Any</option><option value="positive">Positive</option><option value="negative">Negative</option><option value="neutral">Neutral</option></select></label>
+    <label>Status<select value={filters.status ?? ""} onChange={(event) => updateFilter("status", event.target.value)}><option value="">Any</option>{["candidate","confirmed","active","weakening","resolved","invalidated","expired","unavailable"].map((item) => <option key={item} value={item}>{labelize(item)}</option>)}</select></label>
+    <label>Min strength<select value={filters.min_strength ?? ""} onChange={(event) => updateFilter("min_strength", event.target.value)}><option value="">Any</option><option value="0.35">35%+</option><option value="0.65">65%+</option></select></label>
+    <label>Min confidence<select value={filters.min_confidence ?? ""} onChange={(event) => updateFilter("min_confidence", event.target.value)}><option value="">Any</option><option value="0.5">50%+</option><option value="0.7">70%+</option></select></label>
+    <label>Min priority<select value={filters.min_priority ?? ""} onChange={(event) => updateFilter("min_priority", event.target.value)}><option value="">Any</option><option value="0.5">50%+</option><option value="0.65">65%+</option></select></label>
+    <label>Sector<input value={filters.sector ?? ""} onChange={(event) => updateFilter("sector", event.target.value)} /></label>
+    <label>Industry<input value={filters.industry ?? ""} onChange={(event) => updateFilter("industry", event.target.value)} /></label>
+    <label>Freshness<select value={filters.freshness ?? ""} onChange={(event) => updateFilter("freshness", event.target.value)}><option value="">Any</option><option value="fresh">Fresh</option><option value="stale">Stale</option></select></label>
+    <label>Completeness<select value={filters.completeness ?? ""} onChange={(event) => updateFilter("completeness", event.target.value)}><option value="">Any</option><option value="complete">Complete</option><option value="incomplete">Incomplete</option></select></label>
+    <label>Sort<select value={filters.sort ?? "priority"} onChange={(event) => updateFilter("sort", event.target.value)}><option value="priority">Portfolio priority</option><option value="triggered">Most recently triggered</option><option value="strength">Strength</option><option value="confidence">Confidence</option><option value="portfolio_weight">Portfolio weight</option><option value="score_change">Recent score change</option><option value="efficacy">Historical efficacy</option><option value="ticker">Ticker</option><option value="market_cap">Market cap</option></select></label>
+  </div>;
+}
+
+function ActiveSignalFilters({ filters, onClear, onClearAll }: { filters: Record<string, string>; onClear: (key: string) => void; onClearAll: () => void }) {
+  const entries = Object.entries(filters).filter(([key]) => key !== "limit" && key !== "offset" && key !== "signal");
+  if (!entries.length) return null;
+  return <div className="active-filter-chips" aria-label="Active filters">
+    {entries.map(([key, value]) => <button key={key} onClick={() => onClear(key)}>{labelize(key)}: {value}<X size={13}/></button>)}
+    <button onClick={onClearAll}>Clear all</button>
+  </div>;
+}
+
+function SignalTableRow({ item, expanded, detail, onOpen, onClose, onReview, onAlert, onWatchlist }: { item: SignalRow; expanded: boolean; detail?: SignalDetailResponse; onOpen: () => void; onClose: () => void; onReview: () => void; onAlert: () => void; onWatchlist: () => void }) {
+  return <>
+    <tr className={expanded ? "selected-row" : ""}>
+      <td><Link className="asset-link" to={`/asset/${item.asset_id}`}><strong>{item.ticker}</strong><span>{item.company_name ?? item.exchange ?? "Tracked asset"}</span></Link></td>
+      <td><button className="link-button signal-name-button" onClick={onOpen}>{item.signal_name}</button><span className="cell-summary">{item.summary}</span></td>
+      <td><SignalTone value={item.direction} /></td>
+      <td className="numeric">{percent(item.strength)}</td>
+      <td className="numeric">{percent(item.confidence)}</td>
+      <td>{signedNumber(item.raw_observed_value, 1)} vs {item.trigger_threshold ?? "watch"}</td>
+      <td>{item.affected_portfolios.length ? `${item.affected_portfolios.length} portfolio(s), ${percent(item.current_portfolio_weight)}` : "No current holding"}</td>
+      <td>{timeAgo(item.first_detected_at)}</td>
+      <td>{labelize(item.status)}</td>
+      <td><div className="signal-actions"><Link to={`/signals/${encodeURIComponent(item.signal_id)}`}>Details</Link><button onClick={onOpen}>{expanded ? "Hide" : "Evidence"}</button></div></td>
+    </tr>
+    {expanded ? <tr className="signal-expanded-row"><td colSpan={10}><SignalEvidencePanel item={detail ?? item} onClose={onClose} onReview={onReview} onAlert={onAlert} onWatchlist={onWatchlist} /></td></tr> : null}
+  </>;
+}
+
+function SignalEvidencePanel({ item, onClose, onReview, onAlert, onWatchlist }: { item: SignalRow | SignalDetailResponse; onClose: () => void; onReview: () => void; onAlert: () => void; onWatchlist: () => void }) {
+  return <div className="signal-evidence-panel">
+    <div className="signal-evidence-heading">
+      <div><strong>{item.ticker}: {item.signal_name}</strong><p>{item.summary}</p></div>
+      <button onClick={onClose} aria-label="Close signal evidence"><X size={16}/></button>
+    </div>
+    <div className="signal-evidence-grid">
+      <EvidenceList title="Supporting evidence" items={item.supporting_evidence} />
+      <EvidenceList title="Contradicting evidence" items={item.contradicting_evidence} />
+      <div className="signal-impact-box"><strong>Portfolio impact</strong>{item.affected_portfolios.length ? item.affected_portfolios.map((impact) => <p key={impact.portfolio_id}>{impact.portfolio_name}: {percent(impact.weight)} weight, {money(impact.market_value, impact.currency)}. {impact.concentration_note}</p>) : <p>No current portfolio holding. Watchlist and compare actions are still available.</p>}</div>
+      <div className="signal-impact-box"><strong>Data and methodology</strong><p>Raw value {signedNumber(item.raw_observed_value, 1)}; normalized {number(item.normalized_value, 2)}; threshold {item.trigger_threshold ?? "watch"}. Data as of {formatDateTime(item.data_as_of)} from {item.source}.</p><p>{item.historical_efficacy.warning ?? item.historical_efficacy.label} Sample size: {item.historical_efficacy.sample_size}.</p></div>
+    </div>
+    <div className="signal-detail-actions">
+      <Link to={`/asset/${item.asset_id}`}>Open ticker</Link>
+      <Link to={`/compare?left=${item.ticker}`}>Compare asset</Link>
+      <Link to="/benchmarks">Benchmarks</Link>
+      <button onClick={onWatchlist}><Plus size={14}/>Watchlist</button>
+      <button onClick={onReview}><CheckCircle2 size={14}/>Mark reviewed</button>
+      <button onClick={onAlert}><Bell size={14}/>Create alert</button>
+    </div>
+  </div>;
+}
+
+function EvidenceList({ title, items }: { title: string; items: { label: string; metric: string; value: number | null; score: number | null; detail: string; source: string }[] }) {
+  return <div className="signal-evidence-list"><strong>{title}</strong>{items.length ? items.map((item) => <p key={`${item.label}-${item.metric}`}><b>{item.label}</b><span>{item.metric}: {item.value == null ? "Unavailable" : number(item.value, 2)}; score {item.score == null ? "missing" : signedNumber(item.score, 1)}. {item.detail}</span></p>) : <p>No evidence in this direction.</p>}</div>;
+}
+
+function SignalMobileCard({ item, onOpen }: { item: SignalRow; onOpen: () => void }) {
+  return <article className="signal-mobile-card">
+    <div><strong>{item.ticker}</strong><SignalTone value={item.direction} /></div>
+    <h3>{item.signal_name}</h3>
+    <p>{item.summary}</p>
+    <dl><div><dt>Confidence</dt><dd>{percent(item.confidence)}</dd></div><div><dt>Priority</dt><dd>{percent(item.portfolio_priority)}</dd></div><div><dt>Age</dt><dd>{timeAgo(item.first_detected_at)}</dd></div></dl>
+    <button onClick={onOpen}>Inspect evidence</button>
+  </article>;
+}
+
+function SignalTone({ value }: { value: string }) {
+  return <span className={`signal-tone ${value}`}>{labelize(value)}</span>;
+}
+
+function SignalTableSkeleton() {
+  return <div className="signal-table-skeleton">{Array.from({ length: 6 }).map((_item, index) => <div key={index} className="skeleton-row" />)}</div>;
+}
+
+function SignalDetailPage({ notify }: { notify: (message: string, tone?: AppNotification["tone"]) => void }) {
+  const { signalId = "" } = useParams();
+  const decoded = decodeURIComponent(signalId);
+  const detail = useQuery({ queryKey: ["signal-detail-page", decoded], queryFn: () => api.signalDetail(decoded), enabled: Boolean(decoded) });
+  const createAlert = useMutation({
+    mutationFn: () => api.createSignalAlert(decoded, { condition: "status_active", channel: "in_app" }),
+    onSuccess: () => notify("Alert rule created."),
+    onError: (error) => notify(actionErrorMessage(error), "error"),
+  });
+  useEffect(() => {
+    document.title = detail.data ? `${detail.data.ticker} signal - Quaint Dash` : "Signal detail - Quaint Dash";
+  }, [detail.data]);
+  if (detail.isLoading) return <div className="page"><Loading /></div>;
+  if (detail.isError) return <div className="page"><ErrorPanel error={detail.error} /></div>;
+  if (!detail.data) return <div className="page"><EmptyRow text="Signal not found." /></div>;
+  const item = detail.data;
+  return <div className="page">
+    <div className="page-title">
+      <div><p className="eyebrow">Signal detail</p><h1>{item.ticker} <small>{item.signal_name}</small></h1><p className="page-subtitle">{item.summary}</p></div>
+      <div className="actions"><Link className="button-link" to={`/signals?signal=${encodeURIComponent(item.signal_id)}`}>Back to explorer</Link><button className="primary" onClick={() => createAlert.mutate()}><Bell size={17}/>Create alert</button></div>
+    </div>
+    <section className="card signal-detail-card">
+      <SignalEvidencePanel item={item} onClose={() => undefined} onReview={() => notify("Use the explorer row to mark reviewed.")} onAlert={() => createAlert.mutate()} onWatchlist={() => notify("Open the explorer to add watchlist state.")} />
+      <div className="signal-detail-grid">
+        <div><strong>Lifecycle</strong>{item.lifecycle.map((event) => <p key={`${event.status}-${event.label}`}><b>{event.label}</b><span>{formatDateTime(event.timestamp)} - {event.detail}</span></p>)}</div>
+        <div><strong>Strength history</strong>{item.strength_history.map((point) => <p key={point.date}><b>{point.date}</b><span>{percent(point.strength)} strength, {percent(point.confidence)} confidence, raw {signedNumber(point.raw_value, 1)}</span></p>)}</div>
+        <div><strong>Related news</strong>{item.related_news.length ? item.related_news.map((news) => <a key={`${news.title}-${news.published_at}`} href={news.url ?? undefined}>{news.title}<span>{formatDateTime(news.published_at)}</span></a>) : <p>No related local news.</p>}</div>
       </div>
-      <div className="signal-meter" aria-label={`Signal strength ${item.score_strength}`}>
-        <span style={{ width: `${scoreWidth}%` }} />
-      </div>
-      <div className="signal-facts">
-        <span>{item.data_status}</span>
-        <span>{percent(item.confidence)} confidence</span>
-        <span>{item.latest_data_date ? new Date(item.latest_data_date).toLocaleDateString() : "no snapshot"}</span>
-        <span>{money(item.market_value, item.currency)}</span>
-      </div>
-      <div className="signal-components">
-        {item.components.map((component) => (
-          <span title={component.detail} key={component.name}>
-            <b>{component.name}</b>
-            {component.score == null ? "missing" : signedNumber(component.score, 0)}
-          </span>
-        ))}        
-        {item.missing_inputs.slice(0, 2).map((missing) => <span className="missing" title={missing} key={missing}><b>Missing</b>{missing}</span>)}
-      </div>
-      <div className="signal-row-actions">
-        {item.is_watchlisted ? <span className="pill done">watchlist</span> : (
-          <button onClick={() => onAddToWatchlist(item.asset_id)} disabled={isAdding}>
-            <Plus size={14} />
-            Watchlist
-          </button>
-        )}
-      </div>
-    </article>
-  );
+    </section>
+  </div>;
+}
+void SignalDetailPage;
+
+function labelize(value: string) {
+  return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return "Unavailable";
+  const dateValue = new Date(value);
+  return Number.isNaN(dateValue.getTime()) ? value : dateValue.toLocaleString();
+}
+
+function timeAgo(value: string | null | undefined) {
+  if (!value) return "No timestamp";
+  const dateValue = new Date(value);
+  if (Number.isNaN(dateValue.getTime())) return value;
+  const days = Math.max(0, Math.round((Date.now() - dateValue.getTime()) / 86400000));
+  if (days === 0) return "today";
+  if (days === 1) return "1 day";
+  return `${days} days`;
+}
+
+type PortfolioTopTab = "aggregate" | "portfolios" | "fundamentals";
+type PortfolioDetailTab = "overview" | "holdings" | "performance" | "risk" | "optimization" | "fundamentals" | "activity";
+type AssetDetailTab = "chart" | "news" | "fundamentals";
+const portfolioTopTabs: { value: PortfolioTopTab; label: string }[] = [
+  { value: "aggregate", label: "Aggregate" },
+  { value: "portfolios", label: "Portfolios" },
+  { value: "fundamentals", label: "Fundamentals" },
+];
+const portfolioDetailTabs: { value: PortfolioDetailTab; label: string }[] = [
+  { value: "overview", label: "Overview" },
+  { value: "holdings", label: "Holdings" },
+  { value: "performance", label: "Performance" },
+  { value: "risk", label: "Risk" },
+  { value: "optimization", label: "Optimization" },
+  { value: "fundamentals", label: "Fundamentals" },
+  { value: "activity", label: "Activity" },
+];
+const assetDetailTabs: { value: AssetDetailTab; label: string }[] = [
+  { value: "chart", label: "Chart" },
+  { value: "news", label: "News" },
+  { value: "fundamentals", label: "Fundamentals" },
+];
+
+function PortfolioWorkspacePage() {
+  const [params, setParams] = useSearchParams();
+  const selected = (params.get("tab") as PortfolioTopTab | null) ?? "aggregate";
+  const portfolios = useQuery({ queryKey: ["portfolios"], queryFn: api.portfolios });
+  const aggregate = useQuery({ queryKey: ["portfolio-aggregate"], queryFn: api.aggregatePortfolio, enabled: Boolean(portfolios.data?.length) });
+  const positions = useQuery({ queryKey: ["positions", "all"], queryFn: api.aggregatePositions, enabled: selected === "aggregate" });
+  const firstPortfolioId = portfolios.data?.[0]?.portfolio_id;
+  const fundamentals = useQuery({ queryKey: ["portfolio-fundamentals", firstPortfolioId], queryFn: () => api.portfolioFundamentals(firstPortfolioId!), enabled: selected === "fundamentals" && Boolean(firstPortfolioId) });
+  const setTab = (tab: PortfolioTopTab) => setParams((current) => { const next = new URLSearchParams(current); next.set("tab", tab); return next; });
+  if (portfolios.isLoading) return <Loading />;
+  if (portfolios.error) return <ErrorPanel error={portfolios.error} />;
+  return <div className="page">
+    <div className="page-title">
+      <div><p className="eyebrow">Portfolio management</p><h1>Portfolios</h1><p className="page-subtitle">Backend-sourced portfolio totals, holdings, fundamentals, risk, and optimization previews.</p></div>
+    </div>
+    <TabBar tabs={portfolioTopTabs} selected={selected} onSelect={setTab} label="Portfolio workspace tabs" />
+    {selected === "aggregate" ? <AggregateWorkspacePanel aggregate={aggregate.data} positions={positions.data ?? []} isLoading={aggregate.isLoading || positions.isLoading} /> : null}
+    {selected === "portfolios" ? <PortfolioCardGrid portfolios={portfolios.data ?? []} /> : null}
+    {selected === "fundamentals" ? fundamentals.isLoading ? <Loading /> : fundamentals.data ? <PortfolioFundamentalsView fundamentals={fundamentals.data} /> : <section className="card"><EmptyRow text="No portfolio fundamentals are available yet." /></section> : null}
+  </div>;
+}
+
+function AggregateWorkspacePanel({ aggregate, positions, isLoading }: { aggregate?: Portfolio; positions: Position[]; isLoading: boolean }) {
+  if (isLoading) return <Loading />;
+  if (!aggregate) return <section className="card"><EmptyRow text="No portfolios are available yet." /></section>;
+  const exposures = groupPositions(positions, "sector");
+  return <>
+    <section className="metric-grid">
+      <Metric icon={<CircleDollarSign />} label="Combined market value" value={money(aggregate.market_value, aggregate.base_ccy)} detail={aggregate.base_ccy} />
+      <Metric icon={<ArrowUpRight />} label="Unrealized gain" value={money(aggregate.unrealized_gain, aggregate.base_ccy)} />
+      <Metric icon={<Activity />} label="Holdings" value={String(aggregate.position_count)} />
+      <Metric icon={<ShieldCheck />} label="Data source" value={aggregate.source ?? "duckdb"} detail={formatTimestamp(aggregate.as_of)} />
+    </section>
+    <section className="portfolio-layout-grid">
+      <section className="card">
+        <div className="card-heading"><div><p className="eyebrow">Exposure</p><h2>Sector allocation</h2></div><span>{positions.length} holdings</span></div>
+        {exposures.length ? <div className="tranche-grid">{exposures.map((group) => <article className="tranche" key={group.label}><div><strong>{group.label}</strong><span>{group.count} holdings</span></div><b>{money(group.marketValue, aggregate.base_ccy)}</b><div className="bar"><span style={{ width: `${Math.max(group.weight * 100, 2)}%` }} /></div><em>{percent(group.weight)}</em></article>)}</div> : <EmptyRow text="No exposure metadata is available." />}
+      </section>
+      <section className="card">
+        <div className="card-heading"><div><p className="eyebrow">Data quality</p><h2>Coverage</h2></div></div>
+        <div className="signal-grid">
+          <Signal label="Display currency" value={aggregate.display_currency ?? aggregate.base_ccy} />
+          <Signal label="Missing FX" value={String(aggregate.fx_missing?.length ?? 0)} />
+          <Signal label="Stale prices" value={String(positions.filter((item) => item.stale_price).length)} />
+          <Signal label="Unavailable values" value={String(positions.filter((item) => item.market_value == null).length)} />
+        </div>
+      </section>
+    </section>
+  </>;
+}
+
+function PortfolioCardGrid({ portfolios }: { portfolios: Portfolio[] }) {
+  if (!portfolios.length) return <section className="card"><EmptyRow text="No portfolios yet." /></section>;
+  return <section className="portfolio-card-grid">
+    {portfolios.map((portfolio) => {
+      const gainRate = portfolio.book_cost ? (portfolio.unrealized_gain ?? 0) / portfolio.book_cost : null;
+      return <Link className="portfolio-link-card" to={`/portfolios/${portfolio.portfolio_id}?tab=overview`} key={portfolio.portfolio_id} aria-label={`Open ${portfolio.name} portfolio`}>
+        <div><p className="eyebrow">{portfolio.base_ccy}</p><h2>{portfolio.name}</h2></div>
+        <strong>{money(portfolio.market_value, portfolio.base_ccy)}</strong>
+        <span>{portfolio.position_count} holdings</span>
+        <span className={(portfolio.unrealized_gain ?? 0) >= 0 ? "positive" : "negative"}>{money(portfolio.unrealized_gain, portfolio.base_ccy)} {percent(gainRate)}</span>
+      </Link>;
+    })}
+  </section>;
+}
+
+function PortfolioDetailPage() {
+  const { portfolioId = "" } = useParams();
+  const id = Number(portfolioId);
+  const [params, setParams] = useSearchParams();
+  const tab = (params.get("tab") as PortfolioDetailTab | null) ?? "overview";
+  const range = params.get("range") ?? "3Y";
+  const benchmark = params.get("benchmark") ?? "";
+  const setParam = (key: string, value: string) => setParams((current) => { const next = new URLSearchParams(current); if (value) next.set(key, value); else next.delete(key); return next; });
+  const portfolio = useQuery({ queryKey: ["portfolio", id], queryFn: () => api.portfolio(id), enabled: Number.isFinite(id) });
+  const positions = useQuery({ queryKey: ["positions", id], queryFn: () => api.positions(id), enabled: Number.isFinite(id) });
+  const performance = useQuery({ queryKey: ["portfolio-performance", id, benchmark, range], queryFn: () => api.portfolioPerformance(id, { benchmark: benchmark || undefined, range }), enabled: Number.isFinite(id) });
+  const risk = useQuery({ queryKey: ["portfolio-risk", id, benchmark, range], queryFn: () => api.portfolioRisk(id, { benchmark: benchmark || undefined, lookback: range }), enabled: Number.isFinite(id) });
+  const fundamentals = useQuery({ queryKey: ["portfolio-fundamentals", id, 5], queryFn: () => api.portfolioFundamentals(id, 5), enabled: Number.isFinite(id) });
+  const transactions = useQuery({ queryKey: ["transactions", id, 25, 0], queryFn: () => api.transactions(id, 25, 0), enabled: Number.isFinite(id) && tab === "activity" });
+  if (portfolio.isLoading) return <Loading />;
+  if (portfolio.error) return <ErrorPanel error={portfolio.error} />;
+  if (!portfolio.data) return <section className="card"><EmptyRow text="Portfolio not found." /></section>;
+  return <div className="page">
+    <div className="page-title">
+      <div><p className="eyebrow"><Link to="/portfolios?tab=portfolios">Portfolios</Link> / {portfolio.data.base_ccy}</p><h1>{portfolio.data.name}</h1><p className="page-subtitle">Actual performance, risk, fundamentals, holdings, and optimizer preview from the Python backend.</p></div>
+      <div className="overview-actions"><RangeSelector value={range} onChange={(value) => setParam("range", value)} /><input aria-label="Benchmark" value={benchmark} onChange={(event) => setParam("benchmark", event.target.value.toUpperCase())} placeholder="SP500" /></div>
+    </div>
+    <section className="metric-grid">
+      <Metric icon={<CircleDollarSign />} label="Market value" value={money(portfolio.data.market_value, portfolio.data.base_ccy)} />
+      <Metric icon={<ArrowUpRight />} label="Historical TWR CAGR" value={percent(performance.data?.actual_twr_cagr)} detail={performance.data?.range} />
+      <Metric icon={<Activity />} label="Forward expected CAGR" value={percent(fundamentals.data?.weighted_expected_cagr.value)} detail={`coverage ${percent(fundamentals.data?.weighted_expected_cagr.coverage)}`} />
+      <Metric icon={<BarChart3 />} label="Sharpe" value={number(risk.data?.sharpe_ratio)} detail={`rf ${percent(risk.data?.risk_free_rate)}`} />
+      <Metric icon={<WalletCards />} label="Holdings" value={String(portfolio.data.position_count)} />
+    </section>
+    <TabBar tabs={portfolioDetailTabs} selected={tab} onSelect={(value) => setParam("tab", value)} label="Portfolio detail tabs" />
+    {tab === "overview" ? <PortfolioOverviewDetail performance={performance.data} risk={risk.data} fundamentals={fundamentals.data} positions={positions.data ?? []} isLoading={performance.isLoading || risk.isLoading || fundamentals.isLoading || positions.isLoading} /> : null}
+    {tab === "holdings" ? <HoldingsTable positions={positions.data ?? []} currency={portfolio.data.base_ccy} isLoading={positions.isLoading} portfolioId={id} /> : null}
+    {tab === "performance" ? <PortfolioPerformanceView performance={performance.data} isLoading={performance.isLoading} /> : null}
+    {tab === "risk" ? <PortfolioRiskView risk={risk.data} isLoading={risk.isLoading} /> : null}
+    {tab === "optimization" ? <PortfolioOptimizationPanel portfolioId={id} /> : null}
+    {tab === "fundamentals" ? fundamentals.isLoading ? <Loading /> : fundamentals.data ? <PortfolioFundamentalsView fundamentals={fundamentals.data} /> : <section className="card"><EmptyRow text="Portfolio fundamentals are unavailable." /></section> : null}
+    {tab === "activity" ? <section className="card"><div className="card-heading"><div><p className="eyebrow">Activity</p><h2>Transactions</h2></div></div>{transactions.isLoading ? <Loading compact /> : transactions.data?.items.length ? <div className="mini-list">{transactions.data.items.map((item) => <article key={item.transaction_id}><div><strong>{item.transaction_type}</strong><span>{new Date(item.timestamp).toLocaleDateString()}</span></div><span>{item.asset_id ?? item.currency ?? "cash"}</span><b>{item.cash_amount != null ? money(item.cash_amount, item.currency ?? portfolio.data.base_ccy) : number(item.quantity, 4)}</b></article>)}</div> : <EmptyRow text="No transactions recorded." />}</section> : null}
+  </div>;
+}
+
+function PortfolioOverviewDetail({ performance, risk, fundamentals, positions, isLoading }: { performance?: PortfolioPerformance; risk?: PortfolioRisk; fundamentals?: PortfolioFundamentals; positions: Position[]; isLoading: boolean }) {
+  if (isLoading) return <Loading />;
+  return <section className="portfolio-layout-grid">
+    <PortfolioPerformanceView performance={performance} isLoading={false} compact />
+    <section className="card"><div className="card-heading"><div><p className="eyebrow">Risk</p><h2>Risk and concentration</h2></div></div><div className="signal-grid"><Signal label="Volatility" value={percent(risk?.annualized_volatility)} /><Signal label="Sortino" value={number(risk?.sortino_ratio)} /><Signal label="Beta" value={number(risk?.beta)} /><Signal label="Max drawdown" value={percent(risk?.maximum_drawdown)} /><Signal label="Effective holdings" value={number(risk?.effective_number_of_holdings, 1)} /><Signal label="HHI" value={number(risk?.hhi, 3)} /></div></section>
+    <section className="card"><div className="card-heading"><div><p className="eyebrow">Fundamentals</p><h2>Coverage-aware rollup</h2></div></div><div className="signal-grid"><Signal label="Expected CAGR" value={percent(fundamentals?.weighted_expected_cagr.value)} /><Signal label="P/E" value={number(fundamentals?.pe_ratio.value)} /><Signal label="P/FCF" value={number(fundamentals?.price_to_free_cash_flow.value)} /><Signal label="Coverage" value={percent(fundamentals?.weighted_expected_cagr.coverage)} /></div></section>
+    <section className="card"><div className="card-heading"><div><p className="eyebrow">Largest holdings</p><h2>Weight drivers</h2></div></div><div className="mini-list">{positions.slice(0, 6).map((item) => <article key={item.asset_id}><div><strong>{item.symbol}</strong><span>{item.name ?? "Asset"}</span></div><b>{percent(item.weight)}</b></article>)}</div></section>
+  </section>;
+}
+
+function HoldingsTable({ positions, currency, isLoading, portfolioId }: { positions: Position[]; currency: string; isLoading: boolean; portfolioId: number }) {
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<"weight" | "symbol" | "gain">("weight");
+  const filtered = positions.filter((item) => `${item.symbol} ${item.name ?? ""}`.toLowerCase().includes(query.toLowerCase())).sort((left, right) => sort === "symbol" ? left.symbol.localeCompare(right.symbol) : sort === "gain" ? (right.unrealized_gain ?? -Infinity) - (left.unrealized_gain ?? -Infinity) : (right.weight ?? -Infinity) - (left.weight ?? -Infinity));
+  return <section className="card holdings-card"><div className="card-heading"><div><p className="eyebrow">Holdings</p><h2>Positions</h2></div><div className="card-tools"><label>Search<input value={query} onChange={(event) => setQuery(event.target.value)} /></label><label>Sort<select value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}><option value="weight">Weight</option><option value="symbol">Ticker</option><option value="gain">Gain</option></select></label></div></div>{isLoading ? <Loading compact /> : filtered.length ? <div className="table-wrap"><table><thead><tr><th>Ticker</th><th>Quantity</th><th>Price</th><th>Value</th><th>Weight</th><th>Book</th><th>Gain</th><th>Status</th></tr></thead><tbody>{filtered.map((item) => <tr key={item.asset_id}><td><Link className="asset-link" to={`/assets/${item.asset_id}?from=/portfolios/${portfolioId}%3Ftab%3Dholdings`}><strong>{item.symbol}</strong><span>{item.name ?? item.asset_type ?? "Asset"}</span></Link></td><td>{number(item.quantity, 4)}</td><td>{money(item.latest_price, item.currency)}</td><td>{money(item.market_value, currency)}</td><td>{percent(item.weight)}</td><td>{money(item.book_cost, currency)}</td><td className={(item.unrealized_gain ?? 0) >= 0 ? "positive" : "negative"}>{money(item.unrealized_gain, currency)}</td><td>{item.stale_price ? item.stale_reason ?? "stale" : item.data_status ?? "available"}</td></tr>)}</tbody></table></div> : <EmptyRow text="No holdings match this search." />}</section>;
+}
+
+function PortfolioPerformanceView({ performance, isLoading, compact = false }: { performance?: PortfolioPerformance; isLoading: boolean; compact?: boolean }) {
+  if (isLoading) return <Loading />;
+  if (!performance) return <section className="card"><EmptyRow text="Performance is unavailable." /></section>;
+  return <section className="card chart-card"><div className="card-heading"><div><p className="eyebrow">Actual performance</p><h2>Portfolio vs {performance.benchmark ?? "benchmark"}</h2></div><span>{performance.observation_count} observations</span></div><div className="chart" aria-label="Portfolio and benchmark total return chart"><ResponsiveContainer width="100%" height="100%"><AreaChart data={performance.points}><XAxis dataKey="date" hide/><YAxis hide domain={["dataMin", "dataMax"]}/><Tooltip/><Area type="monotone" dataKey="portfolio_return_index" name="Portfolio" stroke="#245c4f" fill="#245c4f22" strokeWidth={2}/><Area type="monotone" dataKey="benchmark_return_index" name="Benchmark" stroke="#7b6f5c" fill="#7b6f5c18" strokeWidth={2}/></AreaChart></ResponsiveContainer></div><div className="signal-grid"><Signal label="TWR CAGR" value={percent(performance.actual_twr_cagr)} /><Signal label="Benchmark CAGR" value={percent(performance.benchmark_cagr)} /><Signal label="Excess CAGR" value={percent(performance.excess_cagr)} /><Signal label="Coverage" value={percent(performance.coverage)} /></div>{!compact && performance.missing_inputs.length ? <DataIssueList items={performance.missing_inputs} /> : null}</section>;
+}
+
+function PortfolioRiskView({ risk, isLoading }: { risk?: PortfolioRisk; isLoading: boolean }) {
+  if (isLoading) return <Loading />;
+  if (!risk) return <section className="card"><EmptyRow text="Risk metrics are unavailable." /></section>;
+  return <section className="card"><div className="card-heading"><div><p className="eyebrow">Risk definitions</p><h2>Annualized daily-return metrics</h2></div><span>risk-free {percent(risk.risk_free_rate)}</span></div><div className="signal-grid deep"><Signal label="Annualized return" value={percent(risk.annualized_return)} /><Signal label="Annualized volatility" value={percent(risk.annualized_volatility)} /><Signal label="Sharpe" value={number(risk.sharpe_ratio)} /><Signal label="Sortino" value={number(risk.sortino_ratio)} /><Signal label="Beta" value={number(risk.beta)} /><Signal label="Alpha" value={percent(risk.alpha)} /><Signal label="Correlation" value={number(risk.correlation)} /><Signal label="Max drawdown" value={percent(risk.maximum_drawdown)} /><Signal label="Downside deviation" value={percent(risk.downside_deviation)} /><Signal label="Observation count" value={String(risk.observation_count)} /><Signal label="Effective holdings" value={number(risk.effective_number_of_holdings, 1)} /><Signal label="Weight balance score" value={number(risk.weight_balance_score, 1)} /></div><div className="analytics-detail-grid"><AnalyticsBlock title="Sector concentration"><ExposureBars values={risk.sector_concentration} /></AnalyticsBlock><AnalyticsBlock title="Country concentration"><ExposureBars values={risk.geographic_concentration} /></AnalyticsBlock><AnalyticsBlock title="Currency concentration"><ExposureBars values={risk.currency_concentration} /></AnalyticsBlock></div>{risk.missing_inputs.length ? <DataIssueList items={risk.missing_inputs} /> : null}</section>;
+}
+
+function PortfolioFundamentalsView({ fundamentals }: { fundamentals: PortfolioFundamentals }) {
+  return <section className="card"><div className="card-heading"><div><p className="eyebrow">Fundamentals</p><h2>Weighted rollup with coverage</h2></div><span>{fundamentals.horizon_years}y horizon</span></div><div className="signal-grid"><Signal label="Forward expected CAGR" value={percent(fundamentals.weighted_expected_cagr.value)} /><Signal label="Expected CAGR coverage" value={percent(fundamentals.weighted_expected_cagr.coverage)} /><Signal label="P/E" value={number(fundamentals.pe_ratio.value)} /><Signal label="P/FCF" value={number(fundamentals.price_to_free_cash_flow.value)} /><Signal label="Dividend yield" value={percent(fundamentals.dividend_yield.value)} /><Signal label="Margin of safety" value={percent(fundamentals.margin_of_safety.value)} /></div><div className="table-wrap"><table><thead><tr><th>Holding</th><th>Value</th><th>Weight</th><th>Expected CAGR</th><th>Contribution</th><th>P/E</th><th>P/FCF</th><th>Coverage</th></tr></thead><tbody>{fundamentals.holdings.map((item) => <tr key={item.asset_id}><td><Link to={`/assets/${item.asset_id}`} className="asset-link"><strong>{item.symbol}</strong><span>{item.missing_inputs.join(", ") || "inputs covered"}</span></Link></td><td>{money(item.market_value, fundamentals.base_currency)}</td><td>{percent(item.weight)}</td><td>{percent(item.expected_cagr)}</td><td>{percent(item.expected_cagr_contribution)}</td><td>{number(item.pe_ratio)}</td><td>{number(item.price_to_free_cash_flow)}</td><td>{item.coverage_status}</td></tr>)}</tbody></table></div>{fundamentals.missing_inputs.length ? <DataIssueList items={fundamentals.missing_inputs} /> : null}</section>;
+}
+
+function PortfolioOptimizationPanel({ portfolioId }: { portfolioId: number }) {
+  const [preview, setPreview] = useState<OptimizationPreview | null>(null);
+  const [showOptimized, setShowOptimized] = useState(true);
+  const optimize = useMutation({ mutationFn: (objective: OptimizationPreview["objective"]) => api.optimizePortfolio(portfolioId, objective), onSuccess: setPreview });
+  const weights = showOptimized ? preview?.optimized_weights : preview?.current_weights;
+  const sum = weights ? Object.values(weights).reduce((total, value) => total + value, 0) : null;
+  return <section className="card"><div className="card-heading"><div><p className="eyebrow">Preview only</p><h2>Backend optimization</h2></div><span aria-live="polite">{preview?.status ?? "not run"}</span></div><div className="actions"><button className="primary" onClick={() => optimize.mutate("max_expected_cagr")} disabled={optimize.isPending}>Max CAGR</button><button className="primary" onClick={() => optimize.mutate("max_risk_adjusted_return")} disabled={optimize.isPending}>Max Risk-Adjusted</button><label className="toggle-row"><input type="checkbox" checked={showOptimized} onChange={(event) => setShowOptimized(event.target.checked)} />Optimized allocation</label></div>{optimize.error ? <ErrorPanel error={optimize.error} /> : null}{optimize.isPending ? <Loading compact /> : preview ? <><div className="signal-grid"><Signal label="Current expected CAGR" value={percent(preview.before.expected_cagr)} /><Signal label="Optimized expected CAGR" value={percent(preview.after.expected_cagr)} /><Signal label="Current Sharpe" value={number(preview.before.expected_sharpe)} /><Signal label="Optimized Sharpe" value={number(preview.after.expected_sharpe)} /><Signal label="Turnover" value={percent(preview.estimated_turnover)} /><Signal label="Weight sum" value={percent(sum)} /></div><p className="muted-copy">{preview.solver_message}</p><div className="table-wrap"><table><thead><tr><th>Asset</th><th>Current</th><th>Optimized</th><th>Delta</th></tr></thead><tbody>{Object.keys(preview.current_weights).sort().map((assetId) => <tr key={assetId}><td>{assetId}</td><td>{percent(preview.current_weights[assetId])}</td><td>{percent(preview.optimized_weights[assetId])}</td><td>{percent(preview.weight_deltas[assetId])}</td></tr>)}</tbody></table></div>{preview.warnings.length ? <DataIssueList items={preview.warnings} /> : null}</> : <EmptyRow text="Run an optimization objective to preview target weights. This does not persist any trades." />}</section>;
+}
+
+function AssetDetailPage({ notify }: { notify: (message: string, tone?: AppNotification["tone"]) => void }) {
+  void notify;
+  const { assetId = "" } = useParams();
+  const [params, setParams] = useSearchParams();
+  const tab = (params.get("tab") as AssetDetailTab | null) ?? "chart";
+  const asset = useQuery({ queryKey: ["asset", assetId], queryFn: () => api.asset(assetId) });
+  const prices = useQuery({ queryKey: ["prices", assetId, 365], queryFn: () => api.prices(assetId, 365), enabled: tab === "chart" });
+  const analytics = useQuery({ queryKey: ["asset-analytics", assetId, ""], queryFn: () => api.assetAnalytics(assetId), enabled: tab === "fundamentals" });
+  const activity = useQuery({ queryKey: ["asset-activity", assetId, 10, 0], queryFn: () => api.assetActivity(assetId, 10, 0), enabled: tab === "news" });
+  const setTab = (value: AssetDetailTab) => setParams((current) => { const next = new URLSearchParams(current); next.set("tab", value); return next; });
+  if (asset.isLoading) return <Loading />;
+  if (asset.error) return <ErrorPanel error={asset.error} />;
+  return <div className="page"><div className="page-title"><div><p className="eyebrow">{asset.data?.sector ?? "Asset"}</p><h1>{asset.data?.symbol} <small>{asset.data?.name}</small></h1></div><div className="actions"><Link className="button-link" to={params.get("from") ?? "/portfolios"}>Back</Link><Link className="button-link" to={`/compare?left=${asset.data?.asset_id ?? assetId}`}><BarChart3 size={17}/>Compare</Link><strong className="asset-price">{money(asset.data?.latest_price, asset.data?.currency)}</strong></div></div><TabBar tabs={assetDetailTabs} selected={tab} onSelect={setTab} label="Asset detail tabs" />{tab === "chart" ? <section className="card chart-card"><div className="card-heading"><div><p className="eyebrow">Stored prices</p><h2>Chart</h2></div></div><div className="chart"><ResponsiveContainer width="100%" height="100%"><AreaChart data={prices.data}><XAxis dataKey="date" hide/><YAxis hide domain={["dataMin", "dataMax"]}/><Tooltip/><Area type="monotone" dataKey="close" stroke="#245c4f" fill="#245c4f22" strokeWidth={2}/></AreaChart></ResponsiveContainer></div></section> : null}{tab === "news" ? <section className="card"><div className="card-heading"><div><p className="eyebrow">Asset-specific events</p><h2>News and activity</h2></div></div>{activity.isLoading ? <Loading compact /> : activity.data?.items.length ? <div className="mini-list">{activity.data.items.map((item) => <article key={item.provider_transaction_id ?? item.transaction_id ?? item.timestamp}><div><strong>{item.transaction_type}</strong><span>{new Date(item.timestamp).toLocaleDateString()}</span></div><span>{item.source}</span><b>{item.portfolio_name ?? item.provider_account_id ?? "local"}</b></article>)}</div> : <EmptyRow text="No asset-specific news feed is available yet; showing stored activity when present." />}</section> : null}{tab === "fundamentals" ? <AssetAnalyticsPanel payload={analytics.data} isLoading={analytics.isLoading} benchmark="" onBenchmarkChange={() => undefined} /> : null}</div>;
+}
+
+function TabBar<T extends string>({ tabs, selected, onSelect, label }: { tabs: { value: T; label: string }[]; selected: T; onSelect: (value: T) => void; label: string }) {
+  return <div className="tab-bar" role="tablist" aria-label={label}>{tabs.map((tab) => <button key={tab.value} role="tab" aria-selected={selected === tab.value} className={selected === tab.value ? "active" : ""} onClick={() => onSelect(tab.value)}>{tab.label}</button>)}</div>;
+}
+
+function RangeSelector({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  return <div className="segmented-control" aria-label="Performance range">{["1Y", "3Y", "5Y", "10Y", "MAX"].map((item) => <button key={item} className={value.toUpperCase() === item ? "active" : ""} onClick={() => onChange(item)}>{item}</button>)}</div>;
+}
+
+function DataIssueList({ items }: { items: string[] }) {
+  return <div className="data-issues" role="status">{items.slice(0, 8).map((item) => <p key={item}>{item}</p>)}</div>;
 }
 
 function PortfoliosPage({ notify }: { notify: (message: string, tone?: AppNotification["tone"]) => void }) {
@@ -714,6 +1115,7 @@ function PortfoliosPage({ notify }: { notify: (message: string, tone?: AppNotifi
     </div>
   );
 }
+void PortfoliosPage;
 
 function ComparePage() {
   const [params] = useSearchParams();
@@ -1360,6 +1762,7 @@ function AssetPage({ notify }: { notify: (message: string, tone?: AppNotificatio
     </section>
   </div>;
 }
+void AssetPage;
 
 function AssetActivityPanel({
   activity,
@@ -1430,7 +1833,7 @@ function AssetHoldingsPanel({ holdings, isLoading, isDeleting, onDelete }: { hol
   </section>;
 }
 
-function BrokersPage() {
+function BrokersPage({ notify }: { notify: (message: string, tone?: AppNotification["tone"]) => void }) {
   const client = useQueryClient();
   const [userKey, setUserKey] = useState("default");
   const [providerUserId, setProviderUserId] = useState("");
@@ -1449,16 +1852,30 @@ function BrokersPage() {
   };
   const register = useMutation({
     mutationFn: api.registerBrokerUser,
-    onSuccess: () => setMessage("Broker user registered. Open the portal next to connect accounts."),
-    onError: (error) => setMessage(friendlyBrokerError(error)),
+    onSuccess: () => {
+      const next = "Broker user registered. Open the portal next to connect accounts.";
+      setMessage(next);
+      notify(next);
+    },
+    onError: (error) => {
+      const next = friendlyBrokerError(error);
+      setMessage(next);
+      notify(next, "error");
+    },
   });
   const saveExisting = useMutation({
     mutationFn: () => api.saveExistingBrokerUser(userKey, providerUserId, userSecret),
     onSuccess: () => {
+      const next = "Existing SnapTrade user saved locally. You can now open portal or sync.";
       setUserSecret("");
-      setMessage("Existing SnapTrade user saved locally. You can now open portal or sync.");
+      setMessage(next);
+      notify(next);
     },
-    onError: (error) => setMessage(friendlyBrokerError(error)),
+    onError: (error) => {
+      const next = friendlyBrokerError(error);
+      setMessage(next);
+      notify(next, "error");
+    },
   });
   const portal = useMutation({
     mutationFn: () => api.brokerPortal({
@@ -1467,43 +1884,67 @@ function BrokersPage() {
       reconnect: portalReconnect.trim() || null,
     }),
     onSuccess: (result) => {
+      const next = "Portal URL created. Connect the bank there, then run Sync accounts here.";
       setPortalUrl(result.url);
-      setMessage("Portal URL created. Use the link below if the new tab did not open.");
+      setMessage(next);
+      notify(next);
       window.open(result.url, "_blank", "noopener,noreferrer");
     },
-    onError: (error) => setMessage(friendlyBrokerError(error)),
+    onError: (error) => {
+      const next = friendlyBrokerError(error);
+      setMessage(next);
+      notify(next, "error");
+    },
   });
   const sync = useMutation({
     mutationFn: api.brokerSync,
-    onSuccess: () => {
-      setMessage("Broker sync finished.");
+    onSuccess: (result) => {
+      const next = `Broker sync finished: ${formatActionResult(result.result)}`;
+      setMessage(next);
+      notify(next);
       refreshBroker();
     },
-    onError: (error) => setMessage(friendlyBrokerError(error)),
+    onError: (error) => {
+      const next = friendlyBrokerError(error);
+      setMessage(next);
+      notify(next, "error");
+    },
   });
   const mapper = useMutation({
     mutationFn: ({ accountId, portfolioId }: { accountId: string; portfolioId: number }) =>
       api.mapBrokerAccount(accountId, portfolioId),
     onSuccess: () => {
-      setMessage("Account mapping saved and portfolio holdings updated.");
+      const next = "Account mapping saved and portfolio holdings updated.";
+      setMessage(next);
+      notify(next);
       refreshBroker();
       client.invalidateQueries({ queryKey: ["portfolios"] });
       client.invalidateQueries({ queryKey: ["portfolio-aggregate"] });
       client.invalidateQueries({ queryKey: ["positions"] });
     },
-    onError: (error) => setMessage(friendlyBrokerError(error)),
+    onError: (error) => {
+      const next = friendlyBrokerError(error);
+      setMessage(next);
+      notify(next, "error");
+    },
   });
   const importer = useMutation({
     mutationFn: () => api.importBrokerTransactions(importPortfolioId ? Number(importPortfolioId) : null),
     onSuccess: (result) => {
-      setMessage(`Import finished: ${formatActionResult(result.result)}`);
+      const next = `Import finished: ${formatActionResult(result.result)}`;
+      setMessage(next);
+      notify(next);
       client.invalidateQueries({ queryKey: ["portfolios"] });
       client.invalidateQueries({ queryKey: ["portfolio-aggregate"] });
       client.invalidateQueries({ queryKey: ["positions"] });
       client.invalidateQueries({ queryKey: ["transactions"] });
       client.invalidateQueries({ queryKey: ["broker-accounts"] });
     },
-    onError: (error) => setMessage(friendlyBrokerError(error)),
+    onError: (error) => {
+      const next = friendlyBrokerError(error);
+      setMessage(next);
+      notify(next, "error");
+    },
   });
   const isBusy = register.isPending || saveExisting.isPending || portal.isPending || sync.isPending || mapper.isPending || importer.isPending;
   const accountCount = accounts.data?.length ?? 0;
@@ -1576,7 +2017,7 @@ function BrokersPage() {
         </div>
       </div>
     </section>
-    <section className="card"><div className="card-heading"><div><p className="eyebrow">Step 3</p><h2>Choose where each account goes</h2></div><span>{accountCount} account(s)</span></div>{accounts.isLoading ? <Loading compact /> : accounts.data?.length ? <div className="account-grid">{accounts.data.map((item) => <article className="account" key={item.provider_account_id}><Building2/><div><strong>{item.account_name ?? item.provider_account_id}</strong><span>{[item.provider, item.account_type, item.currency].filter(Boolean).join(" - ") || "Broker account"}</span><span className="muted-id">{item.provider_account_id} - {item.provider_connection_id}</span><label className="mapping-label">Local portfolio<select value={item.portfolio_id ?? ""} onChange={(event) => { if (event.target.value) mapper.mutate({ accountId: item.provider_account_id, portfolioId: Number(event.target.value) }); }} disabled={isBusy || !portfolios.data?.length}><option value="">Choose portfolio</option>{portfolios.data?.map((portfolio) => <option key={portfolio.portfolio_id} value={portfolio.portfolio_id}>{portfolio.name}</option>)}</select><em>Mapping updates holdings right away.</em></label></div><div className="account-value"><b>{money(item.balance, item.currency ?? "CAD")}</b><span className={item.portfolio_id ? "pill done" : "pill"}>{item.portfolio_id ? "mapped" : "needs map"}</span></div></article>)}</div> : <EmptyRow text="No synced broker accounts yet. Open the portal, connect a brokerage, then sync accounts." />}</section>
+    <section className="card"><div className="card-heading"><div><p className="eyebrow">Step 3</p><h2>Choose where each account goes</h2></div><span>{accountCount} account(s)</span></div>{accounts.isLoading ? <Loading compact /> : accounts.data?.length ? <div className="account-grid">{accounts.data.map((item) => <article className="account" key={item.provider_account_id}><Building2/><div><strong>{item.account_name ?? item.provider_account_id}</strong><span>{[item.provider, item.account_type, item.currency].filter(Boolean).join(" - ") || "Broker account"}</span><span className="muted-id">{item.provider_account_id} - {item.provider_connection_id}</span><label className="mapping-label">Local portfolio<select value={item.portfolio_id ?? ""} onChange={(event) => { if (event.target.value) mapper.mutate({ accountId: item.provider_account_id, portfolioId: Number(event.target.value) }); }} disabled={isBusy || !portfolios.data?.length}><option value="">Choose portfolio</option>{portfolios.data?.map((portfolio) => <option key={portfolio.portfolio_id} value={portfolio.portfolio_id}>{portfolio.name}</option>)}</select><em>Mapping updates holdings right away.</em></label></div><div className="account-value"><b>{money(item.total_value ?? item.balance, item.currency ?? "CAD")}</b><span>holdings {money(item.holdings_value, item.currency ?? "CAD")}</span><span>cash {money(item.cash_balance, item.currency ?? "CAD")}</span><span>{item.position_count} position{item.position_count === 1 ? "" : "s"}{item.latest_position_date ? ` as of ${item.latest_position_date}` : ""}</span><span className={item.portfolio_id ? "pill done" : "pill"}>{item.portfolio_id ? "mapped" : "needs map"}</span></div></article>)}</div> : <EmptyRow text="No synced broker accounts yet. Open the portal, connect a brokerage, then sync accounts." />}</section>
   </div>;
 }
 

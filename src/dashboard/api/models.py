@@ -55,6 +55,12 @@ class PortfolioSummary(BaseModel):
     projected_value_low: float | None = None
     projected_value_high: float | None = None
     projected_horizon_years: int | None = None
+    as_of: datetime | None = None
+    source: str = "quaint_dash.duckdb"
+    display_currency: str | None = None
+    market_value_native: float | None = None
+    book_cost_native: float | None = None
+    fx_missing: list[str] = Field(default_factory=list)
 
 
 class PositionSummary(BaseModel):
@@ -75,6 +81,180 @@ class PositionSummary(BaseModel):
     weight: float | None
     broker_linked: bool = False
     broker_account_count: int = 0
+    native_market_value: float | None = None
+    base_market_value: float | None = None
+    native_book_cost: float | None = None
+    base_book_cost: float | None = None
+    fx_rate: float | None = None
+    fx_source: str | None = None
+    fx_as_of: datetime | None = None
+    price_timestamp: datetime | None = None
+    price_source: str | None = None
+    price_session: str | None = None
+    stale_price: bool = False
+    stale_reason: str | None = None
+    data_status: str = "available"
+
+
+class PortfolioMetricValue(BaseModel):
+    value: float | None = None
+    reason: str | None = None
+    coverage: float | None = None
+    source: str = "quaint_dash.duckdb"
+    as_of: date | datetime | None = None
+
+
+class PortfolioPerformancePoint(BaseModel):
+    date: date
+    portfolio_value: float | None = None
+    portfolio_return_index: float | None = None
+    benchmark_return_index: float | None = None
+
+
+class PortfolioPerformanceResponse(BaseModel):
+    portfolio_id: int
+    benchmark: str | None = None
+    base_currency: str
+    start_date: date | None = None
+    end_date: date | None = None
+    range: str
+    methodology: str
+    calendar_alignment: str
+    normalized_initial_value: float
+    actual_twr_cagr: float | None = None
+    historical_cumulative_return: float | None = None
+    benchmark_cagr: float | None = None
+    excess_cagr: float | None = None
+    observation_count: int
+    coverage: float | None = None
+    missing_inputs: list[str] = Field(default_factory=list)
+    points: list[PortfolioPerformancePoint] = Field(default_factory=list)
+    as_of: datetime
+    source: str = "quaint_dash.analytics"
+
+
+class PortfolioRiskResponse(BaseModel):
+    portfolio_id: int
+    benchmark: str | None = None
+    risk_free_rate: float
+    risk_free_rate_source: str
+    risk_free_rate_date: date | None = None
+    lookback: str
+    return_frequency: str
+    annualized_return: float | None = None
+    annualized_volatility: float | None = None
+    sharpe_ratio: float | None = None
+    sortino_ratio: float | None = None
+    beta: float | None = None
+    alpha: float | None = None
+    correlation: float | None = None
+    maximum_drawdown: float | None = None
+    downside_deviation: float | None = None
+    observation_count: int
+    effective_number_of_holdings: float | None = None
+    largest_position: float | None = None
+    hhi: float | None = None
+    weight_balance_score: float | None = None
+    sector_concentration: dict[str, float] = Field(default_factory=dict)
+    geographic_concentration: dict[str, float] = Field(default_factory=dict)
+    currency_concentration: dict[str, float] = Field(default_factory=dict)
+    average_pairwise_correlation: float | None = None
+    risk_contribution_concentration: float | None = None
+    missing_inputs: list[str] = Field(default_factory=list)
+    as_of: datetime
+
+
+class PortfolioFundamentalHolding(BaseModel):
+    asset_id: str
+    symbol: str
+    market_value: float | None = None
+    weight: float | None = None
+    expected_cagr: float | None = None
+    expected_cagr_contribution: float | None = None
+    pe_ratio: float | None = None
+    price_to_free_cash_flow: float | None = None
+    revenue_growth: float | None = None
+    eps_growth: float | None = None
+    free_cash_flow_growth: float | None = None
+    operating_margin: float | None = None
+    free_cash_flow_margin: float | None = None
+    dividend_yield: float | None = None
+    margin_of_safety: float | None = None
+    coverage_status: str
+    missing_inputs: list[str] = Field(default_factory=list)
+
+
+class PortfolioFundamentalsResponse(BaseModel):
+    portfolio_id: int
+    base_currency: str
+    horizon_years: int
+    weighted_expected_cagr: PortfolioMetricValue
+    pe_ratio: PortfolioMetricValue
+    price_to_free_cash_flow: PortfolioMetricValue
+    revenue_growth: PortfolioMetricValue
+    eps_growth: PortfolioMetricValue
+    free_cash_flow_growth: PortfolioMetricValue
+    operating_margin: PortfolioMetricValue
+    free_cash_flow_margin: PortfolioMetricValue
+    dividend_yield: PortfolioMetricValue
+    margin_of_safety: PortfolioMetricValue
+    holdings: list[PortfolioFundamentalHolding]
+    missing_inputs: list[str] = Field(default_factory=list)
+    as_of: datetime
+
+
+class OptimizationConstraints(BaseModel):
+    min_weight: float = Field(default=0.0, ge=0.0, le=1.0)
+    max_weight: float = Field(default=0.15, gt=0.0, le=1.0)
+    min_holding_weight: float | None = Field(default=None, ge=0.0, le=1.0)
+    max_sector_exposure: float | None = Field(default=None, gt=0.0, le=1.0)
+    max_country_exposure: float | None = Field(default=None, gt=0.0, le=1.0)
+    max_currency_exposure: float | None = Field(default=None, gt=0.0, le=1.0)
+    volatility_ceiling: float | None = Field(default=None, gt=0.0)
+    max_turnover: float | None = Field(default=None, ge=0.0, le=2.0)
+    min_holdings: int | None = Field(default=None, ge=1)
+    max_holdings: int | None = Field(default=None, ge=1)
+    locked_assets: list[str] = Field(default_factory=list)
+    excluded_assets: list[str] = Field(default_factory=list)
+    cash_weight: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class OptimizationPreviewRequest(BaseModel):
+    objective: str = Field(pattern="^(max_expected_cagr|max_risk_adjusted_return)$")
+    lookback_days: int = Field(default=756, ge=60, le=3650)
+    return_frequency: str = Field(default="daily", pattern="^daily$")
+    risk_free_rate: float = Field(default=0.0, ge=-0.05, le=0.25)
+    horizon_years: int = Field(default=5, ge=3, le=10)
+    constraints: OptimizationConstraints = Field(default_factory=OptimizationConstraints)
+
+
+class OptimizationMetricSet(BaseModel):
+    expected_cagr: float | None = None
+    expected_volatility: float | None = None
+    expected_sharpe: float | None = None
+    beta: float | None = None
+    concentration_hhi: float | None = None
+
+
+class OptimizationPreviewResponse(BaseModel):
+    portfolio_id: int
+    objective: str
+    status: str
+    solver_message: str
+    current_weights: dict[str, float]
+    optimized_weights: dict[str, float]
+    weight_deltas: dict[str, float]
+    before: OptimizationMetricSet
+    after: OptimizationMetricSet
+    sector_exposure_before: dict[str, float] = Field(default_factory=dict)
+    sector_exposure_after: dict[str, float] = Field(default_factory=dict)
+    estimated_turnover: float | None = None
+    binding_constraints: list[str] = Field(default_factory=list)
+    excluded_assets: list[str] = Field(default_factory=list)
+    input_coverage: dict[str, float] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    calculation_timestamp: datetime
 
 
 class AssetHoldingSummary(PositionSummary):
@@ -250,6 +430,7 @@ class StockRankingsResponse(BaseModel):
     factor: str
     universe: str
     direction: str
+    timeframe: str
     as_of_date: date
     methodology: str
     total: int
@@ -263,6 +444,7 @@ class StockRankingSnapshotRefreshRequest(BaseModel):
         pattern="^(aggregate|share_price_momentum|news_sentiment|retail_sentiment|earnings_momentum|institutional_buying)$",
     )
     universe: str = Field(default="tracked", pattern="^(tracked|all)$")
+    timeframe: str = Field(default="monthly", pattern="^(daily|weekly|monthly|yearly)$")
     limit: int = Field(default=100, ge=1, le=500)
 
 
@@ -271,6 +453,157 @@ class StockRankingSnapshotRefreshResponse(BaseModel):
     universe: str
     snapshot_date: date
     refreshed_count: int
+
+
+class SignalEvidenceItem(BaseModel):
+    label: str
+    metric: str
+    value: float | None = None
+    score: float | None = None
+    detail: str
+    source: str
+    as_of: date | datetime | None = None
+
+
+class SignalPortfolioImpact(BaseModel):
+    portfolio_id: int
+    portfolio_name: str
+    weight: float | None
+    market_value: float | None
+    currency: str
+    concentration_note: str
+
+
+class SignalUserState(BaseModel):
+    reviewed_at: datetime | None = None
+    muted_until: datetime | None = None
+    dismissed_until: datetime | None = None
+    note: str | None = None
+    alert_rule_id: int | None = None
+
+
+class SignalSummaryMetric(BaseModel):
+    key: str
+    label: str
+    value: int
+    filter_params: dict[str, str]
+
+
+class SignalHistoryPoint(BaseModel):
+    date: date
+    strength: float
+    confidence: float
+    raw_value: float
+    action: str
+
+
+class SignalLifecycleEvent(BaseModel):
+    status: str
+    timestamp: datetime | date | None
+    label: str
+    detail: str
+
+
+class SignalEfficacyMetadata(BaseModel):
+    label: str
+    sample_size: int
+    prior_occurrences: int | None = None
+    median_forward_return: float | None = None
+    median_excess_return: float | None = None
+    hit_rate: float | None = None
+    max_adverse_excursion: float | None = None
+    benchmark: str | None = None
+    methodology_version: str
+    warning: str | None = None
+
+
+class SignalRow(BaseModel):
+    signal_id: str
+    definition_id: str
+    asset_id: str
+    ticker: str
+    company_name: str | None
+    exchange: str | None
+    signal_name: str
+    summary: str
+    category: str
+    direction: str
+    status: str
+    strength: float
+    confidence: float
+    portfolio_priority: float
+    raw_observed_value: float | None
+    normalized_value: float | None
+    trigger_threshold: float | None
+    lookback_period: str
+    first_detected_at: datetime | date | None
+    confirmation_at: datetime | date | None
+    last_evaluated_at: datetime
+    data_as_of: datetime | date | None
+    expires_at: datetime | date | None
+    resolved_at: datetime | date | None
+    resolution_reason: str | None
+    methodology_version: str
+    source: str
+    missing_data_status: str
+    supporting_evidence: list[SignalEvidenceItem] = Field(default_factory=list)
+    contradicting_evidence: list[SignalEvidenceItem] = Field(default_factory=list)
+    affected_portfolios: list[SignalPortfolioImpact] = Field(default_factory=list)
+    current_portfolio_weight: float | None
+    historical_efficacy: SignalEfficacyMetadata
+    related_signal_ids: list[str] = Field(default_factory=list)
+    reviewed: bool = False
+    muted: bool = False
+
+
+class SignalsSummaryResponse(BaseModel):
+    items: list[SignalRow]
+    total: int
+    limit: int
+    offset: int
+    metrics: list[SignalSummaryMetric]
+    needs_attention: list[SignalRow]
+    top_opportunities: list[SignalRow]
+    generated_at: datetime
+    data_as_of: datetime | date | None
+    last_successful_computation_at: datetime | date | None
+    partial_provider_failures: list[str] = Field(default_factory=list)
+    stale_cached_results: bool = False
+    model_version: str
+    methodology: str
+
+
+class SignalDetailResponse(SignalRow):
+    lifecycle: list[SignalLifecycleEvent] = Field(default_factory=list)
+    strength_history: list[SignalHistoryPoint] = Field(default_factory=list)
+    related_news: list[NewsItemResponse] = Field(default_factory=list)
+    methodology: str
+    links: dict[str, str]
+    user_state: SignalUserState
+
+
+class SignalUserStateRequest(BaseModel):
+    reviewed: bool | None = None
+    muted_until: datetime | None = None
+    dismissed_until: datetime | None = None
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class SignalAlertRuleRequest(BaseModel):
+    condition: str = Field(default="status_active", max_length=80)
+    threshold: float | None = None
+    channel: str = Field(default="in_app", max_length=40)
+
+
+class SignalAlertRuleResponse(BaseModel):
+    alert_rule_id: int
+    signal_id: str
+    definition_id: str
+    asset_id: str
+    condition: str
+    threshold: float | None
+    channel: str
+    is_active: bool
 
 
 class WatchlistAssetResponse(BaseModel):
@@ -594,6 +927,11 @@ class BrokerAccountResponse(BaseModel):
     account_type: str | None
     currency: str | None
     balance: float | None
+    cash_balance: float | None = None
+    holdings_value: float | None = None
+    total_value: float | None = None
+    position_count: int = 0
+    latest_position_date: date | None = None
     portfolio_id: int | None
 
 
@@ -698,6 +1036,7 @@ class IngestionScheduleRequest(BaseModel):
         pattern="^(aggregate|share_price_momentum|news_sentiment|retail_sentiment|earnings_momentum|institutional_buying)$",
     )
     ranking_universe: str = Field(default="tracked", pattern="^(tracked|all)$")
+    ranking_timeframe: str = Field(default="monthly", pattern="^(daily|weekly|monthly|yearly)$")
     missing_only: bool = False
     stale_only: bool = False
 

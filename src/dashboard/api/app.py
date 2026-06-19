@@ -131,6 +131,26 @@ def _error_response(
 def _mount_web_application(app: FastAPI) -> None:
     web_dist: Path = app.state.web_dist
     assets = web_dist / "assets"
+
+    @app.get("/assets/{asset_path:path}", include_in_schema=False)
+    def web_asset_or_asset_route(asset_path: str):
+        index = web_dist / "index.html"
+        requested = assets / asset_path
+        if requested.is_file() and assets in requested.resolve().parents:
+            return FileResponse(requested)
+        if index.is_file():
+            return FileResponse(index)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": {
+                    "code": "web_not_built",
+                    "message": "Build the React application in web/ before using the browser interface.",
+                    "details": {},
+                }
+            },
+        )
+
     if assets.is_dir():
         app.mount("/assets", StaticFiles(directory=assets), name="web-assets")
 
