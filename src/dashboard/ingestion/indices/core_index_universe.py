@@ -9,9 +9,12 @@ CORE_INDICES = [
         "currency": "USD",
         "is_core": True,
         "symbols": [
-            {"provider": "fmp", "provider_symbol": "^GSPC", "symbol_purpose": "price_daily", "is_primary": True, "is_proxy": False},
-            {"provider": "fmp", "provider_symbol": "^GSPC", "symbol_purpose": "price_intraday", "is_primary": True, "is_proxy": False},
+            {"provider": "yfinance", "provider_symbol": "^GSPC", "symbol_purpose": "price_daily", "is_primary": True, "is_proxy": False},
+            {"provider": "yfinance", "provider_symbol": "^GSPC", "symbol_purpose": "price_intraday", "is_primary": True, "is_proxy": False},
+            {"provider": "fmp", "provider_symbol": "^GSPC", "symbol_purpose": "price_daily", "is_primary": False, "is_proxy": False},
+            {"provider": "fmp", "provider_symbol": "^GSPC", "symbol_purpose": "price_intraday", "is_primary": False, "is_proxy": False},
             {"provider": "fmp", "provider_symbol": "sp500-constituent", "symbol_purpose": "constituents", "is_primary": True, "is_proxy": False},
+            {"provider": "etf_proxy", "provider_symbol": "SPY", "symbol_purpose": "proxy_holdings", "is_primary": False, "is_proxy": True},
         ],
     },
     {
@@ -24,8 +27,10 @@ CORE_INDICES = [
         "currency": "USD",
         "is_core": True,
         "symbols": [
-            {"provider": "fmp", "provider_symbol": "^NDX", "symbol_purpose": "price_daily", "is_primary": True, "is_proxy": False},
-            {"provider": "fmp", "provider_symbol": "^NDX", "symbol_purpose": "price_intraday", "is_primary": True, "is_proxy": False},
+            {"provider": "yfinance", "provider_symbol": "^NDX", "symbol_purpose": "price_daily", "is_primary": True, "is_proxy": False},
+            {"provider": "yfinance", "provider_symbol": "^NDX", "symbol_purpose": "price_intraday", "is_primary": True, "is_proxy": False},
+            {"provider": "fmp", "provider_symbol": "^NDX", "symbol_purpose": "price_daily", "is_primary": False, "is_proxy": False},
+            {"provider": "fmp", "provider_symbol": "^NDX", "symbol_purpose": "price_intraday", "is_primary": False, "is_proxy": False},
             {"provider": "etf_proxy", "provider_symbol": "QQQ", "symbol_purpose": "proxy_holdings", "is_primary": False, "is_proxy": True},
         ],
     },

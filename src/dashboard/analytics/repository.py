@@ -5,7 +5,13 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from .calculations import _extract_number, _json_object, _normalize_code, normalize_weight
+from .calculations import (
+    _extract_number,
+    _json_object,
+    _normalize_code,
+    allocation_class,
+    normalize_weight,
+)
 from .models import (
     DEFAULT_BENCHMARK_BY_COUNTRY,
     DEFAULT_BENCHMARK_BY_CURRENCY,
@@ -471,7 +477,7 @@ class AnalyticsRepository:
         placeholders = ", ".join("?" for _ in asset_ids)
         rows = self.conn.execute(
             f"""
-            SELECT asset_id, sector, country, ccy
+            SELECT asset_id, symbol, asset_type, asset_subtype, name, sector, industry, country, ccy
             FROM asset
             WHERE asset_id IN ({placeholders})
             """,
@@ -479,9 +485,18 @@ class AnalyticsRepository:
         ).fetchall()
         return {
             row[0]: {
-                "sector": row[1],
-                "country": row[2],
-                "currency": row[3],
+                "sector": row[5],
+                "country": row[7],
+                "currency": row[8],
+                "asset_class": allocation_class(
+                    asset_id=row[0],
+                    symbol=row[1],
+                    asset_type=row[2],
+                    asset_subtype=row[3],
+                    name=row[4],
+                    sector=row[5],
+                    industry=row[6],
+                ),
             }
             for row in rows
         }

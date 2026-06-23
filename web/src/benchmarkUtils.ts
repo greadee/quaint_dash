@@ -1,6 +1,6 @@
 import type { BenchmarkIndexSummary, BenchmarkPricePoint } from "./api";
 
-export type BenchmarkPeriod = "5D" | "1M" | "3M" | "YTD" | "1Y" | "3Y" | "5Y" | "10Y" | "MAX";
+export type BenchmarkPeriod = "1D" | "1W" | "1M" | "YTD" | "1Y" | "5Y";
 export type BenchmarkCategoryFilter = "all" | "core_geo" | "sector" | "industry" | "theme";
 export type BenchmarkSortKey =
   | "name"
@@ -14,15 +14,12 @@ export type BenchmarkSortKey =
 export type SortDirection = "asc" | "desc";
 
 export const benchmarkPeriods: { value: BenchmarkPeriod; label: string; days?: number }[] = [
-  { value: "5D", label: "5D", days: 8 },
+  { value: "1D", label: "1D", days: 1 },
+  { value: "1W", label: "1W", days: 8 },
   { value: "1M", label: "1M", days: 35 },
-  { value: "3M", label: "3M", days: 100 },
-  { value: "YTD", label: "YTD" },
   { value: "1Y", label: "1Y", days: 370 },
-  { value: "3Y", label: "3Y", days: 365 * 3 + 12 },
+  { value: "YTD", label: "YTD" },
   { value: "5Y", label: "5Y", days: 365 * 5 + 12 },
-  { value: "10Y", label: "10Y", days: 365 * 10 + 20 },
-  { value: "MAX", label: "Max" },
 ];
 
 export const benchmarkCategories: { value: BenchmarkCategoryFilter; label: string }[] = [
@@ -110,7 +107,6 @@ export function freshnessLabel(status: FreshnessStatus): string {
 }
 
 export function periodStartDate(period: BenchmarkPeriod, now = new Date()): string | undefined {
-  if (period === "MAX") return undefined;
   const start = new Date(now);
   if (period === "YTD") {
     start.setMonth(0, 1);
@@ -164,7 +160,7 @@ export function mergeNormalizedSeries(series: NormalizedSeries[]): NormalizedPoi
   series.forEach((item) => {
     item.points.forEach((point) => {
       const current = byDate.get(point.date) ?? { date: point.date };
-      current[item.id] = Number(point.normalized.toFixed(4));
+      current[item.id] = Number(point.close.toFixed(4));
       current[`${item.id}Close`] = point.close;
       byDate.set(point.date, current);
     });

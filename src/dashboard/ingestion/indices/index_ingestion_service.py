@@ -673,15 +673,23 @@ class BenchmarkIndexIngestionService:
             ("currency", "currency"),
         ]:
             weights: dict[str, float] = {}
+            unclassified_weight = 0.0
 
             for constituent in constituents:
                 value = getattr(constituent, attr_name)
                 weight = constituent.weight_pct
 
-                if value is None or weight is None:
+                if weight is None:
+                    continue
+
+                if value is None:
+                    unclassified_weight += weight
                     continue
 
                 weights[value] = weights.get(value, 0.0) + weight
+
+            if unclassified_weight > 0:
+                weights["Unclassified"] = weights.get("Unclassified", 0.0) + unclassified_weight
 
             for value, weight in weights.items():
                 self.conn.execute(

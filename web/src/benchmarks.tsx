@@ -61,6 +61,7 @@ import {
   type NormalizedSeries,
   type SortDirection,
 } from "./benchmarkUtils";
+import { ChartTypeToggle } from "./routes/routeShared";
 
 type Notify = (message: string, tone?: "success" | "error") => void;
 
@@ -96,6 +97,7 @@ export function BenchmarksWorkspacePage({ notify }: { notify: Notify }) {
   const freshness = params.get("freshness") ?? "all";
   const sort = validSort(params.get("sort"));
   const direction = validDirection(params.get("direction"));
+  const chartType = params.get("chart") === "bar" ? "bar" : "line";
 
   const benchmarks = useQuery({
     queryKey: ["benchmarks-workspace", search, category, currency],
@@ -141,7 +143,7 @@ export function BenchmarksWorkspacePage({ notify }: { notify: Notify }) {
   const priceQueries = useQueries({
     queries: selectedBenchmarks.map((item) => ({
       queryKey: ["benchmark-compare-prices", item.index_id, period, startDate],
-      queryFn: () => api.benchmarkPrices(item.index_id, { start_date: startDate, limit: period === "MAX" ? 5000 : 1400 }),
+      queryFn: () => api.benchmarkPrices(item.index_id, { start_date: startDate, limit: 1400 }),
       staleTime: 30000,
     })),
   });
@@ -176,7 +178,7 @@ export function BenchmarksWorkspacePage({ notify }: { notify: Notify }) {
   const updateParam = (key: string, value: string) => {
     setParams((current) => {
       const next = new URLSearchParams(current);
-      if (!value || value === "all" || (key === "range" && value === "1Y") || (key === "baseline" && value === defaultBaseline)) next.delete(key);
+      if (!value || value === "all" || (key === "range" && value === "1Y") || (key === "chart" && value === "line") || (key === "baseline" && value === defaultBaseline)) next.delete(key);
       else next.set(key, value);
       return next;
     });
@@ -269,6 +271,8 @@ export function BenchmarksWorkspacePage({ notify }: { notify: Notify }) {
         onRemove={(id) => setSelected(selected.filter((item) => item !== id))}
         isLoading={priceQueries.some((query) => query.isLoading)}
         period={period}
+        chartType={chartType}
+        onChartTypeChange={(value) => updateParam("chart", value)}
       />
       <BenchmarkExplorer
         rows={rows}
@@ -308,6 +312,8 @@ function BenchmarkComparisonChart({
   onRemove,
   isLoading,
   period,
+  chartType,
+  onChartTypeChange,
 }: {
   normalized: NormalizedSeries[];
   chartData: Record<string, string | number | null>[];
@@ -317,29 +323,48 @@ function BenchmarkComparisonChart({
   onRemove: (id: string) => void;
   isLoading: boolean;
   period: BenchmarkPeriod;
+  chartType: "line" | "bar";
+  onChartTypeChange: (value: "line" | "bar") => void;
 }) {
   return (
     <section className="card benchmark-chart-card" id="benchmark-compare-chart" tabIndex={-1}>
       <div className="card-heading">
         <div>
-          <p className="eyebrow">Relative performance</p>
-          <h2>Normalized comparison</h2>
-          <span>Every series starts at 100 for the selected {period} window. Delta values compare period return against {baseline}.</span>
+          <p className="eyebrow">Actual benchmark levels</p>
+          <h2>Benchmark price comparison</h2>
+          <span>Stored closes for the selected {period} window. Delta values compare period return against {baseline}.</span>
         </div>
-        <div className="benchmark-chip-row" aria-label="Selected benchmarks">
-          {selected.map((id) => <button key={id} onClick={() => onRemove(id)} aria-label={`Remove ${id} from comparison`}>{id}<X size={13} /></button>)}
+        <div className="card-tools benchmark-chart-tools">
+          <ChartTypeToggle value={chartType} onChange={onChartTypeChange} />
+          <div className="benchmark-chip-row" aria-label="Selected benchmarks">
+            {selected.map((id) => <button key={id} onClick={() => onRemove(id)} aria-label={`Remove ${id} from comparison`}>{id}<X size={13} /></button>)}
+          </div>
         </div>
       </div>
       {isLoading ? <BenchmarkSkeleton rows={6} /> : chartData.length < 2 ? (
         <BenchmarkEmpty title="No overlapping chart history" detail="Select benchmarks with daily prices for this period, or run benchmark hardening to backfill history." />
       ) : (
         <>
-          <div className="benchmark-comparison-chart" aria-label={`Normalized benchmark chart with ${normalized.length} series`}>
+          <div className="benchmark-comparison-chart" aria-label={`Actual benchmark chart with ${normalized.length} series`}>
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData} margin={{ top: 8, right: 18, bottom: 0, left: 0 }}>
+              {chartType === "bar" ? <BarChart data={chartData} margin={{ top: 8, right: 18, bottom: 0, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="date" minTickGap={42} tick={{ fontSize: 11 }} />
-                <YAxis domain={["dataMin - 2", "dataMax + 2"]} tick={{ fontSize: 11 }} width={42} />
+                <YAxis domain={["auto", "auto"]} tick={{ fontSize: 11 }} width={42} />
+                <Tooltip content={<BenchmarkTooltip series={normalized} baseline={baselineSeries} />} />
+                <Legend />
+                {normalized.map((item, index) => (
+                  <Bar
+                    key={item.id}
+                    dataKey={item.id}
+                    name={item.id}
+                    fill={seriesColors[index % seriesColors.length]}
+                  />
+                ))}
+              </BarChart> : <LineChart data={chartData} margin={{ top: 8, right: 18, bottom: 0, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="date" minTickGap={42} tick={{ fontSize: 11 }} />
+                <YAxis domain={["auto", "auto"]} tick={{ fontSize: 11 }} width={42} />
                 <Tooltip content={<BenchmarkTooltip series={normalized} baseline={baselineSeries} />} />
                 <Legend />
                 {normalized.map((item, index) => (
@@ -354,7 +379,7 @@ function BenchmarkComparisonChart({
                     strokeWidth={item.id.toUpperCase() === baseline.toUpperCase() ? 3 : 2}
                   />
                 ))}
-              </LineChart>
+              </LineChart>}
             </ResponsiveContainer>
           </div>
           <p className="sr-summary">Screen-reader summary: {normalized.map((item) => `${item.id} returned ${formatPercent(item.periodReturn)}; delta versus ${baseline} is ${formatPercent(baselineDelta(item, baselineSeries))}`).join(". ")}</p>
@@ -379,7 +404,7 @@ function BenchmarkTooltip({ active, payload, label, series, baseline }: {
         const id = String(entry.dataKey);
         const item = series.find((candidate) => candidate.id === id);
         const rawClose = entry.payload?.[`${id}Close`] as number | undefined;
-        return <p key={id}><span>{id}{item?.isProxy ? " proxy" : ""}</span><b>{formatLevel(rawClose)} / {formatLevel(entry.value)} normalized</b><em>{formatPercent(item?.periodReturn)} ({formatPercent(baselineDelta(item ?? series[0], baseline))} vs baseline)</em></p>;
+        return <p key={id}><span>{id}{item?.isProxy ? " proxy" : ""}</span><b>{formatLevel(rawClose ?? entry.value)}</b><em>{formatPercent(item?.periodReturn)} ({formatPercent(baselineDelta(item ?? series[0], baseline))} vs baseline)</em></p>;
       })}
     </div>
   );

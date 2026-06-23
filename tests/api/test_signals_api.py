@@ -86,3 +86,36 @@ def test_signal_detail_user_state_alert_and_idempotent_persistence(tmp_path):
     assert state.json()["note"] == "checked"
     assert alert.status_code == 200
     assert alert.json()["signal_id"] == signal_id
+
+
+def test_signal_efficacy_uses_prior_snapshots_without_lookahead(tmp_path):
+    db_path = tmp_path / "signals.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    _seed_signal_assets(db)
+    for index, snapshot_date in enumerate(["2026-01-05", "2026-01-12", "2026-01-19", "2026-01-26"]):
+        db.conn.execute(
+            """
+            INSERT INTO stock_ranking_snapshot(
+                asset_id, factor, snapshot_date, universe, score, action,
+                confidence, data_status, latest_data_date, components_json,
+                missing_inputs_json
+            )
+            VALUES ('BUYME', 'share_price_momentum', ?, 'tracked', ?, 'Buy', 1, 'complete', ?, '[]', '[]')
+            """,
+            [snapshot_date, 18 + index, snapshot_date],
+        )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/signals?category=momentum&q=BUYME&limit=1")
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    efficacy = item["historical_efficacy"]
+    assert efficacy["label"] == "Backtested from stored point-in-time snapshots"
+    assert efficacy["sample_size"] >= 3
+    assert efficacy["prior_occurrences"] == 4
+    assert efficacy["median_forward_return"] is not None
+    assert efficacy["hit_rate"] is not None
+    assert efficacy["warning"] is None

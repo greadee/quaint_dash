@@ -37,6 +37,30 @@ describe("api client", () => {
     );
   });
 
+  it("builds comparison workspace query parameters", async () => {
+    await api.comparisonWorkspace({
+      symbols: ["NVDA", "AMD"],
+      benchmark: "SP500",
+      period: "5Y",
+      mode: "total-return",
+      currency: "native",
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/comparison/workspace?symbols=NVDA%2CAMD&benchmark=SP500&period=5Y&mode=total-return&currency=native",
+      expect.objectContaining({ headers: expect.objectContaining({ "Content-Type": "application/json" }) }),
+    );
+  });
+
+  it("builds raw asset price history query parameters", async () => {
+    await api.prices("NVDA", { range: "1M", limit: 100 });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/assets/NVDA/prices?limit=100&range=1M",
+      expect.objectContaining({ headers: expect.objectContaining({ "Content-Type": "application/json" }) }),
+    );
+  });
+
   it("builds benchmark history and detail calls", async () => {
     await api.benchmark("SP500");
     await api.benchmarkPrices("SP500", { start_date: "2026-01-01", end_date: "2026-06-19", limit: 10 });
@@ -45,7 +69,7 @@ describe("api client", () => {
     await api.benchmarkExposures("SP500", { snapshot_date: "2026-01-02", dimension_type: "sector" });
 
     expect(fetch).toHaveBeenNthCalledWith(1, "/api/v1/benchmarks/SP500", expect.any(Object));
-    expect(fetch).toHaveBeenNthCalledWith(2, "/api/v1/benchmarks/SP500/prices?limit=10&start_date=2026-01-01&end_date=2026-06-19", expect.any(Object));
+    expect(fetch).toHaveBeenNthCalledWith(2, "/api/v1/benchmarks/SP500/prices?start_date=2026-01-01&end_date=2026-06-19&limit=10", expect.any(Object));
     expect(fetch).toHaveBeenNthCalledWith(3, "/api/v1/benchmarks/SP500/metrics?limit=20", expect.any(Object));
     expect(fetch).toHaveBeenNthCalledWith(4, "/api/v1/benchmarks/SP500/constituents?limit=5&offset=5&snapshot_date=2026-01-02&source=test&sort=symbol", expect.any(Object));
     expect(fetch).toHaveBeenNthCalledWith(5, "/api/v1/benchmarks/SP500/exposures?snapshot_date=2026-01-02&dimension_type=sector", expect.any(Object));

@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from dashboard.api.broker_background import BrokerBackgroundConfig, BrokerBackgroundWorker
 from dashboard.api.dependencies import get_connection
 from dashboard.api.ingestion_background import IngestionBackgroundConfig, IngestionBackgroundWorker
 from dashboard.api.models import ErrorResponse, HealthResponse
@@ -44,10 +45,13 @@ def create_app(
         except Exception as exc:
             LOGGER.warning("Broker sync scheduler skipped during API startup: %s", exc)
         worker = app.state.ingestion_background_worker
+        broker_worker = app.state.broker_background_worker
         worker.start()
+        broker_worker.start()
         try:
             yield
         finally:
+            await broker_worker.stop()
             await worker.stop()
 
     app = FastAPI(
@@ -64,6 +68,11 @@ def create_app(
         resolved_db_path,
         app.state.write_lock,
         IngestionBackgroundConfig.from_env(),
+    )
+    app.state.broker_background_worker = BrokerBackgroundWorker(
+        resolved_db_path,
+        app.state.write_lock,
+        BrokerBackgroundConfig.from_env(),
     )
     app.add_middleware(
         CORSMiddleware,
@@ -198,7 +207,7 @@ def _run_startup_broker_sync_if_enabled(db_path: Path) -> None:
         return
 
     max_users = _int_env("BROKER_SYNC_MAX_USERS")
-    min_age_hours = _int_env("BROKER_SYNC_MIN_AGE_HOURS", 24) or 24
+    min_age_hours = _int_env("BROKER_SYNC_MIN_AGE_HOURS", 1) or 1
     result = _run_startup_broker_sync(
         db_path,
         max_users=max_users,

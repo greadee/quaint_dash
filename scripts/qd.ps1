@@ -13,6 +13,8 @@ param(
         "verify-web",
         "verify",
         "build-web",
+        "perf-signals-backend",
+        "perf-signals-browser",
         "health",
         "smoke",
         "status"
@@ -93,6 +95,10 @@ Verification:
   verify-web  run web eslint, TypeScript, and Vite build
   verify      run Python and web verification
   build-web   build the React app
+  perf-signals-backend
+              profile backend /api/v1/signals service and SQL latency
+  perf-signals-browser
+              profile browser /signals load and per-request latency
 
 Runtime checks:
   health      call http://127.0.0.1:8000/api/v1/health
@@ -193,6 +199,12 @@ switch ($Command) {
     }
     "build-web" {
         Invoke-InWeb { Invoke-Native "npm.cmd" @("run", "build") }
+    }
+    "perf-signals-backend" {
+        Invoke-InRoot { Invoke-Native $Python (@("tools\profile_signals_backend.py") + $ArgsForCommand) }
+    }
+    "perf-signals-browser" {
+        Invoke-InWeb { Invoke-Native "npm.cmd" (@("run", "perf:signals", "--") + $ArgsForCommand) }
     }
     "health" {
         $response = Invoke-RestMethod "http://127.0.0.1:8000/api/v1/health"

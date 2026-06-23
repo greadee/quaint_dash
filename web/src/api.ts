@@ -6,6 +6,10 @@ export type Portfolio = {
   market_value: number;
   book_cost: number;
   unrealized_gain: number | null;
+  unrealized_return_percent: number | null;
+  total_gain: number | null;
+  total_return_percent: number | null;
+  total_gain_source: string;
   projected_value: number | null;
   projected_value_low: number | null;
   projected_value_high: number | null;
@@ -21,6 +25,7 @@ export type Position = {
   symbol: string;
   name: string | null;
   asset_type: string | null;
+  allocation_class: string;
   sector: string | null;
   industry: string | null;
   country: string | null;
@@ -44,6 +49,10 @@ export type Position = {
   stale_price?: boolean;
   stale_reason?: string | null;
   data_status?: string;
+  sector_exposure?: Record<string, number>;
+  industry_exposure?: Record<string, number>;
+  country_exposure?: Record<string, number>;
+  currency_exposure?: Record<string, number>;
 };
 
 export type PortfolioPerformancePoint = {
@@ -94,6 +103,7 @@ export type PortfolioRisk = {
   sector_concentration: Record<string, number>;
   geographic_concentration: Record<string, number>;
   currency_concentration: Record<string, number>;
+  asset_class_concentration: Record<string, number>;
   average_pairwise_correlation: number | null;
   risk_contribution_concentration: number | null;
   missing_inputs: string[];
@@ -442,8 +452,34 @@ export type ComparisonFundamentals = {
   revenue: number | null;
   net_income: number | null;
   eps: number | null;
+  forward_eps: number | null;
+  forward_revenue: number | null;
   pe_ratio: number | null;
+  forward_pe: number | null;
   price_to_sales: number | null;
+  free_cash_flow: number | null;
+  free_cash_flow_yield: number | null;
+  gross_margin: number | null;
+  operating_margin: number | null;
+  net_margin: number | null;
+  cash: number | null;
+  total_debt: number | null;
+  net_debt: number | null;
+  net_debt_to_ebitda: number | null;
+  current_ratio: number | null;
+  debt_to_equity: number | null;
+  shares_outstanding: number | null;
+  dividend_yield: number | null;
+  buyback_yield: number | null;
+  stock_based_compensation: number | null;
+  acquisition_intensity: number | null;
+  reinvestment_rate: number | null;
+  roic: number | null;
+  roic_on_reinvestment: number | null;
+  customer_concentration: number | null;
+  revenue_concentration: number | null;
+  latest_period_end: string | null;
+  estimate_as_of: string | null;
 };
 export type ValuationContext = {
   historical_pe_average: number | null;
@@ -457,6 +493,8 @@ export type ComparisonAsset = {
   asset_id: string;
   symbol: string;
   name: string | null;
+  asset_type: string | null;
+  exchange_code: string | null;
   sector: string | null;
   industry: string | null;
   country: string | null;
@@ -648,6 +686,70 @@ export type ComparisonResponse = {
   sector_context: SectorComparisonContext | null;
   insights: string[];
 };
+export type ComparisonHistoryPoint = {
+  date: string;
+  value: number | null;
+  close: number | null;
+  cumulative_return: number | null;
+};
+export type ComparisonHistorySeries = {
+  asset_id: string;
+  symbol: string;
+  mode: string;
+  currency: string;
+  start_date: string | null;
+  end_date: string | null;
+  observation_count: number;
+  source: string | null;
+  points: ComparisonHistoryPoint[];
+  warnings: string[];
+};
+export type ComparisonFreshness = {
+  latest_price_date: string | null;
+  latest_price_source: string | null;
+  latest_price_ingested_at: string | null;
+  latest_fiscal_period: string | null;
+  latest_fundamental_source: string | null;
+  latest_fundamental_ingested_at: string | null;
+  calculation_timestamp: string;
+  provider: string;
+  stale: boolean;
+  stale_reason: string | null;
+};
+export type ComparisonCoverage = {
+  requested_symbols: string[];
+  resolved_symbols: string[];
+  failed_symbols: string[];
+  common_start_date: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  benchmark: string | null;
+  currency: string;
+  mode: string;
+  calculation_version: string;
+  warnings: string[];
+};
+export type ComparisonFxPolicy = {
+  display_currency: string;
+  native_currency_count: number;
+  historical: boolean;
+  source: string | null;
+  rate_count: number;
+  as_of: string | null;
+  missing_pairs: string[];
+  warnings: string[];
+};
+export type ComparisonWorkspaceResponse = {
+  requested_symbols: string[];
+  assets: ComparisonAsset[];
+  failed_symbols: string[];
+  benchmark: BenchmarkComparison | null;
+  historical_series: ComparisonHistorySeries[];
+  freshness: Record<string, ComparisonFreshness>;
+  coverage: ComparisonCoverage;
+  fx_policy: ComparisonFxPolicy;
+  insights: string[];
+};
 export type Transaction = {
   transaction_id: number;
   portfolio_id: number;
@@ -666,6 +768,7 @@ export type BrokerAccount = {
   provider: string;
   provider_account_id: string;
   provider_connection_id: string;
+  masked_account_number: string | null;
   account_name: string | null;
   account_type: string | null;
   currency: string | null;
@@ -676,6 +779,13 @@ export type BrokerAccount = {
   position_count: number;
   latest_position_date: string | null;
   portfolio_id: number | null;
+  portfolio_name: string | null;
+  available_transaction_count: number;
+  imported_transaction_count: number;
+  unsupported_transaction_count: number;
+  latest_activity_date: string | null;
+  last_imported_at: string | null;
+  updated_at: string | null;
 };
 export type BrokerConnection = {
   provider: string;
@@ -683,6 +793,108 @@ export type BrokerConnection = {
   provider_connection_id: string;
   institution_name: string;
   status: string;
+  account_count: number;
+  last_attempted_refresh_at: string | null;
+  last_successful_refresh_at: string | null;
+  last_error: string | null;
+};
+export type BrokerStatus = {
+  provider: string;
+  configured: boolean;
+  broker_profile_ready: boolean;
+  broker_profile_status: string;
+  broker_profile_key: string | null;
+  raw_payload_storage_enabled: boolean;
+  scheduled_refresh_enabled: boolean;
+  freshness_window_hours: number;
+  max_users_per_run: number | null;
+  last_refresh_at: string | null;
+  last_successful_refresh_at: string | null;
+  last_scheduled_run_at: string | null;
+  next_eligible_refresh_at: string | null;
+  provider_message: string | null;
+};
+export type BrokerSyncHistoryItem = {
+  sync_run_id: number;
+  provider: string;
+  user_key: string | null;
+  connection_label: string | null;
+  trigger_type: string;
+  started_at: string;
+  completed_at: string | null;
+  duration_seconds: number | null;
+  accounts_processed: number;
+  positions_stored: number;
+  activities_stored: number;
+  status: string;
+  error_summary: string | null;
+};
+export type BrokerImportPreviewItem = {
+  provider_transaction_id: string;
+  institution_name: string | null;
+  account_name: string | null;
+  masked_account_number: string | null;
+  portfolio_id: number | null;
+  portfolio_name: string | null;
+  trade_date: string;
+  source_type: string;
+  category: string;
+  status: string;
+  symbol: string | null;
+  quantity: number | null;
+  price: number | null;
+  amount: number | null;
+  currency: string | null;
+  normalization_result: string;
+};
+export type BrokerImportPreviewGroup = {
+  institution_name: string | null;
+  account_name: string | null;
+  masked_account_number: string | null;
+  portfolio_id: number | null;
+  portfolio_name: string | null;
+  ready_count: number;
+  already_imported_count: number;
+  unsupported_count: number;
+  needs_review_count: number;
+  unresolved_asset_count: number;
+  failed_validation_count: number;
+  category_counts: Record<string, number>;
+  items: BrokerImportPreviewItem[];
+};
+export type BrokerImportPreview = {
+  generated_at: string;
+  total_transactions: number;
+  ready_count: number;
+  already_imported_count: number;
+  unsupported_count: number;
+  needs_review_count: number;
+  unresolved_asset_count: number;
+  failed_validation_count: number;
+  date_start: string | null;
+  date_end: string | null;
+  groups: BrokerImportPreviewGroup[];
+};
+export type BrokerReconciliationItem = {
+  institution_name: string | null;
+  account_name: string | null;
+  masked_account_number: string | null;
+  ticker: string | null;
+  asset_id: string | null;
+  broker_quantity: number | null;
+  local_quantity: number | null;
+  quantity_difference: number | null;
+  broker_market_value: number | null;
+  local_market_value: number | null;
+  value_difference: number | null;
+  currency: string | null;
+  broker_data_timestamp: string | null;
+  local_ledger_timestamp: string | null;
+  status: string;
+};
+export type BrokerReconciliation = {
+  generated_at: string;
+  items: BrokerReconciliationItem[];
 };
 export type IngestionJob = {
   job_id: number;
@@ -755,7 +967,7 @@ export type StockRankingReadiness = {
   ready_count: number;
 };
 export type ActionResult = { status: string; result: Record<string, unknown> };
-export type BrokerPortalPayload = { user_key: string; broker?: string | null; reconnect?: string | null };
+export type BrokerPortalPayload = { user_key?: string | null; broker?: string | null; reconnect?: string | null };
 export type IngestionSchedulePayload = {
   pipeline: string;
   asset_id?: string | null;
@@ -830,6 +1042,14 @@ export const api = {
     if (benchmarkIndexId) params.set("benchmark_index_id", benchmarkIndexId);
     return request<ComparisonResponse>(`/comparison?${params.toString()}`);
   },
+  comparisonWorkspace: (params: { symbols: string[]; benchmark?: string; period?: string; mode?: string; currency?: string }) => {
+    const query = new URLSearchParams({ symbols: params.symbols.join(",") });
+    if (params.benchmark) query.set("benchmark", params.benchmark);
+    if (params.period) query.set("period", params.period);
+    if (params.mode) query.set("mode", params.mode);
+    if (params.currency) query.set("currency", params.currency);
+    return request<ComparisonWorkspaceResponse>(`/comparison/workspace?${query.toString()}`);
+  },
   benchmarks: (filters: BenchmarkFilters = {}) => {
     const params = new URLSearchParams();
     Object.entries(filters).forEach(([key, value]) => {
@@ -901,12 +1121,12 @@ export const api = {
     return request<Record<string, unknown>>(`/portfolios/${id}/analytics${suffix}`);
   },
   portfolioPerformance: (id: number, params: { benchmark?: string; range?: string } = {}) => {
-    const query = new URLSearchParams({ range: params.range ?? "3Y" });
+    const query = new URLSearchParams({ range: params.range ?? "1Y" });
     if (params.benchmark) query.set("benchmark", params.benchmark);
     return request<PortfolioPerformance>(`/portfolios/${id}/performance?${query.toString()}`);
   },
   portfolioRisk: (id: number, params: { benchmark?: string; riskFreeRate?: number; lookback?: string } = {}) => {
-    const query = new URLSearchParams({ lookback: params.lookback ?? "3Y", risk_free_rate: String(params.riskFreeRate ?? 0) });
+    const query = new URLSearchParams({ lookback: params.lookback ?? "1Y", risk_free_rate: String(params.riskFreeRate ?? 0) });
     if (params.benchmark) query.set("benchmark", params.benchmark);
     return request<PortfolioRisk>(`/portfolios/${id}/risk?${query.toString()}`);
   },
@@ -935,7 +1155,10 @@ export const api = {
   assetHoldings: (id: string) => request<AssetHolding[]>(`/assets/${id}/holdings`),
   assetActivity: (id: string, limit = 20, offset = 0) =>
     request<Page<AssetActivity>>(`/assets/${id}/activity?limit=${limit}&offset=${offset}`),
-  prices: (id: string, limit = 365) => request<PricePoint[]>(`/assets/${id}/prices?limit=${limit}`),
+  prices: (id: string, params: { limit?: number; range?: string } = {}) => {
+    const query = new URLSearchParams({ limit: String(params.limit ?? 5000), range: params.range ?? "1Y" });
+    return request<PricePoint[]>(`/assets/${id}/prices?${query.toString()}`);
+  },
   assetAnalytics: (id: string, benchmarkIndexId?: string) => {
     const params = new URLSearchParams();
     if (benchmarkIndexId) params.set("benchmark_index_id", benchmarkIndexId);
@@ -944,6 +1167,10 @@ export const api = {
   },
   brokerConnections: () => request<BrokerConnection[]>("/brokers/connections"),
   brokerAccounts: () => request<BrokerAccount[]>("/brokers/accounts"),
+  brokerStatus: () => request<BrokerStatus>("/brokers/status"),
+  brokerImportPreview: () => request<BrokerImportPreview>("/brokers/import-preview"),
+  brokerReconciliation: () => request<BrokerReconciliation>("/brokers/reconciliation"),
+  brokerSyncHistory: () => request<BrokerSyncHistoryItem[]>("/brokers/sync-history"),
   registerBrokerUser: (userKey: string) =>
     request("/brokers/snaptrade/users", { method: "POST", body: JSON.stringify({ user_key: userKey }) }),
   saveExistingBrokerUser: (userKey: string, providerUserId: string, userSecret: string) =>
@@ -960,11 +1187,21 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  brokerSync: (userKey: string) =>
+  brokerSync: (userKey?: string | null) =>
     request<ActionResult>("/brokers/snaptrade/sync", {
       method: "POST",
       body: JSON.stringify({ user_key: userKey }),
     }),
+  brokerSyncDue: (payload: { max_users?: number | null; min_age_hours?: number; force?: boolean } = {}) =>
+    request<ActionResult>("/brokers/snaptrade/sync-due", {
+      method: "POST",
+      body: JSON.stringify({
+        max_users: payload.max_users ?? null,
+        min_age_hours: payload.min_age_hours ?? 1,
+        force: payload.force ?? false,
+      }),
+    }),
+  brokerSmokeTest: () => request<ActionResult>("/brokers/snaptrade/smoke-test", { method: "POST" }),
   mapBrokerAccount: (accountId: string, portfolioId: number) =>
     request(`/brokers/accounts/${accountId}/mapping`, {
       method: "POST",
@@ -974,6 +1211,11 @@ export const api = {
     request<ActionResult>("/brokers/import-transactions", {
       method: "POST",
       body: JSON.stringify({ portfolio_id: portfolioId ?? null }),
+    }),
+  setBrokerRawPayloadStorage: (enabled: boolean) =>
+    request<{ raw_payload_storage_enabled: boolean }>("/brokers/settings/raw-payload-storage", {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
     }),
   ingestionJobs: (status?: string, domain?: string, limit = 100) => {
     const params = new URLSearchParams({ limit: String(limit) });

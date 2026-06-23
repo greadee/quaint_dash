@@ -110,9 +110,9 @@ describe("benchmark URL and period helpers", () => {
 
   it("builds period start dates", () => {
     const now = new Date("2026-06-19T12:00:00");
-    expect(periodStartDate("MAX", now)).toBeUndefined();
     expect(periodStartDate("YTD", now)).toBe("2026-01-01");
-    expect(periodStartDate("5D", now)).toBe("2026-06-11");
+    expect(periodStartDate("1D", now)).toBe("2026-06-18");
+    expect(periodStartDate("1W", now)).toBe("2026-06-11");
   });
 });
 
@@ -139,8 +139,8 @@ describe("benchmark sorting and normalization", () => {
     expect(other.isProxy).toBe(true);
     expect(baselineDelta(other, base)).toBeCloseTo(0.1);
     expect(mergeNormalizedSeries([base, other])).toEqual([
-      { date: "2026-01-01", SP500: 100, SP500Close: 100, TECH: 100, TECHClose: 50 },
-      { date: "2026-01-02", SP500: 110, SP500Close: 110, TECH: 120, TECHClose: 60 },
+      { date: "2026-01-01", SP500: 100, SP500Close: 100, TECH: 50, TECHClose: 50 },
+      { date: "2026-01-02", SP500: 110, SP500Close: 110, TECH: 60, TECHClose: 60 },
     ]);
   });
 

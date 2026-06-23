@@ -3,13 +3,15 @@ from datetime import date, timedelta
 from threading import Lock
 
 from fastapi.testclient import TestClient
+import pytest
 
 from dashboard.api.ingestion_background import IngestionBackgroundConfig, IngestionBackgroundWorker
 from dashboard.api.app import create_app
 from dashboard.api.services import CommandApiService
-from dashboard.brokers.models import BrokerAccount, BrokerConnection, BrokerPosition
+from dashboard.brokers.models import BrokerAccount, BrokerConnection, BrokerPosition, BrokerSyncResult, BrokerTransaction, BrokerUser
 from dashboard.brokers.repository import BrokerSyncRepository
 from dashboard.brokers.secrets import LocalSecretCipher
+from dashboard.brokers.sync import BrokerSyncSummary
 from dashboard.db.db_conn import DB
 
 
@@ -106,6 +108,49 @@ def test_broker_accounts_use_synced_positions_when_balance_is_unavailable(tmp_pa
     assert account["currency"] == "CAD"
 
 
+def test_broker_accounts_prefer_provider_balance_and_infer_cash_gap(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    repo = BrokerSyncRepository(db.conn)
+    repo.upsert_account(
+        BrokerAccount(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_connection_id="conn-1",
+            account_name="TFSA",
+            account_type="registered",
+            currency="CAD",
+            balance=41462.45957781,
+            raw_payload={"balance": {"total": {"amount": 41462.45957781, "currency": "CAD"}}},
+        )
+    )
+    repo.upsert_position_snapshot(
+        BrokerPosition(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_position_id="pos-1",
+            symbol="AAPL",
+            description="Apple Inc.",
+            quantity=2,
+            market_value=40928.104351,
+            currency="CAD",
+            as_of_date=date(2026, 6, 20),
+        )
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        accounts = client.get("/api/v1/brokers/accounts")
+
+    assert accounts.status_code == 200
+    account = accounts.json()[0]
+    assert account["balance"] == 41462.45957781
+    assert account["total_value"] == 41462.45957781
+    assert account["holdings_value"] == 40928.104351
+    assert account["cash_balance"] == pytest.approx(534.355226809995)
+
+
 def test_broker_accounts_hide_closed_and_archived_provider_accounts(tmp_path):
     db_path = tmp_path / "api.db"
     app = create_app(db_path)
@@ -135,6 +180,212 @@ def test_broker_accounts_hide_closed_and_archived_provider_accounts(tmp_path):
 
     assert accounts.status_code == 200
     assert [account["provider_account_id"] for account in accounts.json()] == ["acct-open"]
+
+
+def test_broker_status_and_storage_setting_are_provider_neutral(tmp_path, monkeypatch):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    repo = BrokerSyncRepository(db.conn)
+    cipher = LocalSecretCipher("broker-secret")
+    repo.upsert_broker_user(
+        BrokerUser("snaptrade", "connor-local", "user-1", "secret"),
+        cipher,
+    )
+    db.conn.close()
+    monkeypatch.setenv("SNAPTRADE_CLIENT_ID", "client")
+    monkeypatch.setenv("SNAPTRADE_CONSUMER_KEY", "consumer")
+
+    with TestClient(app) as client:
+        status = client.get("/api/v1/brokers/status")
+        storage = client.put("/api/v1/brokers/settings/raw-payload-storage", json={"enabled": False})
+        updated = client.get("/api/v1/brokers/status")
+
+    assert status.status_code == 200
+    assert status.json()["broker_profile_ready"] is True
+    assert status.json()["broker_profile_key"] == "connor-local"
+    assert status.json()["freshness_window_hours"] == 1
+    assert "provider_user_id" not in status.text
+    assert storage.json() == {"raw_payload_storage_enabled": False}
+    assert updated.json()["raw_payload_storage_enabled"] is False
+
+
+def test_broker_sync_uses_active_profile_when_user_key_is_omitted(tmp_path, monkeypatch):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    repo = BrokerSyncRepository(db.conn)
+    repo.upsert_broker_user(
+        BrokerUser("snaptrade", "connor-local", "user-1", "secret"),
+        LocalSecretCipher("broker-secret"),
+    )
+    db.conn.close()
+    calls = []
+
+    def fake_sync(self, user_key):
+        calls.append(user_key)
+        return BrokerSyncSummary(
+            provider="snaptrade",
+            user_key=user_key,
+            connections_seen=0,
+            accounts_seen=0,
+            positions_seen=0,
+            transactions_seen=0,
+        )
+
+    monkeypatch.setattr(CommandApiService, "broker_snaptrade_sync", fake_sync)
+
+    with TestClient(app) as client:
+        response = client.post("/api/v1/brokers/snaptrade/sync", json={})
+
+    assert response.status_code == 200
+    assert calls == ["connor-local"]
+
+
+def test_broker_import_preview_surfaces_ready_unmapped_and_unsupported_activity(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')")
+    db.conn.execute("INSERT INTO asset(asset_id, symbol, asset_type, ccy) VALUES ('AAPL', 'AAPL', 'stock', 'CAD')")
+    repo = BrokerSyncRepository(db.conn)
+    repo.upsert_connection(BrokerConnection("snaptrade", "conn-1", "Demo Brokerage", "active"))
+    repo.upsert_account(
+        BrokerAccount(
+            provider="snaptrade",
+            provider_account_id="mapped",
+            provider_connection_id="conn-1",
+            account_name="Mapped TFSA",
+            account_type="registered",
+            currency="CAD",
+            balance=100,
+            portfolio_id=1,
+            raw_payload={"number": "123456789"},
+        )
+    )
+    repo.upsert_account(
+        BrokerAccount(
+            provider="snaptrade",
+            provider_account_id="unmapped",
+            provider_connection_id="conn-1",
+            account_name="Cash",
+            account_type="cash",
+            currency="CAD",
+            balance=25,
+            raw_payload={"number": "987654321"},
+        )
+    )
+    for transaction in [
+        BrokerTransaction("snaptrade", "txn-ready", "mapped", "buy", date(2026, 1, 2), symbol="AAPL", asset_id="AAPL", quantity=1, price=10, amount=10, currency="CAD"),
+        BrokerTransaction("snaptrade", "txn-unmapped", "unmapped", "dividend", date(2026, 1, 3), symbol="AAPL", asset_id="AAPL", amount=2, currency="CAD"),
+        BrokerTransaction("snaptrade", "txn-unknown", "mapped", "mystery", date(2026, 1, 4), amount=3, currency="CAD"),
+    ]:
+        repo.upsert_transaction(transaction)
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/brokers/import-preview")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ready_count"] == 1
+    assert payload["needs_review_count"] == 1
+    assert payload["unsupported_count"] == 1
+    assert "123456789" not in response.text
+    statuses = {item["provider_transaction_id"]: item["status"] for group in payload["groups"] for item in group["items"]}
+    assert statuses == {
+        "txn-ready": "ready",
+        "txn-unmapped": "needs_review",
+        "txn-unknown": "unsupported",
+    }
+
+
+def test_broker_sync_history_redacts_errors_and_labels_failures(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    repo = BrokerSyncRepository(db.conn)
+    connection_id = repo.upsert_connection(BrokerConnection("snaptrade", "conn-1", "Demo Brokerage", "active"))
+    run_id = repo.create_sync_run("snaptrade", connection_id=connection_id, user_key="default")
+    repo.finish_sync_run(
+        run_id,
+        BrokerSyncResult(
+            provider="snaptrade",
+            connection_id=connection_id,
+            accounts_seen=1,
+            positions_seen=2,
+            transactions_seen=3,
+            status="failed",
+            error_message="timeout user_secret=abc123 https://provider.example/session",
+        ),
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/brokers/sync-history")
+
+    assert response.status_code == 200
+    item = response.json()[0]
+    assert item["status"] == "failure"
+    assert item["accounts_processed"] == 1
+    assert "abc123" not in response.text
+    assert "provider.example" not in response.text
+
+
+def test_broker_reconciliation_reports_unresolved_and_mismatched_positions(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')")
+    db.conn.execute("INSERT INTO asset(asset_id, symbol, asset_type, ccy) VALUES ('AAPL', 'AAPL', 'stock', 'CAD')")
+    db.conn.execute("INSERT INTO asset_quote_daily(asset_id, date, close, ing_source) VALUES ('AAPL', '2026-01-02', 12, 'test')")
+    repo = BrokerSyncRepository(db.conn)
+    repo.upsert_connection(BrokerConnection("snaptrade", "conn-1", "Demo Brokerage", "active"))
+    repo.upsert_account(
+        BrokerAccount(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_connection_id="conn-1",
+            account_name="TFSA",
+            account_type="registered",
+            currency="CAD",
+            balance=100,
+            portfolio_id=1,
+            raw_payload={"number": "123456789"},
+        )
+    )
+    repo.upsert_position_snapshot(
+        BrokerPosition(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_position_id="pos-1",
+            symbol="AAPL",
+            description="Apple",
+            quantity=3,
+            market_value=30,
+            currency="CAD",
+            as_of_date=date.today(),
+            asset_id="AAPL",
+        )
+    )
+    db.conn.execute(
+        """
+        INSERT INTO broker_portfolio_position_map(
+            provider, provider_account_id, provider_position_id, portfolio_id, asset_id, quantity, book_cost, currency
+        )
+        VALUES ('snaptrade', 'acct-1', 'pos-1', 1, 'AAPL', 2, 20, 'CAD')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/brokers/reconciliation")
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["status"] == "quantity_mismatch"
+    assert item["quantity_difference"] == 1
+    assert "123456789" not in response.text
 
 
 def test_mapping_broker_account_projects_positions_into_portfolio(tmp_path):

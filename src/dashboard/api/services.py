@@ -3,6 +3,7 @@
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
 import json
+import os
 import re
 import statistics
 from typing import Any
@@ -16,6 +17,13 @@ from dashboard.api.models import (
     BenchmarkAssociation,
     BrokerAccountResponse,
     BrokerConnectionResponse,
+    BrokerImportPreviewGroup,
+    BrokerImportPreviewItem,
+    BrokerImportPreviewResponse,
+    BrokerReconciliationItem,
+    BrokerReconciliationResponse,
+    BrokerStatusResponse,
+    BrokerSyncHistoryItem,
     BrokerUserResponse,
     BenchmarkAvailableMetricRange,
     BenchmarkAvailablePriceRange,
@@ -33,8 +41,14 @@ from dashboard.api.models import (
     BenchmarkSymbol,
     BenchmarkSyncState,
     ComparisonAssetProfile,
+    ComparisonCoverage,
+    ComparisonFreshness,
+    ComparisonFxPolicy,
+    ComparisonHistoryPoint,
+    ComparisonHistorySeries,
     ComparisonFundamentals,
     ComparisonResponse,
+    ComparisonWorkspaceResponse,
     ComparisonReturns,
     SectorComparisonContext,
     SectorComparisonValues,
@@ -87,6 +101,7 @@ from dashboard.api.models import (
 )
 from dashboard.analytics import AnalyticsEngine, AnalyticsRepository, analytics_report_payload
 from dashboard.analytics.calculations import (
+    allocation_class,
     dimension_exposure,
     portfolio_annualized_volatility,
     risk_return_metrics,
@@ -187,21 +202,74 @@ _STOCK_RANKING_TIMEFRAME_LABELS = {
     "yearly": "yearly",
 }
 _SIGNALS_MODEL_VERSION = "signals.rankings.v1"
-_SIGNAL_CATEGORY_BY_FACTOR = {
-    "aggregate": "market_regime",
-    "share_price_momentum": "momentum",
-    "news_sentiment": "news_event_activity",
-    "retail_sentiment": "sentiment",
-    "earnings_momentum": "earnings_revisions",
-    "institutional_buying": "analyst_broker_activity",
-}
-_SIGNAL_NAME_BY_FACTOR = {
-    "aggregate": "Composite evidence changed",
-    "share_price_momentum": "Price momentum threshold crossed",
-    "news_sentiment": "News sentiment shifted",
-    "retail_sentiment": "Retail sentiment shifted",
-    "earnings_momentum": "Earnings outlook changed",
-    "institutional_buying": "Accumulation activity changed",
+
+
+@dataclass(frozen=True)
+class SignalAdapter:
+    factor: str
+    definition_id: str
+    signal_name: str
+    category: str
+    source: str
+    trigger_threshold: float
+    lookback_period: str
+
+
+_SIGNAL_ADAPTERS = {
+    "aggregate": SignalAdapter(
+        factor="aggregate",
+        definition_id="ranking.aggregate.monthly",
+        signal_name="Composite evidence changed",
+        category="market_regime",
+        source="stored local ranking inputs",
+        trigger_threshold=6.0,
+        lookback_period="monthly",
+    ),
+    "share_price_momentum": SignalAdapter(
+        factor="share_price_momentum",
+        definition_id="ranking.share_price_momentum.monthly",
+        signal_name="Price momentum threshold crossed",
+        category="momentum",
+        source="asset_quote_daily",
+        trigger_threshold=6.0,
+        lookback_period="monthly",
+    ),
+    "news_sentiment": SignalAdapter(
+        factor="news_sentiment",
+        definition_id="ranking.news_sentiment.monthly",
+        signal_name="News sentiment shifted",
+        category="news_event_activity",
+        source="ticker_sentiment_daily",
+        trigger_threshold=6.0,
+        lookback_period="monthly",
+    ),
+    "retail_sentiment": SignalAdapter(
+        factor="retail_sentiment",
+        definition_id="ranking.retail_sentiment.monthly",
+        signal_name="Retail sentiment shifted",
+        category="sentiment",
+        source="ticker_sentiment_daily",
+        trigger_threshold=6.0,
+        lookback_period="monthly",
+    ),
+    "earnings_momentum": SignalAdapter(
+        factor="earnings_momentum",
+        definition_id="ranking.earnings_momentum.monthly",
+        signal_name="Earnings outlook changed",
+        category="earnings_revisions",
+        source="financial_statement and earnings_calendar_event",
+        trigger_threshold=6.0,
+        lookback_period="monthly",
+    ),
+    "institutional_buying": SignalAdapter(
+        factor="institutional_buying",
+        definition_id="ranking.institutional_buying.monthly",
+        signal_name="Accumulation activity changed",
+        category="analyst_broker_activity",
+        source="institutional_buying_daily",
+        trigger_threshold=6.0,
+        lookback_period="monthly",
+    ),
 }
 
 
@@ -1361,15 +1429,26 @@ _SECTOR_BENCHMARK_BY_KEY = {
 _INDUSTRY_BENCHMARK_KEYWORDS = (
     (("semiconductor", "semiconductors"), "IND_SEMICONDUCTORS"),
     (("software", "application software", "infrastructure software"), "IND_SOFTWARE"),
+    (("internet", "internet content", "internet content and information", "online media"), "IND_INTERNET"),
+    (("retail", "internet retail", "specialty retail"), "IND_RETAIL"),
+    (("auto manufacturer", "auto manufacturers", "automobile", "automobiles", "automotive"), "IND_AUTOS"),
+    (("bank", "banks", "regional banks"), "IND_BANKS"),
+    (("insurance", "insurers"), "IND_INSURANCE"),
     (("biotechnology", "biotech"), "IND_BIOTECH"),
+    (("pharmaceutical", "pharmaceuticals", "medical pharmaceuticals"), "IND_PHARMACEUTICALS"),
     (("medical device", "medical devices", "medical instruments", "medical instruments & supplies"), "IND_MEDICAL_DEVICES"),
     (("aerospace", "defense", "aerospace and defense"), "IND_AEROSPACE_DEFENSE"),
+    (("homebuilder", "homebuilders", "residential construction"), "IND_HOMEBUILDERS"),
+    (("transportation", "railroad", "railroads", "trucking", "logistics"), "IND_TRANSPORTATION"),
+    (("oil and gas exploration", "oil gas exploration", "exploration and production"), "IND_OIL_GAS_EXPLORATION"),
+    (("metals", "mining", "steel", "copper"), "IND_METALS_MINING"),
 )
 
 
 class PortfolioApiService:
     def __init__(self, conn) -> None:
         self.conn = conn
+        self._signal_efficacy_price_cache: dict[str, list[tuple[date, float]]] = {}
 
     def list_portfolios(self) -> list[PortfolioSummary]:
         rows = self.conn.execute(
@@ -1446,6 +1525,9 @@ class PortfolioApiService:
             raise LookupError("No portfolios found.")
         market_value = sum(item.market_value for item in portfolios)
         book_cost = sum(item.book_cost for item in portfolios)
+        total_gain_values = [item.total_gain for item in portfolios if item.total_gain is not None]
+        total_gain = sum(total_gain_values) if total_gain_values else None
+        total_gain_basis = market_value - total_gain if total_gain is not None else None
         return PortfolioSummary(
             portfolio_id=0,
             name="All portfolios",
@@ -1456,6 +1538,15 @@ class PortfolioApiService:
             market_value=market_value,
             book_cost=book_cost,
             unrealized_gain=market_value - book_cost if market_value else None,
+            unrealized_return_percent=_ratio_or_none(
+                market_value - book_cost if market_value else None,
+                book_cost,
+            ),
+            total_gain=total_gain,
+            total_return_percent=_ratio_or_none(total_gain, total_gain_basis),
+            total_gain_source="manual_override"
+            if any(item.total_gain_source == "manual_override" for item in portfolios)
+            else "unrealized",
             projected_value=sum(
                 item.projected_value for item in portfolios if item.projected_value is not None
             )
@@ -1686,6 +1777,7 @@ class PortfolioApiService:
                 a.symbol,
                 a.name,
                 a.asset_type,
+                a.asset_subtype,
                 CASE WHEN cdr_underlying.asset_id IS NOT NULL
                     THEN COALESCE(cdr_underlying.sector, a.sector)
                     ELSE a.sector
@@ -1714,6 +1806,7 @@ class PortfolioApiService:
                 COALESCE(symbol, asset_id),
                 name,
                 asset_type,
+                asset_subtype,
                 sector,
                 industry,
                 country,
@@ -1740,29 +1833,92 @@ class PortfolioApiService:
             asset_id=row[0],
             symbol=row[1],
             name=row[2],
-            sector=row[4],
-            industry=row[5],
-            country=row[6],
+            sector=row[5],
+            industry=row[6],
+            country=row[7],
         )
+        sector = _position_sector_label(
+            asset_id=row[0],
+            symbol=row[1],
+            name=row[2],
+            asset_type=row[3],
+            asset_subtype=row[4],
+            sector=classification["sector"],
+            industry=classification["industry"],
+        )
+        industry = _canonical_industry_label(classification["industry"])
+        country = _canonical_country_label(classification["country"])
+        exposure_maps = self._position_exposure_maps(row[0])
         return PositionSummary(
             asset_id=row[0],
             symbol=row[1],
             name=row[2],
             asset_type=row[3],
-            sector=classification["sector"],
-            industry=classification["industry"],
-            country=classification["country"],
-            currency=_valid_currency(row[7]) or "CAD",
-            quantity=float(row[9]),
-            book_cost=float(row[10]),
-            latest_price=_float_or_none(row[11]),
-            market_value=_float_or_none(row[12]),
-            unrealized_gain=_float_or_none(row[13]),
-            total_return_percent=_ratio_or_none(row[13], row[10]),
-            weight=_float_or_none(row[14]),
-            broker_linked=int(row[8]) > 0,
-            broker_account_count=int(row[8]),
+            allocation_class=allocation_class(
+                asset_id=row[0],
+                symbol=row[1],
+                name=row[2],
+                asset_type=row[3],
+                asset_subtype=row[4],
+                sector=sector,
+                industry=industry,
+            ),
+            sector=sector,
+            industry=industry,
+            country=country,
+            currency=_valid_currency(row[8]) or "CAD",
+            quantity=float(row[10]),
+            book_cost=float(row[11]),
+            latest_price=_float_or_none(row[12]),
+            market_value=_float_or_none(row[13]),
+            unrealized_gain=_float_or_none(row[14]),
+            total_return_percent=_ratio_or_none(row[14], row[11]),
+            weight=_float_or_none(row[15]),
+            broker_linked=int(row[9]) > 0,
+            broker_account_count=int(row[9]),
+            sector_exposure=exposure_maps["sector"],
+            industry_exposure=exposure_maps["industry"],
+            country_exposure=exposure_maps["country"],
+            currency_exposure=exposure_maps["currency"],
         )
+
+    def _position_exposure_maps(self, asset_id: str) -> dict[str, dict[str, float]]:
+        empty: dict[str, dict[str, float]] = {
+            "sector": {},
+            "industry": {},
+            "country": {},
+            "currency": {},
+        }
+        if not _table_exists(self.conn, "etf_holding"):
+            return empty
+        try:
+            rows = self.conn.execute(
+                """
+                SELECT weight_pct, sector, country, currency
+                FROM etf_holding
+                WHERE asset_id = ?
+                """,
+                [asset_id],
+            ).fetchall()
+        except Exception:
+            return empty
+        if not rows:
+            return empty
+        maps = {key: {} for key in empty}
+        for weight_pct, sector, country, currency in rows:
+            weight = _normalized_weight(weight_pct)
+            if weight is None or weight <= 0:
+                continue
+            values = {
+                "sector": _canonical_sector_label(sector),
+                "country": _canonical_country_label(country),
+                "currency": _valid_currency(currency),
+            }
+            for key, value in values.items():
+                if not value:
+                    continue
+                maps[key][value] = maps[key].get(value, 0.0) + weight
+        return {key: _normalize_exposure_map(value) for key, value in maps.items()}
 
     def list_asset_holdings(self, asset_id: str) -> list[AssetHoldingSummary]:
         asset_id = asset_id.upper().strip()
@@ -2086,7 +2242,7 @@ class PortfolioApiService:
         range_key: str = "3Y",
     ) -> PortfolioPerformanceResponse:
         portfolio = self.get_portfolio(portfolio_id)
-        lookback_days = _range_to_days(range_key)
+        normalized_range = range_key.upper().strip()
         benchmark_index_id = benchmark_index_id or AnalyticsRepository(
             self.conn
         ).default_benchmark_for_portfolio(
@@ -2104,7 +2260,7 @@ class PortfolioApiService:
                 for item in self.list_positions(portfolio_id)
             ]
         )
-        values, missing = self._actual_daily_portfolio_values(portfolio_id, lookback_days)
+        values, missing = self._actual_daily_portfolio_values(portfolio_id, normalized_range)
         benchmark_prices = (
             AnalyticsRepository(self.conn).benchmark_price_history(benchmark_index_id)
             if benchmark_index_id
@@ -2156,7 +2312,7 @@ class PortfolioApiService:
             base_currency=portfolio.base_ccy,
             start_date=points[0].date if points else None,
             end_date=points[-1].date if points else None,
-            range=range_key,
+            range=normalized_range,
             methodology=(
                 "actual daily transaction-aware time-weighted return; external cash flows "
                 "break return subperiods; current-weight backtests are not used"
@@ -2172,7 +2328,11 @@ class PortfolioApiService:
                 else None
             ),
             observation_count=len(points),
-            coverage=_coverage_from_points(points),
+            coverage=(
+                sum(float(row.get("coverage") or 0.0) for row in values) / len(values)
+                if values
+                else None
+            ),
             missing_inputs=missing,
             points=points,
             as_of=datetime.now(UTC),
@@ -2223,6 +2383,7 @@ class PortfolioApiService:
             largest_position=decomposition.largest_position_weight,
             hhi=decomposition.concentration_hhi,
             weight_balance_score=decomposition.diversification_score,
+            asset_class_concentration=decomposition.asset_class_exposure,
             sector_concentration=decomposition.sector_exposure,
             geographic_concentration=decomposition.country_exposure,
             currency_concentration=decomposition.currency_exposure,
@@ -2397,7 +2558,7 @@ class PortfolioApiService:
     def _actual_daily_portfolio_values(
         self,
         portfolio_id: int,
-        lookback_days: int | None,
+        range_key: str,
     ) -> tuple[list[dict[str, Any]], list[str]]:
         txns = self.conn.execute(
             """
@@ -2414,9 +2575,21 @@ class PortfolioApiService:
         if not asset_ids:
             return [], ["asset transactions"]
         first_date = min(row[0] for row in txns)
-        if lookback_days:
-            first_date = max(first_date, date.today() - timedelta(days=lookback_days))
         placeholders = ", ".join("?" for _ in asset_ids)
+        latest_price_date = self.conn.execute(
+            f"""
+            SELECT MAX(date)
+            FROM asset_quote_daily
+            WHERE asset_id IN ({placeholders})
+              AND close IS NOT NULL
+            """,
+            asset_ids,
+        ).fetchone()[0]
+        if latest_price_date is None:
+            return [], ["daily close prices"]
+        range_start = _range_start_date(range_key, latest_price_date)
+        if range_start is not None:
+            first_date = max(first_date, range_start)
         price_rows = self.conn.execute(
             f"""
             SELECT asset_id, date, close
@@ -2428,6 +2601,34 @@ class PortfolioApiService:
             """,
             [*asset_ids, first_date],
         ).fetchall()
+        if len({row[1] for row in price_rows}) < 2 and range_key.upper().strip() == "1D":
+            fallback_dates = [
+                row[0]
+                for row in self.conn.execute(
+                    f"""
+                    SELECT DISTINCT date
+                    FROM asset_quote_daily
+                    WHERE asset_id IN ({placeholders})
+                      AND close IS NOT NULL
+                    ORDER BY date DESC
+                    LIMIT 2
+                    """,
+                    asset_ids,
+                ).fetchall()
+            ]
+            if len(fallback_dates) >= 2:
+                first_date = min(fallback_dates)
+                price_rows = self.conn.execute(
+                    f"""
+                    SELECT asset_id, date, close
+                    FROM asset_quote_daily
+                    WHERE asset_id IN ({placeholders})
+                      AND close IS NOT NULL
+                      AND date >= ?
+                    ORDER BY date
+                    """,
+                    [*asset_ids, first_date],
+                ).fetchall()
         if not price_rows:
             return [], ["daily close prices"]
         prices: dict[str, dict[date, float]] = {}
@@ -2454,8 +2655,8 @@ class PortfolioApiService:
                     external_flow -= abs(float(fee_amt))
                 tx_index += 1
             value = 0.0
-            valued_weight = 0.0
-            total_abs_qty = sum(abs(qty) for qty in positions.values() if qty)
+            valued_count = 0
+            active_positions = sum(1 for qty in positions.values() if qty)
             for asset_id, qty in positions.items():
                 if not qty:
                     continue
@@ -2464,14 +2665,15 @@ class PortfolioApiService:
                     missing.add(f"{asset_id}: daily close on {value_date.isoformat()}")
                     continue
                 value += qty * close
-                valued_weight += abs(qty) / total_abs_qty if total_abs_qty else 0.0
-            if value > 0:
+                valued_count += 1
+            coverage = valued_count / active_positions if active_positions else 0.0
+            if value > 0 and coverage >= 0.95:
                 rows.append(
                     {
                         "date": value_date,
                         "value": value,
                         "external_flow": external_flow,
-                        "coverage": min(1.0, valued_weight),
+                        "coverage": min(1.0, coverage),
                     }
                 )
         return rows, sorted(missing)[:25]
@@ -2718,6 +2920,8 @@ class PortfolioApiService:
                 triggered_before=triggered_before,
             )
         ]
+        if sort == "efficacy":
+            filtered = [self._with_signal_efficacy(row) for row in filtered]
         filtered.sort(key=_signal_sort_key(sort), reverse=sort != "ticker")
         generated_at = datetime.now()
         data_dates = [row.data_as_of for row in rows if row.data_as_of is not None]
@@ -2729,8 +2933,11 @@ class PortfolioApiService:
             row for row in sorted(rows, key=lambda item: (item.portfolio_priority, item.confidence), reverse=True)
             if row.direction == "positive" and row.status in {"confirmed", "active"}
         ][:5]
+        items = [self._with_signal_efficacy(row) for row in filtered[offset : offset + limit]]
+        needs_attention = [self._with_signal_efficacy(row) for row in needs_attention]
+        top_opportunities = [self._with_signal_efficacy(row) for row in top_opportunities]
         return SignalsSummaryResponse(
-            items=filtered[offset : offset + limit],
+            items=items,
             total=len(filtered),
             limit=limit,
             offset=offset,
@@ -2750,6 +2957,7 @@ class PortfolioApiService:
         row = next((item for item in self._current_signal_rows() if item.signal_id == signal_id), None)
         if row is None:
             raise LookupError(f"Signal not found: {signal_id}")
+        row = self._with_signal_efficacy(row)
         return SignalDetailResponse(
             **row.model_dump(),
             lifecycle=_signal_lifecycle(row),
@@ -2759,7 +2967,7 @@ class PortfolioApiService:
             links={
                 "ticker": f"/asset/{row.asset_id}",
                 "fundamentals": f"/asset/{row.asset_id}",
-                "compare": f"/compare?left={row.ticker}",
+                "compare": f"/compare?symbols={row.ticker}",
                 "benchmarks": f"/benchmarks?asset={row.asset_id}",
                 "signals": f"/signals?signal={row.signal_id}",
             },
@@ -2836,8 +3044,6 @@ class PortfolioApiService:
                 if item.confidence <= 0 and item.data_status != "complete":
                     continue
                 rows.append(self._signal_from_ranking(item, factor, impacts.get(item.asset_id, []), user_states))
-        for row in rows:
-            self._persist_signal_evaluation(row)
         return rows
 
     def _signal_from_ranking(
@@ -2852,17 +3058,12 @@ class PortfolioApiService:
         max_weight = max((impact.weight or 0.0 for impact in impacts), default=0.0)
         priority = round(min(1.0, (strength * 0.42) + (item.confidence * 0.28) + (max_weight * 0.25) + min(0.2, len(impacts) * 0.04)), 3)
         supporting, contradicting = _signal_evidence_from_components(item.components, direction, item.latest_data_date)
-        definition_id = f"ranking.{factor}.monthly"
+        adapter = _SIGNAL_ADAPTERS[factor]
+        definition_id = adapter.definition_id
         signal_id = f"{definition_id}.{item.asset_id}".replace(" ", "_")
         status_value = _signal_status(item.data_status, strength, item.confidence, item.latest_data_date)
         user_state = user_states.get(signal_id, SignalUserState())
         muted = user_state.muted_until is not None and user_state.muted_until > datetime.now()
-        efficacy = SignalEfficacyMetadata(
-            label="Not statistically validated",
-            sample_size=0,
-            methodology_version=_SIGNALS_MODEL_VERSION,
-            warning="Historical efficacy is withheld until enough prior stored evaluations exist without look-ahead leakage.",
-        )
         expires_at = (datetime.combine(item.latest_data_date, datetime.min.time()) + timedelta(days=7)) if item.latest_data_date else None
         return SignalRow(
             signal_id=signal_id,
@@ -2871,9 +3072,9 @@ class PortfolioApiService:
             ticker=item.symbol,
             company_name=item.name,
             exchange=item.exchange_code,
-            signal_name=_SIGNAL_NAME_BY_FACTOR[factor],
+            signal_name=adapter.signal_name,
             summary=_signal_summary_sentence(item, factor, direction, supporting, contradicting),
-            category=_SIGNAL_CATEGORY_BY_FACTOR[factor],
+            category=adapter.category,
             direction=direction,
             status=status_value,
             strength=strength,
@@ -2881,8 +3082,8 @@ class PortfolioApiService:
             portfolio_priority=priority,
             raw_observed_value=item.score,
             normalized_value=round(max(-1.0, min(1.0, item.score / 100.0)), 3),
-            trigger_threshold=6.0 if direction == "positive" else -6.0 if direction == "negative" else None,
-            lookback_period="monthly",
+            trigger_threshold=adapter.trigger_threshold if direction == "positive" else -adapter.trigger_threshold if direction == "negative" else None,
+            lookback_period=adapter.lookback_period,
             first_detected_at=item.latest_data_date,
             confirmation_at=item.latest_data_date if status_value in {"confirmed", "active", "weakening"} else None,
             last_evaluated_at=datetime.now(),
@@ -2891,17 +3092,23 @@ class PortfolioApiService:
             resolved_at=None,
             resolution_reason=None,
             methodology_version=_SIGNALS_MODEL_VERSION,
-            source="stored local ranking inputs",
+            source=adapter.source,
             missing_data_status=item.data_status,
             supporting_evidence=supporting,
             contradicting_evidence=contradicting,
             affected_portfolios=impacts,
             current_portfolio_weight=round(sum(impact.weight or 0.0 for impact in impacts), 4) if impacts else None,
-            historical_efficacy=efficacy,
+            historical_efficacy=_pending_signal_efficacy(),
             related_signal_ids=[],
             reviewed=user_state.reviewed_at is not None,
             muted=muted,
         )
+
+    def _with_signal_efficacy(self, row: SignalRow) -> SignalRow:
+        if row.historical_efficacy.methodology_version == _SIGNALS_MODEL_VERSION and row.historical_efficacy.sample_size > 0:
+            return row
+        factor = row.definition_id.split(".")[1]
+        return row.model_copy(update={"historical_efficacy": self._signal_efficacy(row.asset_id, factor, row.raw_observed_value or 0.0)})
 
     def _persist_signal_evaluation(self, row: SignalRow) -> None:
         factor = row.definition_id.split(".")[1]
@@ -3090,6 +3297,79 @@ class PortfolioApiService:
             SignalHistoryPoint(date=item[0], strength=round(float(item[1]), 3), confidence=round(float(item[2]), 3), raw_value=round(float(item[3]), 2), action=item[4])
             for item in rows
         ]
+
+    def _signal_efficacy(self, asset_id: str, factor: str, current_score: float) -> SignalEfficacyMetadata:
+        direction = 1 if current_score >= 0 else -1
+        snapshots = self.conn.execute(
+            """
+            SELECT snapshot_date, score
+            FROM stock_ranking_snapshot
+            WHERE asset_id = ?
+              AND factor = ?
+              AND snapshot_date < current_date
+              AND ABS(score) >= 6
+              AND CASE WHEN ? >= 0 THEN score >= 6 ELSE score <= -6 END
+            ORDER BY snapshot_date ASC
+            """,
+            [asset_id, factor, direction],
+        ).fetchall()
+        prices = self._signal_efficacy_prices(asset_id)
+        returns: list[float] = []
+        adverse_moves: list[float] = []
+        for snapshot_date, _score in snapshots:
+            entry = next(((price_date, price) for price_date, price in prices if price_date > snapshot_date), None)
+            exit_price = next((price for price_date, price in prices if price_date >= snapshot_date + timedelta(days=21)), None)
+            if entry is None or exit_price is None or not entry[1]:
+                continue
+            window_prices = [price for price_date, price in prices if entry[0] <= price_date <= snapshot_date + timedelta(days=21)]
+            forward_return = (float(exit_price) - float(entry[1])) / float(entry[1])
+            returns.append(forward_return * direction)
+            if window_prices:
+                if direction > 0:
+                    adverse = (min(window_prices) - float(entry[1])) / float(entry[1])
+                else:
+                    adverse = (float(entry[1]) - max(window_prices)) / float(entry[1])
+                adverse_moves.append(adverse)
+        sample_size = len(returns)
+        if sample_size < 3:
+            return SignalEfficacyMetadata(
+                label="Insufficient point-in-time history",
+                sample_size=sample_size,
+                prior_occurrences=len(snapshots),
+                methodology_version=_SIGNALS_MODEL_VERSION,
+                warning="At least three prior no-lookahead occurrences are required before showing efficacy statistics.",
+            )
+        return SignalEfficacyMetadata(
+            label="Backtested from stored point-in-time snapshots",
+            sample_size=sample_size,
+            prior_occurrences=len(snapshots),
+            median_forward_return=round(statistics.median(returns), 4),
+            median_excess_return=None,
+            hit_rate=round(sum(value > 0 for value in returns) / sample_size, 4),
+            max_adverse_excursion=round(min(adverse_moves), 4) if adverse_moves else None,
+            benchmark=None,
+            methodology_version=_SIGNALS_MODEL_VERSION,
+            warning=None,
+        )
+
+    def _signal_efficacy_prices(self, asset_id: str) -> list[tuple[date, float]]:
+        prices = self._signal_efficacy_price_cache.get(asset_id)
+        if prices is not None:
+            return prices
+        prices = [
+            (price_date, float(price))
+            for price_date, price in self.conn.execute(
+                """
+                SELECT date, COALESCE(adj_close, close) AS price
+                FROM asset_quote_daily
+                WHERE asset_id = ? AND COALESCE(adj_close, close) IS NOT NULL
+                ORDER BY date ASC
+                """,
+                [asset_id],
+            ).fetchall()
+        ]
+        self._signal_efficacy_price_cache[asset_id] = prices
+        return prices
 
     def _related_signal_news(self, asset_id: str) -> list[NewsItemResponse]:
         rows = self.conn.execute(
@@ -4102,6 +4382,12 @@ class PortfolioApiService:
     def _portfolio_summary(self, row) -> PortfolioSummary:
         market_value = float(row[6])
         book_cost = float(row[7])
+        unrealized_gain = market_value - book_cost if market_value else None
+        total_gain, total_return_percent, total_gain_source = self._portfolio_total_gain_metrics(
+            int(row[0]),
+            market_value,
+            unrealized_gain,
+        )
         projection = self._portfolio_projection(int(row[0]))
         return PortfolioSummary(
             portfolio_id=int(row[0]),
@@ -4112,12 +4398,78 @@ class PortfolioApiService:
             position_count=int(row[5]),
             market_value=market_value,
             book_cost=book_cost,
-            unrealized_gain=market_value - book_cost if market_value else None,
+            unrealized_gain=unrealized_gain,
+            unrealized_return_percent=_ratio_or_none(unrealized_gain, book_cost),
+            total_gain=total_gain,
+            total_return_percent=total_return_percent,
+            total_gain_source=total_gain_source,
             projected_value=projection.get("projected_value"),
             projected_value_low=projection.get("projected_value_low"),
             projected_value_high=projection.get("projected_value_high"),
             projected_horizon_years=projection.get("projected_horizon_years"),
         )
+
+    def _portfolio_total_gain_metrics(
+        self,
+        portfolio_id: int,
+        market_value: float,
+        unrealized_gain: float | None,
+    ) -> tuple[float | None, float | None, str]:
+        rows = self.conn.execute(
+            """
+            WITH latest_positions AS (
+                SELECT
+                    provider,
+                    provider_account_id,
+                    provider_position_id,
+                    MAX(as_of_date) AS as_of_date
+                FROM broker_position_snapshot
+                GROUP BY provider, provider_account_id, provider_position_id
+            )
+            SELECT
+                pm.provider_account_id,
+                SUM(ps.market_value) FILTER (WHERE ps.market_value IS NOT NULL) AS market_value,
+                MAX(o.total_return_percent)
+            FROM broker_portfolio_position_map pm
+            JOIN broker_account_return_override o
+              ON o.provider = pm.provider
+             AND o.provider_account_id = pm.provider_account_id
+            JOIN latest_positions latest
+              ON latest.provider = pm.provider
+             AND latest.provider_account_id = pm.provider_account_id
+             AND latest.provider_position_id = pm.provider_position_id
+            JOIN broker_position_snapshot ps
+              ON ps.provider = latest.provider
+             AND ps.provider_account_id = latest.provider_account_id
+             AND ps.provider_position_id = latest.provider_position_id
+             AND ps.as_of_date = latest.as_of_date
+            WHERE pm.portfolio_id = ?
+            GROUP BY pm.provider_account_id
+            """,
+            [portfolio_id],
+        ).fetchall()
+        if not rows:
+            basis = market_value - unrealized_gain if unrealized_gain is not None else None
+            return unrealized_gain, _ratio_or_none(unrealized_gain, basis), "unrealized"
+
+        override_market_value = 0.0
+        override_gain = 0.0
+        for row in rows:
+            account_value = _float_or_none(row[1])
+            target_return = _float_or_none(row[2])
+            if account_value is None or target_return is None or target_return <= -1:
+                continue
+            override_market_value += account_value
+            override_basis = account_value / (1 + target_return)
+            override_gain += account_value - override_basis
+
+        remaining_gain = 0.0
+        if unrealized_gain is not None and market_value > override_market_value:
+            remaining_share = max(market_value - override_market_value, 0.0) / market_value
+            remaining_gain = unrealized_gain * remaining_share
+        total_gain = override_gain + remaining_gain
+        basis = market_value - total_gain
+        return total_gain, _ratio_or_none(total_gain, basis), "manual_override"
 
     def _portfolio_projection(self, portfolio_id: int) -> dict[str, float | int | None]:
         try:
@@ -4268,23 +4620,55 @@ class AssetApiService:
             latest_price=_float_or_none(row[16]),
         )
 
-    def price_history(self, asset_id: str, limit: int) -> list[PricePointResponse]:
-        self.get_asset(asset_id)
-        rows = self.conn.execute(
+    def price_history(self, asset_id: str, limit: int, range_key: str = "1Y") -> list[PricePointResponse]:
+        normalized_asset_id = asset_id.upper().strip()
+        self.get_asset(normalized_asset_id)
+        latest_price_date = self.conn.execute(
             """
+            SELECT MAX(date)
+            FROM asset_quote_daily
+            WHERE asset_id = ?
+              AND COALESCE(adj_close, close) IS NOT NULL
+            """,
+            [normalized_asset_id],
+        ).fetchone()[0]
+        range_start = _range_start_date(range_key, latest_price_date) if latest_price_date else None
+        where = ["asset_id = ?", "COALESCE(adj_close, close) IS NOT NULL"]
+        params: list[Any] = [normalized_asset_id]
+        if range_start is not None:
+            where.append("date >= ?")
+            params.append(range_start)
+        params.append(limit)
+        rows = self.conn.execute(
+            f"""
             SELECT date, COALESCE(adj_close, close)
             FROM (
                 SELECT date, adj_close, close
                 FROM asset_quote_daily
-                WHERE asset_id = ?
-                  AND COALESCE(adj_close, close) IS NOT NULL
+                WHERE {" AND ".join(where)}
                 ORDER BY date DESC
                 LIMIT ?
             )
             ORDER BY date
             """,
-            [asset_id.upper().strip(), limit],
+            params,
         ).fetchall()
+        if len(rows) < 2 and range_key.upper().strip() == "1D":
+            rows = self.conn.execute(
+                """
+                SELECT date, COALESCE(adj_close, close)
+                FROM (
+                    SELECT date, adj_close, close
+                    FROM asset_quote_daily
+                    WHERE asset_id = ?
+                      AND COALESCE(adj_close, close) IS NOT NULL
+                    ORDER BY date DESC
+                    LIMIT 2
+                )
+                ORDER BY date
+                """,
+                [normalized_asset_id],
+            ).fetchall()
         return [PricePointResponse(date=row[0], close=float(row[1])) for row in rows]
 
     def analytics(self, asset_id: str, benchmark_index_id: str | None = None):
@@ -4431,7 +4815,50 @@ class AssetApiService:
         )
 
 
+@dataclass
+class _ComparisonFxAudit:
+    display_currency: str
+    historical: bool = False
+    source: str | None = None
+    rate_count: int = 0
+    as_of: datetime | None = None
+    missing_pairs: set[str] | None = None
+    warnings: list[str] | None = None
+
+    def missing(self, pair: str) -> None:
+        if self.missing_pairs is None:
+            self.missing_pairs = set()
+        self.missing_pairs.add(pair)
+
+    def warn(self, message: str) -> None:
+        if self.warnings is None:
+            self.warnings = []
+        if message not in self.warnings:
+            self.warnings.append(message)
+
+    def seen_rate(self, source: str | None, as_of: datetime | None) -> None:
+        self.rate_count += 1
+        if source and self.source is None:
+            self.source = source
+        if as_of and (self.as_of is None or as_of > self.as_of):
+            self.as_of = as_of
+
+    def policy(self, native_currency_count: int) -> ComparisonFxPolicy:
+        return ComparisonFxPolicy(
+            display_currency=self.display_currency,
+            native_currency_count=native_currency_count,
+            historical=self.historical,
+            source=self.source,
+            rate_count=self.rate_count,
+            as_of=self.as_of,
+            missing_pairs=sorted(self.missing_pairs or set()),
+            warnings=self.warnings or [],
+        )
+
+
 class ComparisonApiService:
+    CALCULATION_VERSION = "comparison.workspace.v2"
+
     def __init__(self, conn) -> None:
         self.conn = conn
 
@@ -4453,16 +4880,252 @@ class ComparisonApiService:
             insights=self._insights(left, right, benchmark, sector_context),
         )
 
+    def workspace(
+        self,
+        *,
+        symbols: str,
+        benchmark_index_id: str | None = None,
+        period: str = "5Y",
+        mode: str = "total-return",
+        currency: str = "native",
+    ) -> ComparisonWorkspaceResponse:
+        all_requested = _unique_symbols(symbols.split(","))
+        requested = all_requested[:5]
+        assets: list[ComparisonAssetProfile] = []
+        failed: list[str] = []
+        warnings: list[str] = []
+        for symbol in requested:
+            try:
+                assets.append(self._workspace_profile(symbol, benchmark_index_id))
+            except LookupError:
+                failed.append(symbol)
+        if len(all_requested) > 5:
+            warnings.append("Only the first five symbols are compared.")
+        if failed:
+            warnings.append(f"Unsupported symbols skipped: {', '.join(failed)}.")
+
+        benchmark = None
+        if benchmark_index_id:
+            try:
+                benchmark = self.benchmark_profile(benchmark_index_id)
+            except LookupError:
+                failed.append(benchmark_index_id.strip().upper())
+                warnings.append(f"Benchmark not found: {benchmark_index_id.strip().upper()}.")
+
+        fx_audit = _ComparisonFxAudit(display_currency=currency, historical=currency != "native")
+        native_currencies = {asset.asset_id: asset.currency for asset in assets}
+        if currency != "native":
+            assets = [self._profile_in_currency(asset, currency, fx_audit) for asset in assets]
+        histories = {
+            asset.asset_id: self._workspace_price_rows(
+                asset,
+                native_currencies.get(asset.asset_id, asset.currency),
+                period,
+                mode,
+                currency,
+                fx_audit,
+                benchmark_index_id,
+            )
+            for asset in assets
+        }
+        first_dates = [rows[0][0] for rows in histories.values() if rows]
+        common_start = max(first_dates) if first_dates else None
+        returned_end = max((rows[-1][0] for rows in histories.values() if rows), default=None)
+        series = [
+            self._history_series(asset, histories[asset.asset_id], common_start, mode)
+            for asset in assets
+        ]
+        for item in series:
+            warnings.extend(item.warnings)
+        warnings.extend(fx_audit.warnings or [])
+        if common_start and any(item.start_date and item.start_date > common_start for item in series):
+            warnings.append("Some selected assets have shorter valid history than the common start date.")
+
+        freshness = {asset.symbol: self._freshness(asset.asset_id) for asset in assets}
+        insights = []
+        if len(assets) >= 2:
+            insights.append(
+                "Historical series are normalized to 100 at the latest common valid start date using adjusted close where available."
+            )
+        if benchmark:
+            insights.append(f"Benchmark context uses latest stored daily metrics for {benchmark.index_id}.")
+        coverage = ComparisonCoverage(
+            requested_symbols=requested,
+            resolved_symbols=[asset.symbol for asset in assets],
+            failed_symbols=failed,
+            common_start_date=common_start,
+            start_date=common_start,
+            end_date=returned_end,
+            benchmark=benchmark.index_id if benchmark else None,
+            currency=currency,
+            mode=mode,
+            calculation_version=self.CALCULATION_VERSION,
+            warnings=warnings,
+        )
+        return ComparisonWorkspaceResponse(
+            requested_symbols=requested,
+            assets=assets,
+            failed_symbols=failed,
+            benchmark=benchmark,
+            historical_series=series,
+            freshness=freshness,
+            coverage=coverage,
+            fx_policy=fx_audit.policy(len({asset.currency for asset in assets})),
+            insights=insights,
+        )
+
+    def _workspace_profile(
+        self,
+        symbol: str,
+        benchmark_index_id: str | None,
+    ) -> ComparisonAssetProfile:
+        portfolio_id = _portfolio_symbol_id(symbol)
+        if portfolio_id is not None:
+            return self._portfolio_profile(portfolio_id, benchmark_index_id)
+        try:
+            return self.asset_profile(symbol)
+        except LookupError:
+            return self._benchmark_asset_profile(symbol)
+
+    def _benchmark_asset_profile(self, index_id: str) -> ComparisonAssetProfile:
+        benchmark = self.benchmark_profile(index_id)
+        latest = self.conn.execute(
+            """
+            SELECT COALESCE(adj_close, close), price_date
+            FROM benchmark_index_daily_price
+            WHERE UPPER(index_id) = UPPER(?)
+              AND COALESCE(adj_close, close) IS NOT NULL
+            ORDER BY price_date DESC
+            LIMIT 1
+            """,
+            [index_id],
+        ).fetchone()
+        price = _float_or_none(latest[0]) if latest else None
+        return ComparisonAssetProfile(
+            asset_id=f"benchmark:{benchmark.index_id}",
+            symbol=benchmark.index_id,
+            name=benchmark.name,
+            asset_type="benchmark",
+            exchange_code=None,
+            sector=None,
+            industry=None,
+            country=None,
+            currency=benchmark.currency,
+            latest_price=price,
+            market_cap=None,
+            market_beta=None,
+            returns=ComparisonReturns(
+                return_1d=benchmark.return_1d,
+                return_21d=benchmark.return_21d,
+                return_252d=benchmark.return_252d,
+            ),
+            fundamentals=ComparisonFundamentals(),
+            valuation=ValuationContext(),
+        )
+
+    def _portfolio_profile(
+        self,
+        portfolio_id: int,
+        benchmark_index_id: str | None,
+    ) -> ComparisonAssetProfile:
+        portfolio = PortfolioApiService(self.conn).get_portfolio(portfolio_id)
+        performance = None
+        try:
+            performance = PortfolioApiService(self.conn).performance(
+                portfolio_id,
+                benchmark_index_id,
+                "1Y",
+            )
+        except Exception:
+            performance = None
+        return ComparisonAssetProfile(
+            asset_id=f"portfolio:{portfolio.portfolio_id}",
+            symbol=f"PF{portfolio.portfolio_id}",
+            name=portfolio.name,
+            asset_type="portfolio",
+            exchange_code=None,
+            sector=None,
+            industry=None,
+            country=None,
+            currency=portfolio.base_ccy,
+            latest_price=portfolio.market_value,
+            market_cap=portfolio.market_value,
+            market_beta=None,
+            returns=ComparisonReturns(
+                return_252d=performance.historical_cumulative_return if performance else None,
+            ),
+            fundamentals=ComparisonFundamentals(),
+            valuation=ValuationContext(),
+        )
+
     def asset_profile(self, asset_id: str) -> ComparisonAssetProfile:
         asset = AssetApiService(self.conn).get_asset(asset_id)
         prices = self._prices(asset.asset_id)
         latest_price = prices[0][1] if prices else asset.latest_price
-        statements = self._income_statements(asset.asset_id)
-        latest_statement = statements[0] if statements else {}
+        income_statements = self._income_statements(asset.asset_id)
+        latest_statement = income_statements[0] if income_statements else {}
+        balance_statements = self._statements(asset.asset_id, "balance")
+        balance_statement = (balance_statements or [{}])[0]
+        cashflow_statements = self._statements(asset.asset_id, "cashflow")
+        cashflow_statement = (cashflow_statements or [{}])[0]
+        estimate = self._latest_estimate(asset.asset_id)
         eps = _first_number(latest_statement, "eps", "epsdiluted", "dilutedEPS", "eps_actual")
+        forward_eps = _first_number(estimate, "eps_estimated")
         revenue = _first_number(latest_statement, "revenue", "totalRevenue", "revenue_actual")
+        forward_revenue = _first_number(estimate, "revenue_estimated")
         net_income = _first_number(latest_statement, "netIncome", "net_income", "netIncomeCommonStockholders")
+        gross_profit = _first_number(latest_statement, "grossProfit", "gross_profit")
+        operating_income = _first_number(latest_statement, "operatingIncome", "operating_income")
+        ebitda = _first_number(latest_statement, "ebitda", "EBITDA")
+        tax_rate = _first_number(latest_statement, "effectiveTaxRate", "taxRate")
+        tax_rate = tax_rate if tax_rate is not None and 0 <= tax_rate <= 1 else 0.21
+        r_and_d = _first_number(latest_statement, "researchAndDevelopmentExpenses", "researchAndDevelopment")
+        free_cash_flow = _first_number(cashflow_statement, "freeCashFlow", "free_cash_flow")
+        operating_cash_flow = _first_number(cashflow_statement, "operatingCashFlow", "netCashProvidedByOperatingActivities")
+        capex = _first_number(cashflow_statement, "capitalExpenditure", "capital_expenditure")
+        if free_cash_flow is None and operating_cash_flow is not None and capex is not None:
+            free_cash_flow = operating_cash_flow + capex
+        cash = _first_number(balance_statement, "cashAndCashEquivalents", "cashAndShortTermInvestments", "cash")
+        total_debt = _first_number(balance_statement, "totalDebt", "debt")
+        short_debt = _first_number(balance_statement, "shortTermDebt")
+        long_debt = _first_number(balance_statement, "longTermDebt")
+        if total_debt is None and short_debt is not None and long_debt is not None:
+            total_debt = short_debt + long_debt
+        equity = _first_number(balance_statement, "totalStockholdersEquity", "totalEquity")
+        current_assets = _first_number(balance_statement, "totalCurrentAssets")
+        current_liabilities = _first_number(balance_statement, "totalCurrentLiabilities")
+        shares = _first_number(latest_statement, "weightedAverageShsOutDil", "weightedAverageSharesDiluted", "sharesOutstanding")
+        sbc = _first_number(cashflow_statement, "stockBasedCompensation", "shareBasedCompensation")
+        buybacks = _first_number(cashflow_statement, "commonStockRepurchased", "repurchaseOfCommonStock", "stockRepurchased")
+        acquisitions = _first_number(
+            cashflow_statement,
+            "acquisitionsNet",
+            "acquisitions",
+            "businessAcquisitionsDisposals",
+            "netCashUsedForInvestingAcquisitions",
+        )
+        invested_capital = (
+            total_debt + equity - cash
+            if total_debt is not None and equity is not None and cash is not None
+            else None
+        )
+        nopat = operating_income * (1 - tax_rate) if operating_income is not None else None
+        reinvestment_spend = sum(
+            value
+            for value in [
+                abs(capex) if capex is not None else None,
+                abs(acquisitions) if acquisitions is not None else None,
+                r_and_d,
+            ]
+            if value is not None
+        )
+        roic_on_reinvestment = self._incremental_roic(
+            income_statements,
+            balance_statements,
+        )
+        dividend_yield = self._dividend_yield(asset.asset_id, latest_price)
         pe_ratio = latest_price / eps if latest_price is not None and eps and eps > 0 else None
+        forward_pe = latest_price / forward_eps if latest_price is not None and forward_eps and forward_eps > 0 else None
         price_to_sales = (
             asset.market_cap / revenue
             if asset.market_cap is not None and revenue is not None and revenue > 0
@@ -4473,6 +5136,8 @@ class ComparisonApiService:
             asset_id=asset.asset_id,
             symbol=asset.symbol,
             name=asset.name,
+            asset_type=asset.asset_type,
+            exchange_code=asset.exchange_code,
             sector=asset.sector,
             industry=asset.industry,
             country=asset.country,
@@ -4490,8 +5155,98 @@ class ComparisonApiService:
                 revenue=revenue,
                 net_income=net_income,
                 eps=eps,
+                forward_eps=forward_eps,
+                forward_revenue=forward_revenue,
                 pe_ratio=pe_ratio,
+                forward_pe=forward_pe,
                 price_to_sales=price_to_sales,
+                free_cash_flow=free_cash_flow,
+                free_cash_flow_yield=(
+                    free_cash_flow / asset.market_cap
+                    if free_cash_flow is not None and asset.market_cap and asset.market_cap > 0
+                    else None
+                ),
+                gross_margin=(
+                    gross_profit / revenue
+                    if gross_profit is not None and revenue and revenue > 0
+                    else None
+                ),
+                operating_margin=(
+                    operating_income / revenue
+                    if operating_income is not None and revenue and revenue > 0
+                    else None
+                ),
+                net_margin=(
+                    net_income / revenue
+                    if net_income is not None and revenue and revenue > 0
+                    else None
+                ),
+                cash=cash,
+                total_debt=total_debt,
+                net_debt=(
+                    total_debt - cash
+                    if total_debt is not None and cash is not None
+                    else None
+                ),
+                net_debt_to_ebitda=(
+                    (total_debt - cash) / ebitda
+                    if total_debt is not None and cash is not None and ebitda and ebitda > 0
+                    else None
+                ),
+                current_ratio=(
+                    current_assets / current_liabilities
+                    if current_assets is not None and current_liabilities and current_liabilities > 0
+                    else None
+                ),
+                debt_to_equity=(
+                    total_debt / equity
+                    if total_debt is not None and equity and equity > 0
+                    else None
+                ),
+                shares_outstanding=shares or asset.shares_outstanding,
+                dividend_yield=dividend_yield,
+                buyback_yield=(
+                    abs(buybacks) / asset.market_cap
+                    if buybacks is not None and asset.market_cap and asset.market_cap > 0
+                    else None
+                ),
+                stock_based_compensation=sbc,
+                acquisition_intensity=(
+                    abs(acquisitions) / revenue
+                    if acquisitions is not None and revenue and revenue > 0
+                    else None
+                ),
+                reinvestment_rate=(
+                    reinvestment_spend / revenue
+                    if reinvestment_spend and revenue and revenue > 0
+                    else None
+                ),
+                roic=(
+                    nopat / invested_capital
+                    if nopat is not None and invested_capital and invested_capital > 0
+                    else None
+                ),
+                roic_on_reinvestment=roic_on_reinvestment,
+                customer_concentration=_ratio_like(
+                    _first_number(
+                        latest_statement,
+                        "customerConcentration",
+                        "customer_concentration",
+                        "topCustomerRevenuePercent",
+                        "top_customer_revenue_percent",
+                    )
+                ),
+                revenue_concentration=_ratio_like(
+                    _first_number(
+                        latest_statement,
+                        "revenueConcentration",
+                        "revenue_concentration",
+                        "topSegmentRevenuePercent",
+                        "top_segment_revenue_percent",
+                    )
+                ),
+                latest_period_end=latest_statement.get("_period_end_date") or balance_statement.get("_period_end_date") or cashflow_statement.get("_period_end_date"),
+                estimate_as_of=estimate.get("_as_of_ts"),
             ),
             valuation=valuation,
         )
@@ -4542,6 +5297,416 @@ class ComparisonApiService:
         ).fetchall()
         return [(row[0], float(row[1])) for row in rows]
 
+    def _price_rows(
+        self,
+        asset_id: str,
+        period: str,
+        mode: str,
+    ) -> list[tuple[date, float, str | None, datetime | None]]:
+        value_expr = "close" if mode == "price-return" else "COALESCE(adj_close, close)"
+        latest_price_date = self.conn.execute(
+            f"""
+            SELECT MAX(date)
+            FROM asset_quote_daily
+            WHERE asset_id = ?
+              AND {value_expr} IS NOT NULL
+            """,
+            [asset_id],
+        ).fetchone()[0]
+        range_start = _range_start_date(period, latest_price_date) if latest_price_date else None
+        where = [f"{value_expr} IS NOT NULL"]
+        params: list[Any] = [asset_id]
+        if range_start is not None:
+            where.append("date >= ?")
+            params.append(range_start)
+        rows = self.conn.execute(
+            f"""
+            SELECT date, {value_expr}, ing_source, ing_at
+            FROM asset_quote_daily
+            WHERE asset_id = ?
+              AND {" AND ".join(where)}
+            ORDER BY date ASC
+            LIMIT 5000
+            """,
+            params,
+        ).fetchall()
+        if len(rows) < 2 and period.upper().strip() == "1D":
+            rows = self.conn.execute(
+                f"""
+                SELECT date, {value_expr}, ing_source, ing_at
+                FROM asset_quote_daily
+                WHERE asset_id = ?
+                  AND {value_expr} IS NOT NULL
+                ORDER BY date DESC
+                LIMIT 2
+                """,
+                [asset_id],
+            ).fetchall()
+            rows = list(reversed(rows))
+        return [(row[0], float(row[1]), row[2], row[3]) for row in rows]
+
+    def _workspace_price_rows(
+        self,
+        asset: ComparisonAssetProfile,
+        native_currency: str,
+        period: str,
+        mode: str,
+        currency: str,
+        fx_audit: _ComparisonFxAudit,
+        benchmark_index_id: str | None,
+    ) -> list[tuple[date, float, str | None, datetime | None]]:
+        if asset.asset_id.startswith("benchmark:"):
+            rows = self._benchmark_price_rows(asset.asset_id.removeprefix("benchmark:"), period, mode)
+        elif asset.asset_id.startswith("portfolio:"):
+            rows = self._portfolio_price_rows(int(asset.asset_id.removeprefix("portfolio:")), period, benchmark_index_id)
+        else:
+            rows = self._price_rows(asset.asset_id, period, mode)
+        return self._convert_rows_currency(rows, asset.symbol, native_currency, currency, fx_audit)
+
+    def _benchmark_price_rows(
+        self,
+        index_id: str,
+        period: str,
+        mode: str,
+    ) -> list[tuple[date, float, str | None, datetime | None]]:
+        value_expr = "close" if mode == "price-return" else "COALESCE(adj_close, close)"
+        latest_price_date = self.conn.execute(
+            f"""
+            SELECT MAX(price_date)
+            FROM benchmark_index_daily_price
+            WHERE UPPER(index_id) = UPPER(?)
+              AND {value_expr} IS NOT NULL
+            """,
+            [index_id],
+        ).fetchone()[0]
+        range_start = _range_start_date(period, latest_price_date) if latest_price_date else None
+        where = [f"{value_expr} IS NOT NULL"]
+        params: list[Any] = [index_id]
+        if range_start is not None:
+            where.append("price_date >= ?")
+            params.append(range_start)
+        rows = self.conn.execute(
+            f"""
+            SELECT price_date, {value_expr}, source, fetched_at
+            FROM benchmark_index_daily_price
+            WHERE UPPER(index_id) = UPPER(?)
+              AND {" AND ".join(where)}
+            ORDER BY price_date ASC
+            LIMIT 5000
+            """,
+            params,
+        ).fetchall()
+        if len(rows) < 2 and period.upper().strip() == "1D":
+            rows = self.conn.execute(
+                f"""
+                SELECT price_date, {value_expr}, source, fetched_at
+                FROM benchmark_index_daily_price
+                WHERE UPPER(index_id) = UPPER(?)
+                  AND {value_expr} IS NOT NULL
+                ORDER BY price_date DESC
+                LIMIT 2
+                """,
+                [index_id],
+            ).fetchall()
+            rows = list(reversed(rows))
+        return [(row[0], float(row[1]), row[2], row[3]) for row in rows]
+
+    def _portfolio_price_rows(
+        self,
+        portfolio_id: int,
+        period: str,
+        benchmark_index_id: str | None,
+    ) -> list[tuple[date, float, str | None, datetime | None]]:
+        performance = PortfolioApiService(self.conn).performance(portfolio_id, benchmark_index_id, period)
+        rows = [
+            (point.date, float(point.portfolio_value), performance.source, performance.as_of)
+            for point in performance.points
+            if point.portfolio_value is not None
+        ]
+        if rows:
+            return rows
+        return self._current_position_price_rows(portfolio_id, period)
+
+    def _current_position_price_rows(
+        self,
+        portfolio_id: int,
+        period: str,
+    ) -> list[tuple[date, float, str | None, datetime | None]]:
+        position_rows = self.conn.execute(
+            """
+            SELECT asset_id, qty
+            FROM position
+            WHERE portfolio_id = ?
+              AND qty <> 0
+            ORDER BY asset_id
+            """,
+            [portfolio_id],
+        ).fetchall()
+        if not position_rows:
+            return []
+        asset_ids = [row[0] for row in position_rows]
+        quantities = {row[0]: float(row[1]) for row in position_rows}
+        placeholders = ", ".join("?" for _ in asset_ids)
+        latest_price_date = self.conn.execute(
+            f"""
+            SELECT MAX(date)
+            FROM asset_quote_daily
+            WHERE asset_id IN ({placeholders})
+              AND close IS NOT NULL
+            """,
+            asset_ids,
+        ).fetchone()[0]
+        range_start = _range_start_date(period, latest_price_date) if latest_price_date else None
+        params: list[Any] = [*asset_ids]
+        where = ["close IS NOT NULL"]
+        if range_start is not None:
+            where.append("date >= ?")
+            params.append(range_start)
+        price_rows = self.conn.execute(
+            f"""
+            SELECT asset_id, date, close, ing_source, ing_at
+            FROM asset_quote_daily
+            WHERE asset_id IN ({placeholders})
+              AND {" AND ".join(where)}
+            ORDER BY date ASC
+            """,
+            params,
+        ).fetchall()
+        by_date: dict[date, dict[str, tuple[float, str | None, datetime | None]]] = {}
+        for asset_id, price_date, close, source, ing_at in price_rows:
+            by_date.setdefault(price_date, {})[asset_id] = (float(close), source, ing_at)
+        rows: list[tuple[date, float, str | None, datetime | None]] = []
+        for price_date in sorted(by_date):
+            daily = by_date[price_date]
+            if any(asset_id not in daily for asset_id in asset_ids):
+                continue
+            value = sum(quantities[asset_id] * daily[asset_id][0] for asset_id in asset_ids)
+            if value <= 0:
+                continue
+            source = next((item[1] for item in daily.values() if item[1]), "current_position_backtest")
+            ing_at = max((item[2] for item in daily.values() if item[2]), default=None)
+            rows.append((price_date, value, f"current_position_backtest:{source}", ing_at))
+        return rows
+
+    def _convert_rows_currency(
+        self,
+        rows: list[tuple[date, float, str | None, datetime | None]],
+        symbol: str,
+        native_currency: str,
+        display_currency: str,
+        fx_audit: _ComparisonFxAudit,
+    ) -> list[tuple[date, float, str | None, datetime | None]]:
+        if display_currency == "native" or native_currency == display_currency:
+            return rows
+        converted: list[tuple[date, float, str | None, datetime | None]] = []
+        missing_dates = 0
+        for row_date, value, source, as_of in rows:
+            rate = self._fx_rate(native_currency, display_currency, row_date)
+            if rate is None:
+                missing_dates += 1
+                fx_audit.missing(f"{native_currency}->{display_currency}")
+                continue
+            fx_rate, fx_source, fx_as_of = rate
+            fx_audit.seen_rate(fx_source, fx_as_of)
+            converted.append((row_date, value * fx_rate, source, as_of))
+        if missing_dates:
+            fx_audit.warn(
+                f"{symbol} skipped {missing_dates} history point(s) because {native_currency}->{display_currency} FX was unavailable."
+            )
+        return converted
+
+    def _profile_in_currency(
+        self,
+        profile: ComparisonAssetProfile,
+        display_currency: str,
+        fx_audit: _ComparisonFxAudit,
+    ) -> ComparisonAssetProfile:
+        if profile.currency == display_currency:
+            return profile
+        rate = self._fx_rate(profile.currency, display_currency, date.today(), max_age_days=None)
+        if rate is None:
+            fx_audit.missing(f"{profile.currency}->{display_currency}")
+            fx_audit.warn(
+                f"{profile.symbol} summary values remain in {profile.currency}; no recent {profile.currency}->{display_currency} FX rate is stored."
+            )
+            return profile
+        fx_rate, fx_source, fx_as_of = rate
+        fx_audit.seen_rate(fx_source, fx_as_of)
+        fundamentals = profile.fundamentals.model_copy(update={
+            "revenue": _multiply_optional(profile.fundamentals.revenue, fx_rate),
+            "net_income": _multiply_optional(profile.fundamentals.net_income, fx_rate),
+            "forward_revenue": _multiply_optional(profile.fundamentals.forward_revenue, fx_rate),
+            "free_cash_flow": _multiply_optional(profile.fundamentals.free_cash_flow, fx_rate),
+            "cash": _multiply_optional(profile.fundamentals.cash, fx_rate),
+            "total_debt": _multiply_optional(profile.fundamentals.total_debt, fx_rate),
+            "net_debt": _multiply_optional(profile.fundamentals.net_debt, fx_rate),
+            "stock_based_compensation": _multiply_optional(profile.fundamentals.stock_based_compensation, fx_rate),
+        })
+        return profile.model_copy(update={
+            "currency": display_currency,
+            "latest_price": _multiply_optional(profile.latest_price, fx_rate),
+            "market_cap": _multiply_optional(profile.market_cap, fx_rate),
+            "fundamentals": fundamentals,
+        })
+
+    def _fx_rate(
+        self,
+        from_ccy: str,
+        to_ccy: str,
+        rate_date: date,
+        max_age_days: int | None = 7,
+    ) -> tuple[float, str | None, datetime | None] | None:
+        if from_ccy == to_ccy:
+            return (1.0, "identity", None)
+        age_filter = "" if max_age_days is None else "AND rate_date >= ?"
+        params: list[Any] = [from_ccy, to_ccy, rate_date]
+        if max_age_days is not None:
+            params.append(rate_date - timedelta(days=max_age_days))
+        row = self.conn.execute(
+            f"""
+            SELECT rate, source, as_of_ts
+            FROM fx_rate
+            WHERE UPPER(from_ccy) = UPPER(?)
+              AND UPPER(to_ccy) = UPPER(?)
+              AND rate_date <= ?
+              {age_filter}
+            ORDER BY rate_date DESC
+            LIMIT 1
+            """,
+            params,
+        ).fetchone()
+        if row:
+            return (float(row[0]), row[1], row[2])
+        inverse_params: list[Any] = [to_ccy, from_ccy, rate_date]
+        if max_age_days is not None:
+            inverse_params.append(rate_date - timedelta(days=max_age_days))
+        inverse = self.conn.execute(
+            f"""
+            SELECT rate, source, as_of_ts
+            FROM fx_rate
+            WHERE UPPER(from_ccy) = UPPER(?)
+              AND UPPER(to_ccy) = UPPER(?)
+              AND rate_date <= ?
+              {age_filter}
+            ORDER BY rate_date DESC
+            LIMIT 1
+            """,
+            inverse_params,
+        ).fetchone()
+        if inverse and inverse[0]:
+            return (1.0 / float(inverse[0]), inverse[1], inverse[2])
+        return None
+
+    def _history_series(
+        self,
+        asset: ComparisonAssetProfile,
+        rows: list[tuple[date, float, str | None, datetime | None]],
+        common_start: date | None,
+        mode: str,
+    ) -> ComparisonHistorySeries:
+        warnings: list[str] = []
+        aligned = [row for row in rows if common_start is None or row[0] >= common_start]
+        if rows and common_start and rows[0][0] < common_start:
+            warnings.append(f"{asset.symbol} history starts before common window and was shortened to {common_start}.")
+        if len(aligned) < 2:
+            warnings.append(f"{asset.symbol} has insufficient stored history for return calculations.")
+        base = aligned[0][1] if aligned and aligned[0][1] else None
+        points = [
+            ComparisonHistoryPoint(
+                date=row[0],
+                value=(row[1] / base * 100.0) if base else None,
+                close=row[1],
+                cumulative_return=(row[1] / base - 1.0) if base else None,
+            )
+            for row in aligned
+        ]
+        return ComparisonHistorySeries(
+            asset_id=asset.asset_id,
+            symbol=asset.symbol,
+            mode=mode,
+            currency=asset.currency,
+            start_date=aligned[0][0] if aligned else None,
+            end_date=aligned[-1][0] if aligned else None,
+            observation_count=len(aligned),
+            source=aligned[-1][2] if aligned else None,
+            points=points,
+            warnings=warnings,
+        )
+
+    def _freshness(self, asset_id: str) -> ComparisonFreshness:
+        if asset_id.startswith("benchmark:"):
+            index_id = asset_id.removeprefix("benchmark:")
+            price = self.conn.execute(
+                """
+                SELECT price_date, source, fetched_at
+                FROM benchmark_index_daily_price
+                WHERE UPPER(index_id) = UPPER(?)
+                  AND COALESCE(adj_close, close) IS NOT NULL
+                ORDER BY price_date DESC
+                LIMIT 1
+                """,
+                [index_id],
+            ).fetchone()
+            stale = bool(price and price[0] and (date.today() - price[0]).days > 10)
+            return ComparisonFreshness(
+                latest_price_date=price[0] if price else None,
+                latest_price_source=price[1] if price else None,
+                latest_price_ingested_at=price[2] if price else None,
+                calculation_timestamp=datetime.now(UTC),
+                provider="local duckdb benchmark_index_daily_price",
+                stale=stale,
+                stale_reason="latest stored benchmark price is more than 10 calendar days old" if stale else None,
+            )
+        if asset_id.startswith("portfolio:"):
+            portfolio_id = int(asset_id.removeprefix("portfolio:"))
+            portfolio = PortfolioApiService(self.conn).get_portfolio(portfolio_id)
+            return ComparisonFreshness(
+                latest_price_date=portfolio.as_of.date() if portfolio.as_of else None,
+                latest_price_source=portfolio.source,
+                latest_price_ingested_at=portfolio.as_of,
+                calculation_timestamp=datetime.now(UTC),
+                provider="quaint_dash portfolio analytics",
+                stale=False,
+            )
+        price = self.conn.execute(
+            """
+            SELECT date, ing_source, ing_at
+            FROM asset_quote_daily
+            WHERE asset_id = ?
+              AND COALESCE(adj_close, close) IS NOT NULL
+            ORDER BY date DESC
+            LIMIT 1
+            """,
+            [asset_id],
+        ).fetchone()
+        statement = self.conn.execute(
+            """
+            SELECT period_end_date, source, ingested_at_utc
+            FROM financial_statement
+            WHERE asset_id = ?
+            ORDER BY period_end_date DESC NULLS LAST, year DESC, quarter DESC
+            LIMIT 1
+            """,
+            [asset_id],
+        ).fetchone()
+        stale = False
+        stale_reason = None
+        if price and price[0] and (date.today() - price[0]).days > 10:
+            stale = True
+            stale_reason = "latest stored price is more than 10 calendar days old"
+        return ComparisonFreshness(
+            latest_price_date=price[0] if price else None,
+            latest_price_source=price[1] if price else None,
+            latest_price_ingested_at=price[2] if price else None,
+            latest_fiscal_period=statement[0] if statement else None,
+            latest_fundamental_source=statement[1] if statement else None,
+            latest_fundamental_ingested_at=statement[2] if statement else None,
+            calculation_timestamp=datetime.now(UTC),
+            provider="local duckdb",
+            stale=stale,
+            stale_reason=stale_reason,
+        )
+
     def _income_statements(self, asset_id: str) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             """
@@ -4560,6 +5725,91 @@ class ComparisonApiService:
                 data["_period_end_date"] = period_end
                 statements.append(data)
         return statements
+
+    def _statements(self, asset_id: str, statement_type: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT period_end_date, data_json
+            FROM financial_statement
+            WHERE asset_id = ?
+              AND statement_type = ?
+            ORDER BY period_end_date DESC NULLS LAST, year DESC, quarter DESC
+            """,
+            [asset_id, statement_type],
+        ).fetchall()
+        statements: list[dict[str, Any]] = []
+        for period_end, payload in rows:
+            data = _json_dict(payload)
+            if data:
+                data["_period_end_date"] = period_end
+                statements.append(data)
+        return statements
+
+    def _latest_estimate(self, asset_id: str) -> dict[str, Any]:
+        row = self.conn.execute(
+            """
+            SELECT eps_estimated, revenue_estimated, as_of_ts
+            FROM earnings_calendar_event
+            WHERE asset_id = ?
+              AND (eps_estimated IS NOT NULL OR revenue_estimated IS NOT NULL)
+            ORDER BY earnings_date DESC
+            LIMIT 1
+            """,
+            [asset_id],
+        ).fetchone()
+        if row is None:
+            return {}
+        return {
+            "eps_estimated": _float_or_none(row[0]),
+            "revenue_estimated": _float_or_none(row[1]),
+            "_as_of_ts": row[2],
+        }
+
+    def _dividend_yield(self, asset_id: str, latest_price: float | None) -> float | None:
+        if latest_price is None or latest_price <= 0:
+            return None
+        row = self.conn.execute(
+            """
+            SELECT SUM(dividend_per_share)
+            FROM dividend_event
+            WHERE asset_id = ?
+              AND dividend_per_share IS NOT NULL
+              AND ex_date >= CURRENT_DATE - INTERVAL 370 DAY
+            """,
+            [asset_id],
+        ).fetchone()
+        annual_dividend = _float_or_none(row[0]) if row else None
+        if annual_dividend is None:
+            return None
+        return annual_dividend / latest_price
+
+    def _incremental_roic(
+        self,
+        income_statements: list[dict[str, Any]],
+        balance_statements: list[dict[str, Any]],
+    ) -> float | None:
+        if len(income_statements) < 2 or len(balance_statements) < 2:
+            return None
+        current_income = income_statements[0]
+        previous_income = income_statements[1]
+        current_balance = balance_statements[0]
+        previous_balance = balance_statements[1]
+        current_operating_income = _first_number(current_income, "operatingIncome", "operating_income")
+        previous_operating_income = _first_number(previous_income, "operatingIncome", "operating_income")
+        current_tax = _first_number(current_income, "effectiveTaxRate", "taxRate")
+        previous_tax = _first_number(previous_income, "effectiveTaxRate", "taxRate")
+        current_tax = current_tax if current_tax is not None and 0 <= current_tax <= 1 else 0.21
+        previous_tax = previous_tax if previous_tax is not None and 0 <= previous_tax <= 1 else 0.21
+        current_nopat = current_operating_income * (1 - current_tax) if current_operating_income is not None else None
+        previous_nopat = previous_operating_income * (1 - previous_tax) if previous_operating_income is not None else None
+        current_invested = _statement_invested_capital(current_balance)
+        previous_invested = _statement_invested_capital(previous_balance)
+        if current_nopat is None or previous_nopat is None or current_invested is None or previous_invested is None:
+            return None
+        incremental_capital = current_invested - previous_invested
+        if incremental_capital <= 0:
+            return None
+        return (current_nopat - previous_nopat) / incremental_capital
 
     def _valuation_context(
         self,
@@ -4732,7 +5982,92 @@ class CommandApiService(BrokerCommands, IngestionCommands):
     def __init__(self, conn) -> None:
         self.conn = conn
 
+    def broker_status(self) -> BrokerStatusResponse:
+        from dotenv import load_dotenv
+
+        load_dotenv()
+        repo = BrokerSyncRepository(self.conn)
+        configured = bool(os.getenv("SNAPTRADE_CLIENT_ID") and os.getenv("SNAPTRADE_CONSUMER_KEY"))
+        profile_row = self.conn.execute(
+            """
+            SELECT user_key, status
+            FROM broker_user
+            WHERE provider = ?
+            ORDER BY
+                CASE WHEN status = 'active' THEN 0 ELSE 1 END,
+                updated_at DESC
+            LIMIT 1
+            """,
+            [SNAPTRADE_PROVIDER],
+        ).fetchone()
+        last_row = self.conn.execute(
+            """
+            SELECT
+                MAX(started_at),
+                MAX(completed_at) FILTER (WHERE status IN ('done', 'success'))
+            FROM broker_sync_run
+            WHERE provider = ?
+            """,
+            [SNAPTRADE_PROVIDER],
+        ).fetchone()
+        min_age_hours = int(os.getenv("BROKER_SYNC_MIN_AGE_HOURS", "1") or "1")
+        last_success = last_row[1] if last_row else None
+        next_eligible = last_success + timedelta(hours=min_age_hours) if last_success else None
+        scheduled_enabled = os.getenv("BROKER_SYNC_BACKGROUND_ENABLED", "true").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
+        return BrokerStatusResponse(
+            provider=SNAPTRADE_PROVIDER,
+            configured=configured,
+            broker_profile_ready=bool(profile_row and profile_row[1] == "active"),
+            broker_profile_status=str(profile_row[1]) if profile_row else "missing",
+            broker_profile_key=str(profile_row[0]) if profile_row else None,
+            raw_payload_storage_enabled=repo.raw_payload_storage_enabled(),
+            scheduled_refresh_enabled=scheduled_enabled,
+            freshness_window_hours=min_age_hours,
+            max_users_per_run=_int_or_none(os.getenv("BROKER_SYNC_MAX_USERS")),
+            last_refresh_at=last_row[0] if last_row else None,
+            last_successful_refresh_at=last_success,
+            last_scheduled_run_at=last_success,
+            next_eligible_refresh_at=next_eligible,
+            provider_message=None if configured else "Missing SnapTrade environment configuration.",
+        )
+
     def broker_connections(self) -> list[BrokerConnectionResponse]:
+        account_counts = {
+            row[0]: int(row[1])
+            for row in self.conn.execute(
+                """
+                SELECT provider_connection_id, COUNT(*)
+                FROM broker_account
+                WHERE provider = ?
+                GROUP BY provider_connection_id
+                """,
+                [SNAPTRADE_PROVIDER],
+            ).fetchall()
+        }
+        sync_rows = {
+            row[0]: row
+            for row in self.conn.execute(
+                """
+                SELECT
+                    c.provider_connection_id,
+                    MAX(r.started_at),
+                    MAX(r.completed_at) FILTER (WHERE r.status IN ('done', 'success')),
+                    STRING_AGG(r.error_message, ' | ' ORDER BY r.started_at DESC) FILTER (
+                        WHERE r.error_message IS NOT NULL AND r.error_message <> ''
+                    )
+                FROM broker_connection c
+                LEFT JOIN broker_sync_run r ON r.connection_id = c.connection_id
+                WHERE c.provider = ?
+                GROUP BY c.provider_connection_id
+                """,
+                [SNAPTRADE_PROVIDER],
+            ).fetchall()
+        }
         return [
             BrokerConnectionResponse(
                 provider=item.provider,
@@ -4740,12 +6075,23 @@ class CommandApiService(BrokerCommands, IngestionCommands):
                 provider_connection_id=item.provider_connection_id,
                 institution_name=item.institution_name,
                 status=item.status,
+                account_count=account_counts.get(item.provider_connection_id, 0),
+                last_attempted_refresh_at=sync_rows.get(item.provider_connection_id, [None, None, None, None])[1],
+                last_successful_refresh_at=sync_rows.get(item.provider_connection_id, [None, None, None, None])[2],
+                last_error=sync_rows.get(item.provider_connection_id, [None, None, None, None])[3],
             )
             for item in BrokerSyncRepository(self.conn).list_connections()
         ]
 
     def broker_account_responses(self) -> list[BrokerAccountResponse]:
         position_summaries = self._broker_account_position_summaries()
+        txn_summaries = self._broker_account_transaction_summaries()
+        portfolio_names = {
+            int(row[0]): row[1]
+            for row in self.conn.execute(
+                "SELECT portfolio_id, portfolio_name FROM portfolio"
+            ).fetchall()
+        }
         responses: list[BrokerAccountResponse] = []
         for item in self.broker_accounts():
             if not _is_visible_broker_account(item.raw_payload):
@@ -4774,6 +6120,7 @@ class CommandApiService(BrokerCommands, IngestionCommands):
                     provider=item.provider,
                     provider_account_id=item.provider_account_id,
                     provider_connection_id=item.provider_connection_id,
+                    masked_account_number=_masked_account_number(item.raw_payload),
                     account_name=item.account_name,
                     account_type=item.account_type,
                     currency=_valid_currency(currency),
@@ -4784,9 +6131,288 @@ class CommandApiService(BrokerCommands, IngestionCommands):
                     position_count=position_summary.position_count,
                     latest_position_date=position_summary.latest_position_date,
                     portfolio_id=item.portfolio_id,
+                    portfolio_name=portfolio_names.get(int(item.portfolio_id)) if item.portfolio_id is not None else None,
+                    available_transaction_count=txn_summaries.get(item.provider_account_id, {}).get("available", 0),
+                    imported_transaction_count=txn_summaries.get(item.provider_account_id, {}).get("imported", 0),
+                    unsupported_transaction_count=txn_summaries.get(item.provider_account_id, {}).get("unsupported", 0),
+                    latest_activity_date=txn_summaries.get(item.provider_account_id, {}).get("latest_activity_date"),
+                    last_imported_at=txn_summaries.get(item.provider_account_id, {}).get("last_imported_at"),
+                    updated_at=_broker_account_updated_at(self.conn, item.provider, item.provider_account_id),
                 )
             )
         return responses
+
+    def _broker_account_transaction_summaries(self) -> dict[str, dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT
+                bt.provider_account_id,
+                COUNT(*) FILTER (WHERE m.provider_transaction_id IS NULL) AS available,
+                COUNT(*) FILTER (WHERE m.provider_transaction_id IS NOT NULL) AS imported,
+                COUNT(*) FILTER (WHERE LOWER(bt.txn_type) NOT IN ('buy', 'sell', 'dividend', 'interest', 'fee', 'tax', 'contribution', 'withdrawal', 'reinvestment', 'transfer')) AS unsupported,
+                MAX(bt.trade_date),
+                MAX(m.imported_at)
+            FROM broker_transaction bt
+            LEFT JOIN broker_portfolio_txn_map m
+              ON m.provider = bt.provider
+             AND m.provider_transaction_id = bt.provider_transaction_id
+            WHERE bt.provider = ?
+            GROUP BY bt.provider_account_id
+            """,
+            [SNAPTRADE_PROVIDER],
+        ).fetchall()
+        return {
+            row[0]: {
+                "available": int(row[1] or 0),
+                "imported": int(row[2] or 0),
+                "unsupported": int(row[3] or 0),
+                "latest_activity_date": row[4],
+                "last_imported_at": row[5],
+            }
+            for row in rows
+        }
+
+    def broker_sync_history(self, limit: int = 25) -> list[BrokerSyncHistoryItem]:
+        rows = self.conn.execute(
+            """
+            SELECT
+                r.sync_run_id,
+                r.provider,
+                r.user_key,
+                c.institution_name,
+                r.started_at,
+                r.completed_at,
+                r.accounts_seen,
+                r.positions_seen,
+                r.transactions_seen,
+                r.status,
+                r.error_message
+            FROM broker_sync_run r
+            LEFT JOIN broker_connection c ON c.connection_id = r.connection_id
+            ORDER BY r.started_at DESC
+            LIMIT ?
+            """,
+            [limit],
+        ).fetchall()
+        items: list[BrokerSyncHistoryItem] = []
+        for row in rows:
+            duration = None
+            if row[5] is not None and row[4] is not None:
+                duration = (row[5] - row[4]).total_seconds()
+            items.append(
+                BrokerSyncHistoryItem(
+                    sync_run_id=int(row[0]),
+                    provider=row[1],
+                    user_key=row[2],
+                    connection_label=row[3],
+                    trigger_type="manual",
+                    started_at=row[4],
+                    completed_at=row[5],
+                    duration_seconds=duration,
+                    accounts_processed=int(row[6] or 0),
+                    positions_stored=int(row[7] or 0),
+                    activities_stored=int(row[8] or 0),
+                    status=_sync_status_label(row[9], row[10]),
+                    error_summary=_redact_sensitive_text(row[10]),
+                )
+            )
+        return items
+
+    def broker_import_preview(self) -> BrokerImportPreviewResponse:
+        rows = self.conn.execute(
+            """
+            SELECT
+                bt.provider_transaction_id,
+                c.institution_name,
+                ba.account_name,
+                ba.raw_json,
+                ba.portfolio_id,
+                p.portfolio_name,
+                bt.trade_date,
+                bt.txn_type,
+                bt.asset_id,
+                bt.symbol,
+                bt.quantity,
+                bt.price,
+                bt.amount,
+                bt.currency,
+                m.provider_transaction_id IS NOT NULL AS imported
+            FROM broker_transaction bt
+            LEFT JOIN broker_account ba
+              ON ba.provider = bt.provider
+             AND ba.provider_account_id = bt.provider_account_id
+            LEFT JOIN broker_connection c
+              ON c.provider = ba.provider
+             AND c.provider_connection_id = ba.provider_connection_id
+            LEFT JOIN portfolio p ON p.portfolio_id = ba.portfolio_id
+            LEFT JOIN broker_portfolio_txn_map m
+              ON m.provider = bt.provider
+             AND m.provider_transaction_id = bt.provider_transaction_id
+            WHERE bt.provider = ?
+            ORDER BY c.institution_name, ba.account_name, bt.trade_date DESC, bt.provider_transaction_id
+            """,
+            [SNAPTRADE_PROVIDER],
+        ).fetchall()
+        groups: dict[tuple[Any, ...], BrokerImportPreviewGroup] = {}
+        date_values = []
+        totals = {
+            "ready": 0,
+            "already_imported": 0,
+            "unsupported": 0,
+            "needs_review": 0,
+            "unresolved_asset": 0,
+            "failed_validation": 0,
+        }
+        for row in rows:
+            category = _broker_activity_category(row[7])
+            status, reason = _broker_import_status(
+                category=category,
+                portfolio_id=row[4],
+                asset_id=row[8],
+                imported=bool(row[14]),
+                quantity=row[10],
+                amount=row[12],
+            )
+            totals[status] += 1
+            key = (row[1], row[2], row[4], row[5], _masked_account_number(_json_dict(row[3])))
+            group = groups.setdefault(
+                key,
+                BrokerImportPreviewGroup(
+                    institution_name=row[1],
+                    account_name=row[2],
+                    masked_account_number=key[4],
+                    portfolio_id=row[4],
+                    portfolio_name=row[5],
+                ),
+            )
+            _increment_preview_group(group, status, category)
+            date_values.append(row[6])
+            group.items.append(
+                BrokerImportPreviewItem(
+                    provider_transaction_id=row[0],
+                    institution_name=row[1],
+                    account_name=row[2],
+                    masked_account_number=key[4],
+                    portfolio_id=row[4],
+                    portfolio_name=row[5],
+                    trade_date=row[6],
+                    source_type=row[7],
+                    category=category,
+                    status=status,
+                    symbol=row[9],
+                    quantity=_float_or_none(row[10]),
+                    price=_float_or_none(row[11]),
+                    amount=_float_or_none(row[12]),
+                    currency=_valid_currency(row[13]),
+                    normalization_result=reason,
+                )
+            )
+        return BrokerImportPreviewResponse(
+            generated_at=datetime.now(UTC),
+            total_transactions=len(rows),
+            ready_count=totals["ready"],
+            already_imported_count=totals["already_imported"],
+            unsupported_count=totals["unsupported"],
+            needs_review_count=totals["needs_review"],
+            unresolved_asset_count=totals["unresolved_asset"],
+            failed_validation_count=totals["failed_validation"],
+            date_start=min(date_values) if date_values else None,
+            date_end=max(date_values) if date_values else None,
+            groups=list(groups.values()),
+        )
+
+    def broker_reconciliation(self) -> BrokerReconciliationResponse:
+        rows = self.conn.execute(
+            """
+            WITH latest_positions AS (
+                SELECT
+                    provider,
+                    provider_account_id,
+                    provider_position_id,
+                    MAX(as_of_date) AS as_of_date
+                FROM broker_position_snapshot
+                WHERE provider = ?
+                GROUP BY provider, provider_account_id, provider_position_id
+            ),
+            latest_prices AS (
+                SELECT asset_id, close
+                FROM asset_quote_daily
+                QUALIFY ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY date DESC) = 1
+            ),
+            local_ledger AS (
+                SELECT
+                    provider,
+                    provider_account_id,
+                    provider_position_id,
+                    pm.asset_id,
+                    quantity,
+                    quantity * lp.close AS market_value,
+                    updated_at
+                FROM broker_portfolio_position_map pm
+                LEFT JOIN latest_prices lp ON lp.asset_id = pm.asset_id
+            )
+            SELECT
+                c.institution_name,
+                ba.account_name,
+                ba.raw_json,
+                p.symbol,
+                p.asset_id,
+                p.quantity,
+                l.quantity,
+                p.market_value,
+                l.market_value,
+                p.currency,
+                p.as_of_date,
+                l.updated_at,
+                ba.portfolio_id
+            FROM broker_position_snapshot p
+            JOIN latest_positions latest
+              ON latest.provider = p.provider
+             AND latest.provider_account_id = p.provider_account_id
+             AND latest.provider_position_id = p.provider_position_id
+             AND latest.as_of_date = p.as_of_date
+            LEFT JOIN broker_account ba
+              ON ba.provider = p.provider
+             AND ba.provider_account_id = p.provider_account_id
+            LEFT JOIN broker_connection c
+              ON c.provider = ba.provider
+             AND c.provider_connection_id = ba.provider_connection_id
+            LEFT JOIN local_ledger l
+              ON l.provider = p.provider
+             AND l.provider_account_id = p.provider_account_id
+             AND l.provider_position_id = p.provider_position_id
+            ORDER BY c.institution_name, ba.account_name, p.symbol
+            """,
+            [SNAPTRADE_PROVIDER],
+        ).fetchall()
+        items = []
+        for row in rows:
+            broker_qty = _float_or_none(row[5])
+            local_qty = _float_or_none(row[6])
+            broker_value = _float_or_none(row[7])
+            local_value = _float_or_none(row[8])
+            quantity_difference = _difference(broker_qty, local_qty)
+            value_difference = _difference(broker_value, local_value)
+            items.append(
+                BrokerReconciliationItem(
+                    institution_name=row[0],
+                    account_name=row[1],
+                    masked_account_number=_masked_account_number(_json_dict(row[2])),
+                    ticker=row[3],
+                    asset_id=row[4],
+                    broker_quantity=broker_qty,
+                    local_quantity=local_qty,
+                    quantity_difference=quantity_difference,
+                    broker_market_value=broker_value,
+                    local_market_value=local_value,
+                    value_difference=value_difference,
+                    currency=_valid_currency(row[9]),
+                    broker_data_timestamp=row[10],
+                    local_ledger_timestamp=row[11],
+                    status=_reconciliation_status(row[4], row[12], quantity_difference, value_difference, row[10]),
+                )
+            )
+        return BrokerReconciliationResponse(generated_at=datetime.now(UTC), items=items)
 
     def _broker_account_position_summaries(self) -> dict[str, "_BrokerAccountPositionSummary"]:
         rows = self.conn.execute(
@@ -4835,11 +6461,32 @@ class CommandApiService(BrokerCommands, IngestionCommands):
         cash_balance: float | None,
         holdings_value: float | None,
     ) -> float | None:
+        if account_balance is not None:
+            return account_balance
         if holdings_value is not None:
             return holdings_value + (cash_balance or 0.0)
         if cash_balance is not None:
             return cash_balance
         return account_balance
+
+    def active_broker_user_key(self, provider: str = SNAPTRADE_PROVIDER) -> str | None:
+        row = self.conn.execute(
+            """
+            SELECT user_key
+            FROM broker_user
+            WHERE provider = ?
+              AND status = 'active'
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            [provider],
+        ).fetchone()
+        return str(row[0]) if row else None
+
+    def broker_user_key_or_default(self, user_key: str | None) -> str:
+        if user_key and user_key.strip():
+            return user_key.strip()
+        return self.active_broker_user_key() or "default"
 
     def register_broker_user(self, user_key: str) -> BrokerUserResponse:
         user = self.broker_register_snaptrade_user(user_key)
@@ -5334,6 +6981,16 @@ def _signal_summary_metrics(rows: list[SignalRow]) -> list[SignalSummaryMetric]:
     ]
 
 
+def _pending_signal_efficacy() -> SignalEfficacyMetadata:
+    return SignalEfficacyMetadata(
+        label="Calculated for matching result rows",
+        sample_size=0,
+        prior_occurrences=0,
+        methodology_version=_SIGNALS_MODEL_VERSION,
+        warning="Historical efficacy is computed after filtering so the summary can load without evaluating every possible signal.",
+    )
+
+
 def _signal_provider_failures(rows: list[SignalRow]) -> list[str]:
     missing = sorted({row.missing_data_status for row in rows if row.missing_data_status != "complete"})
     return [f"{status} input coverage" for status in missing]
@@ -5356,13 +7013,98 @@ def _signals_methodology() -> str:
 
 def _range_to_days(value: str) -> int | None:
     normalized = value.upper().strip()
+    if normalized == "YTD":
+        return (date.today() - date(date.today().year, 1, 1)).days
     return {
+        "1D": 1,
+        "1W": 7,
+        "1M": 31,
         "1Y": 365,
         "3Y": 365 * 3,
         "5Y": 365 * 5,
         "10Y": 365 * 10,
         "MAX": None,
-    }.get(normalized, 365 * 3)
+    }.get(normalized, 365)
+
+
+def _range_start_date(value: str, anchor: date) -> date | None:
+    normalized = value.upper().strip()
+    if normalized in {"MAX", "MAXIMUM"}:
+        return None
+    if normalized == "YTD":
+        return date(anchor.year, 1, 1)
+    days = {
+        "1D": 1,
+        "1W": 7,
+        "1M": 31,
+        "3M": 93,
+        "6M": 186,
+        "1Y": 365,
+        "3Y": 365 * 3,
+        "5Y": 365 * 5,
+        "10Y": 365 * 10,
+    }.get(normalized, 365)
+    return anchor - timedelta(days=days)
+
+
+def _comparison_period_days(value: str) -> int | None:
+    normalized = value.upper().strip()
+    if normalized == "YTD":
+        return (date.today() - date(date.today().year, 1, 1)).days
+    return {
+        "1D": 1,
+        "1W": 7,
+        "1M": 31,
+        "3M": 93,
+        "6M": 186,
+        "1Y": 365,
+        "3Y": 365 * 3,
+        "5Y": 365 * 5,
+        "10Y": 365 * 10,
+        "MAX": None,
+    }.get(normalized, 365 * 5)
+
+
+def _unique_symbols(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        symbol = value.strip().upper()
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        result.append(symbol)
+    return result
+
+
+def _portfolio_symbol_id(value: str) -> int | None:
+    match = re.fullmatch(r"(?:PF|PORTFOLIO)[-_:]?(\d+)", value.strip().upper())
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _multiply_optional(value: float | None, multiplier: float) -> float | None:
+    return value * multiplier if value is not None else None
+
+
+def _ratio_like(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return value / 100 if value > 1 else value
+
+
+def _statement_invested_capital(statement: dict[str, Any]) -> float | None:
+    cash = _first_number(statement, "cashAndCashEquivalents", "cashAndShortTermInvestments", "cash")
+    total_debt = _first_number(statement, "totalDebt", "debt")
+    short_debt = _first_number(statement, "shortTermDebt")
+    long_debt = _first_number(statement, "longTermDebt")
+    if total_debt is None and short_debt is not None and long_debt is not None:
+        total_debt = short_debt + long_debt
+    equity = _first_number(statement, "totalStockholdersEquity", "totalEquity")
+    if total_debt is None or equity is None or cash is None:
+        return None
+    return total_debt + equity - cash
 
 
 def _coverage_from_points(points: list[PortfolioPerformancePoint]) -> float | None:
@@ -5389,6 +7131,35 @@ def _ratio_or_none(numerator, denominator) -> float | None:
     return numerator / denominator
 
 
+def _table_exists(conn, table_name: str) -> bool:
+    try:
+        row = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM information_schema.tables
+            WHERE lower(table_name) = lower(?)
+            """,
+            [table_name],
+        ).fetchone()
+        return bool(row and row[0])
+    except Exception:
+        return False
+
+
+def _normalized_weight(value) -> float | None:
+    weight = _float_or_none(value)
+    if weight is None:
+        return None
+    return weight / 100 if weight > 1 else weight
+
+
+def _normalize_exposure_map(values: dict[str, float]) -> dict[str, float]:
+    total = sum(value for value in values.values() if value > 0)
+    if total <= 0:
+        return {}
+    return {key: value / total for key, value in sorted(values.items()) if value > 0}
+
+
 def _cdr_classification_override(
     *,
     asset_id: str,
@@ -5403,10 +7174,122 @@ def _cdr_classification_override(
     if not override:
         return {"sector": sector, "industry": industry, "country": country}
     return {
-        "sector": sector or override["sector"],
-        "industry": industry or override["industry"],
+        "sector": _canonical_sector_label(sector or override["sector"]),
+        "industry": _canonical_industry_label(industry or override["industry"]),
         "country": override["country"] if country is None or country.upper() == "CA" else country,
     }
+
+
+_SECTOR_LABEL_ALIASES = {
+    "technology": "Information Technology",
+    "information technology": "Information Technology",
+    "healthcare": "Health Care",
+    "health care": "Health Care",
+    "financial services": "Financials",
+    "financials": "Financials",
+    "consumer cyclical": "Consumer Discretionary",
+    "consumer discretionary": "Consumer Discretionary",
+    "consumer defensive": "Consumer Staples",
+    "consumer staples": "Consumer Staples",
+    "communication services": "Communication Services",
+    "communications": "Communication Services",
+    "industrial": "Industrials",
+    "industrials": "Industrials",
+    "basic materials": "Materials",
+    "materials": "Materials",
+    "real estate": "Real Estate",
+    "energy": "Energy",
+    "utilities": "Utilities",
+}
+
+_SECTOR_ETF_BY_SYMBOL = {
+    "IYW": "Information Technology",
+    "IXN": "Information Technology",
+    "VGT": "Information Technology",
+    "XLK": "Information Technology",
+    "FTEC": "Information Technology",
+    "IYH": "Health Care",
+    "VHT": "Health Care",
+    "XLV": "Health Care",
+    "IYF": "Financials",
+    "VFH": "Financials",
+    "XLF": "Financials",
+    "IYC": "Consumer Discretionary",
+    "VCR": "Consumer Discretionary",
+    "XLY": "Consumer Discretionary",
+    "IYK": "Consumer Staples",
+    "VDC": "Consumer Staples",
+    "XLP": "Consumer Staples",
+    "IYE": "Energy",
+    "VDE": "Energy",
+    "XLE": "Energy",
+    "IYJ": "Industrials",
+    "VIS": "Industrials",
+    "XLI": "Industrials",
+    "IYM": "Materials",
+    "VAW": "Materials",
+    "XLB": "Materials",
+    "IYR": "Real Estate",
+    "VNQ": "Real Estate",
+    "XLRE": "Real Estate",
+    "IDU": "Utilities",
+    "VPU": "Utilities",
+    "XLU": "Utilities",
+    "VOX": "Communication Services",
+    "XLC": "Communication Services",
+}
+
+
+def _canonical_sector_label(value: str | None) -> str | None:
+    key = _normalized_lookup_key(value)
+    if not key:
+        return None
+    return _SECTOR_LABEL_ALIASES.get(key, str(value).strip())
+
+
+def _canonical_industry_label(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = " ".join(str(value).split())
+    return text or None
+
+
+def _canonical_country_label(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().upper()
+    if text in {"UNITED STATES", "USA"}:
+        return "US"
+    if text in {"CANADA"}:
+        return "CA"
+    return text or None
+
+
+def _position_sector_label(
+    *,
+    asset_id: str,
+    symbol: str,
+    name: str | None,
+    asset_type: str | None,
+    asset_subtype: str | None,
+    sector: str | None,
+    industry: str | None,
+) -> str | None:
+    allocation = allocation_class(
+        asset_id=asset_id,
+        symbol=symbol,
+        name=name,
+        asset_type=asset_type,
+        asset_subtype=asset_subtype,
+        sector=sector,
+        industry=industry,
+    )
+    if allocation == "Money market":
+        return "Money market"
+    if allocation == "ETF":
+        symbol_key = str(symbol or asset_id or "").upper().split(".", maxsplit=1)[0]
+        return _SECTOR_ETF_BY_SYMBOL.get(symbol_key) or "Broad market"
+    return _canonical_sector_label(sector)
 
 
 def _cdr_base_symbol(asset_id: str, symbol: str, name: str | None) -> str:
@@ -5818,11 +7701,7 @@ def _account_cash_balance(
         return None
     if holdings_value is None:
         return balance
-    if balance <= holdings_value * 0.2:
-        return balance
-    if abs(balance - holdings_value) <= max(1.0, holdings_value * 0.01):
-        return max(balance - holdings_value, 0.0)
-    return None
+    return max(balance - holdings_value, 0.0)
 
 
 def _cash_value_from_payload(raw_payload: dict) -> float | None:
@@ -5897,3 +7776,163 @@ def _valid_currency(value: str | None) -> str | None:
     if match:
         return match.group(1)
     return text if len(text) == 3 and text.isalpha() else None
+
+
+def _int_or_none(value: str | None) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _broker_account_updated_at(conn, provider: str, provider_account_id: str) -> datetime | None:
+    row = conn.execute(
+        """
+        SELECT updated_at
+        FROM broker_account
+        WHERE provider = ?
+          AND provider_account_id = ?
+        """,
+        [provider, provider_account_id],
+    ).fetchone()
+    return row[0] if row else None
+
+
+def _masked_account_number(raw_payload: dict[str, Any]) -> str | None:
+    candidates: list[str] = []
+
+    def visit(value: Any, path: tuple[str, ...] = ()) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                token = _key_token(str(key))
+                if token in {"number", "accountnumber", "accountno", "accountid", "institutionaccountid"}:
+                    if child is not None:
+                        candidates.append(str(child))
+                visit(child, (*path, str(key)))
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                visit(child, (*path, str(index)))
+
+    visit(raw_payload)
+    value = next((item for item in candidates if item.strip()), None)
+    if not value:
+        return None
+    digits = re.sub(r"\D", "", value)
+    if len(digits) >= 4:
+        return f"****{digits[-4:]}"
+    clean = value.strip()
+    return f"****{clean[-4:]}" if len(clean) > 4 else "****"
+
+
+def _broker_activity_category(value: str | None) -> str:
+    text = _key_token(value or "")
+    if text in {"buy", "bought", "purchase"}:
+        return "buys"
+    if text in {"sell", "sold"}:
+        return "sells"
+    if "dividend" in text:
+        return "dividends"
+    if "interest" in text:
+        return "interest"
+    if "fee" in text or "commission" in text:
+        return "fees"
+    if "tax" in text or "withholding" in text:
+        return "taxes"
+    if "contribution" in text or "deposit" in text:
+        return "contributions"
+    if "withdrawal" in text:
+        return "withdrawals"
+    if "reinvest" in text or text == "drip":
+        return "reinvestments"
+    if "transfer" in text:
+        return "transfers"
+    return "unknown"
+
+
+def _broker_import_status(
+    *,
+    category: str,
+    portfolio_id: int | None,
+    asset_id: str | None,
+    imported: bool,
+    quantity: Any,
+    amount: Any,
+) -> tuple[str, str]:
+    if imported:
+        return "already_imported", "Already imported through the idempotency map."
+    if portfolio_id is None:
+        return "needs_review", "Assign this brokerage account to a portfolio before importing."
+    if category == "unknown":
+        return "unsupported", "Unsupported broker activity is retained for review."
+    if category in {"buys", "sells", "reinvestments"} and not asset_id:
+        return "unresolved_asset", "Needs a resolved local asset before import."
+    if category in {"buys", "sells"} and _float_or_none(quantity) is None:
+        return "failed_validation", "Trade activity is missing a valid quantity."
+    if category not in {"buys", "sells", "reinvestments", "transfers"} and _float_or_none(amount) is None:
+        return "failed_validation", "Cash activity is missing a valid amount."
+    return "ready", "Eligible to import into the assigned local portfolio."
+
+
+def _increment_preview_group(group: BrokerImportPreviewGroup, status: str, category: str) -> None:
+    if status == "ready":
+        group.ready_count += 1
+    elif status == "already_imported":
+        group.already_imported_count += 1
+    elif status == "unsupported":
+        group.unsupported_count += 1
+    elif status == "needs_review":
+        group.needs_review_count += 1
+    elif status == "unresolved_asset":
+        group.unresolved_asset_count += 1
+    elif status == "failed_validation":
+        group.failed_validation_count += 1
+    current = getattr(group.category_counts, category, None)
+    if current is not None:
+        setattr(group.category_counts, category, current + 1)
+
+
+def _difference(left: float | None, right: float | None) -> float | None:
+    if left is None or right is None:
+        return None
+    return left - right
+
+
+def _reconciliation_status(
+    asset_id: str | None,
+    portfolio_id: int | None,
+    quantity_difference: float | None,
+    value_difference: float | None,
+    broker_date: date | None,
+) -> str:
+    if asset_id is None:
+        return "unresolved_asset"
+    if portfolio_id is None:
+        return "missing_transactions"
+    if broker_date is not None and broker_date < date.today() - timedelta(days=7):
+        return "stale_snapshot"
+    if quantity_difference is not None and abs(quantity_difference) > 0.0001:
+        return "quantity_mismatch"
+    if value_difference is not None and abs(value_difference) > 1.0:
+        return "value_mismatch"
+    return "fully_reconciled"
+
+
+def _sync_status_label(status: str, error: str | None) -> str:
+    text = (status or "").lower()
+    if error:
+        return "partial_success" if text in {"done", "success"} else "failure"
+    if text in {"done", "success"}:
+        return "success"
+    if text == "running":
+        return "running"
+    return "failure"
+
+
+def _redact_sensitive_text(value: str | None) -> str | None:
+    if not value:
+        return None
+    redacted = re.sub(r"(user[_ -]?secret|secret|token|key)=([^&\s]+)", r"\1=REDACTED", value, flags=re.IGNORECASE)
+    redacted = re.sub(r"https?://\S+", "[redacted url]", redacted)
+    return redacted[:240]

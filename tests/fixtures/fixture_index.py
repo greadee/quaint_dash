@@ -168,6 +168,36 @@ CREATE TABLE IF NOT EXISTS benchmark_index_relative_metric (
     PRIMARY KEY (index_id, comparison_index_id, metric_date)
 );
 
+CREATE TABLE IF NOT EXISTS benchmark_index_financial_metric (
+    index_id TEXT NOT NULL,
+    metric_date DATE NOT NULL,
+    source TEXT NOT NULL DEFAULT 'computed_from_constituents',
+    source_type TEXT NOT NULL DEFAULT 'asset_sector_median',
+    peer_count INTEGER NOT NULL DEFAULT 0,
+    covered_peer_count INTEGER NOT NULL DEFAULT 0,
+    coverage_weight_pct DOUBLE,
+    eps_median DOUBLE,
+    non_gaap_eps_median DOUBLE,
+    forward_eps_median DOUBLE,
+    pe_median DOUBLE,
+    forward_pe_median DOUBLE,
+    peg_median DOUBLE,
+    price_to_sales_median DOUBLE,
+    ev_to_ebitda_median DOUBLE,
+    free_cash_flow_yield_median DOUBLE,
+    gross_margin_median DOUBLE,
+    operating_margin_median DOUBLE,
+    net_margin_median DOUBLE,
+    revenue_growth_median DOUBLE,
+    eps_growth_median DOUBLE,
+    latest_fiscal_period DATE,
+    latest_estimate_as_of TIMESTAMP,
+    data_quality TEXT NOT NULL DEFAULT 'unavailable',
+    notes TEXT,
+    computed_at TIMESTAMP NOT NULL DEFAULT now(),
+    PRIMARY KEY (index_id, metric_date, source)
+);
+
 CREATE TABLE IF NOT EXISTS benchmark_index_sync_state (
     index_id TEXT NOT NULL,
     job_type TEXT NOT NULL,

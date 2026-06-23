@@ -470,6 +470,18 @@ CREATE TABLE IF NOT EXISTS broker_portfolio_position_map (
     FOREIGN KEY (portfolio_id) REFERENCES portfolio(portfolio_id)
 );
 
+CREATE TABLE IF NOT EXISTS broker_account_return_override (
+    provider TEXT NOT NULL,
+    provider_account_id TEXT NOT NULL,
+    total_return_percent DOUBLE PRECISION NOT NULL,
+    note TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (provider, provider_account_id),
+    FOREIGN KEY (provider, provider_account_id) REFERENCES broker_account(provider, provider_account_id)
+);
+
 CREATE TABLE IF NOT EXISTS broker_sync_run (
     sync_run_id BIGINT PRIMARY KEY DEFAULT nextval('seq_broker_sync_run_id'),
     provider TEXT NOT NULL,

@@ -352,7 +352,11 @@ def _account_from_snaptrade(row: dict[str, Any], provider_connection_id: str) ->
         _number_value(row, "balance"),
         _nested_number(row, "balance", "total"),
         _nested_number(_dict_value(row, "balance"), "total", "amount"),
+        _nested_number(_dict_value(row, "balance"), "total", "value"),
         _nested_number(row, "total_value", "value"),
+        _number_value(row, "totalValue"),
+        _number_value(row, "accountValue"),
+        _number_value(row, "netLiquidationValue"),
     )
     currency = (
         _currency_value(row.get("currency"))
@@ -380,6 +384,8 @@ def _position_from_snaptrade(row: dict[str, Any], provider_account_id: str) -> B
         _number_value(row, "market_value"),
         _number_value(row, "marketValue"),
         _number_value(row, "value"),
+        _number_value(row, "total_value"),
+        _number_value(row, "totalValue"),
     )
     if market_value is None and quantity is not None:
         price = _number_value(row, "price")

@@ -333,6 +333,7 @@ def portfolio_risk_decomposition(
         average_pairwise_correlation=average_corr,
         correlation_matrix=correlation_mat,
         volatility_contributions=contributions,
+        asset_class_exposure=dimension_exposure(weights, exposure_metadata, "asset_class"),
         sector_exposure=dimension_exposure(weights, exposure_metadata, "sector"),
         country_exposure=dimension_exposure(weights, exposure_metadata, "country"),
         currency_exposure=dimension_exposure(weights, exposure_metadata, "currency"),
@@ -502,6 +503,46 @@ def dimension_exposure(
         value = exposure_metadata.get(asset_id, {}).get(dimension) or "Unknown"
         exposure[value] = exposure.get(value, 0.0) + weight
     return dict(sorted(exposure.items()))
+
+
+def allocation_class(
+    *,
+    asset_id: str | None = None,
+    symbol: str | None = None,
+    name: str | None = None,
+    asset_type: str | None = None,
+    asset_subtype: str | None = None,
+    sector: str | None = None,
+    industry: str | None = None,
+) -> str:
+    """Normalize held instruments into portfolio allocation classes."""
+    text = " ".join(
+        str(value or "")
+        for value in (asset_id, symbol, name, asset_type, asset_subtype, sector, industry)
+    ).lower()
+    symbol_key = str(symbol or asset_id or "").upper().strip()
+    asset_type_key = str(asset_type or "").lower().strip()
+    asset_subtype_key = str(asset_subtype or "").lower().strip()
+
+    if asset_type_key == "cash" or asset_subtype_key == "cash":
+        return "Cash"
+    if symbol_key in {"CASH.TO", "PSA.TO", "CSAV.TO", "HISA.TO"}:
+        return "Money market"
+    if any(term in text for term in ("money market", "high interest savings", "cash etf")):
+        return "Money market"
+    if asset_subtype_key in {"money_market", "money market"}:
+        return "Money market"
+    if any(term in text for term in ("bond", "fixed income", "treasury", "government bill", "t-bill", "tbill")):
+        return "Fixed income"
+    if asset_type_key in {"bond", "fixed_income", "fixed income"} or asset_subtype_key in {"bond", "fixed_income", "fixed income"}:
+        return "Fixed income"
+    if asset_subtype_key == "cdr" or "canadian depositary receipt" in text or "canadian depository receipt" in text:
+        return "CDR"
+    if asset_type_key in {"etf", "fund", "mutual_fund", "mutual fund"}:
+        return "ETF"
+    if asset_type_key in {"stock", "equity", "adr"}:
+        return "Stock"
+    return asset_type_key.replace("_", " ").title() if asset_type_key else "Other"
 
 
 def valuation_depth_metrics(

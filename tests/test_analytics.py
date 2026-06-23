@@ -13,6 +13,7 @@ from dashboard.analytics import (
     AnalyticsRepository,
     AnalyticsStorageService,
     PricePoint,
+    allocation_class,
     analytics_report_payload,
     compare_ai_snapshot_facts,
     discounted_cash_flow_model,
@@ -47,6 +48,23 @@ def test_risk_return_metrics_calculate_core_ratios():
     assert metrics.max_drawdown == pytest.approx((105.0 / 110.0) - 1.0)
     assert metrics.best_daily_return == pytest.approx((120.0 / 105.0) - 1.0)
     assert metrics.worst_daily_return == pytest.approx((105.0 / 110.0) - 1.0)
+
+
+def test_allocation_class_splits_stocks_cdrs_etfs_and_money_market():
+    assert allocation_class(symbol="AAPL", asset_type="stock") == "Stock"
+    assert allocation_class(symbol="SPY", asset_type="etf") == "ETF"
+    assert allocation_class(
+        symbol="NOWS.TO",
+        asset_type="stock",
+        name="ServiceNow Inc Canadian Depository Receipt (CAD Hedged)",
+    ) == "CDR"
+    assert allocation_class(
+        symbol="CASH.TO",
+        asset_type="etf",
+        asset_subtype="money_market",
+        name="Global X High Interest Savings ETF",
+    ) == "Money market"
+    assert allocation_class(symbol="CASH", asset_type="cash") == "Cash"
 
 
 def test_relative_metrics_calculate_beta_alpha_and_correlation():
@@ -865,8 +883,8 @@ def test_portfolio_risk_decomposition_calculates_concentration_and_exposures():
         positions=positions,
         price_history_by_asset=price_history,
         exposure_metadata={
-            "AAA": {"sector": "Technology", "country": "US", "currency": "USD"},
-            "BBB": {"sector": "Financials", "country": "CA", "currency": "CAD"},
+            "AAA": {"asset_class": "Equity", "sector": "Technology", "country": "US", "currency": "USD"},
+            "BBB": {"asset_class": "Fixed income", "sector": "Financials", "country": "CA", "currency": "CAD"},
         },
     )
 
@@ -884,6 +902,10 @@ def test_portfolio_risk_decomposition_calculates_concentration_and_exposures():
     assert decomposition.sector_exposure == {
         "Financials": pytest.approx(0.40),
         "Technology": pytest.approx(0.60),
+    }
+    assert decomposition.asset_class_exposure == {
+        "Equity": pytest.approx(0.60),
+        "Fixed income": pytest.approx(0.40),
     }
     assert decomposition.country_exposure == {"CA": pytest.approx(0.40), "US": pytest.approx(0.60)}
     assert decomposition.currency_exposure == {

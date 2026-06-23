@@ -472,6 +472,61 @@ def test_broker_sync_replaces_stale_positions_and_reprojects_mapped_portfolio(tm
     assert positions == [("MSFT", 1.0)]
 
 
+def test_broker_projection_prefers_provider_book_value_and_average_price(tmp_path):
+    db = DB(str(tmp_path / "broker_projection_cost.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Broker')")
+    repo = BrokerSyncRepository(db.conn)
+    repo.upsert_account(
+        BrokerAccount(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_connection_id="conn-1",
+            account_name="TFSA",
+            account_type="registered",
+            currency="CAD",
+            balance=1000,
+        )
+    )
+    repo.upsert_position_snapshot(
+        BrokerPosition(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_position_id="pos-direct",
+            symbol="AAPL",
+            description="Apple Inc.",
+            quantity=2,
+            market_value=300,
+            currency="CAD",
+            as_of_date=date(2026, 6, 20),
+            raw_payload={"bookValue": {"amount": 225.5, "currency": "CAD"}},
+        )
+    )
+    repo.upsert_position_snapshot(
+        BrokerPosition(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_position_id="pos-average",
+            symbol="MSFT",
+            description="Microsoft",
+            quantity=3,
+            market_value=450,
+            currency="CAD",
+            as_of_date=date(2026, 6, 20),
+            raw_payload={"averagePurchasePrice": {"amount": 41.25, "currency": "CAD"}},
+        )
+    )
+
+    BrokerPortfolioIntegrationService(db.conn).project_account_positions("acct-1", 1)
+
+    mapped = dict(
+        db.conn.execute(
+            "SELECT asset_id, book_cost FROM broker_portfolio_position_map ORDER BY asset_id"
+        ).fetchall()
+    )
+    assert mapped == {"AAPL": 225.5, "MSFT": 123.75}
+
+
 def test_broker_sync_scheduler_syncs_due_users_once_per_day(tmp_path):
     db = DB(str(tmp_path / "broker_scheduler.db"))
     init_db(db)

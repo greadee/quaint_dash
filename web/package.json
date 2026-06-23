@@ -7,9 +7,11 @@
     "dev": "vite --configLoader native",
     "build": "tsc -b && vite build --configLoader native",
     "lint": "eslint .",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test": "vitest run --configLoader native",
+    "test:watch": "vitest --configLoader native",
+    "test:coverage": "vitest run --configLoader native --coverage",
+    "test:e2e": "playwright test",
+    "perf:signals": "node ../tools/profile_signals_browser.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.66.0",
@@ -21,6 +23,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.19.0",
+    "@playwright/test": "^1.61.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",

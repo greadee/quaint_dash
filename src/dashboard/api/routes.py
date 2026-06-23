@@ -29,14 +29,22 @@ from dashboard.api.models import (
     BrokerAccountMappingRequest,
     BrokerAccountResponse,
     BrokerConnectionResponse,
+    BrokerDueRefreshRequest,
     BrokerExistingUserCreate,
+    BrokerImportPreviewResponse,
     BrokerImportRequest,
     BrokerPortalRequest,
     BrokerPortalResponse,
+    BrokerReconciliationResponse,
+    BrokerStatusResponse,
+    BrokerStorageSettingRequest,
+    BrokerStorageSettingResponse,
+    BrokerSyncHistoryItem,
     BrokerSyncRequest,
     BrokerUserCreate,
     BrokerUserResponse,
     ComparisonResponse,
+    ComparisonWorkspaceResponse,
     IngestionJobResponse,
     IngestionBackgroundStatusResponse,
     IngestionReadinessResponse,
@@ -215,6 +223,24 @@ def comparison(
     conn=Depends(get_connection),
 ):
     return ComparisonApiService(conn).compare(left, right, benchmark_index_id)
+
+
+@router.get("/comparison/workspace", response_model=ComparisonWorkspaceResponse)
+def comparison_workspace(
+    symbols: str = Query(min_length=1, max_length=240),
+    benchmark: str | None = Query(default=None, min_length=1, max_length=64),
+    period: str = Query(default="1Y", pattern="^(1D|1W|1M|3M|6M|YTD|1Y|3Y|5Y|10Y|MAX|Max)$"),
+    mode: str = Query(default="total-return", pattern="^(price-return|total-return|relative|drawdown|rolling-return|rolling-volatility)$"),
+    currency: str = Query(default="native", pattern="^(native|USD|CAD)$"),
+    conn=Depends(get_connection),
+):
+    return ComparisonApiService(conn).workspace(
+        symbols=symbols,
+        benchmark_index_id=benchmark,
+        period=period.upper(),
+        mode=mode,
+        currency=currency.upper() if currency != "native" else currency,
+    )
 
 
 @router.get("/benchmarks", response_model=list[BenchmarkIndexSummary])
@@ -470,7 +496,7 @@ def portfolio_analytics(
 def portfolio_performance(
     portfolio_id: int,
     benchmark: str | None = Query(default=None, min_length=1, max_length=64),
-    range: str = Query(default="3Y", pattern="^(1Y|3Y|5Y|10Y|Max|MAX)$"),
+    range: str = Query(default="1Y", pattern="^(1D|1W|1M|YTD|1Y|5Y|Max|MAX)$"),
     conn=Depends(get_connection),
 ):
     return PortfolioApiService(conn).performance(portfolio_id, benchmark, range.upper())
@@ -481,7 +507,7 @@ def portfolio_risk(
     portfolio_id: int,
     benchmark: str | None = Query(default=None, min_length=1, max_length=64),
     risk_free_rate: float = Query(default=0.0, ge=-0.05, le=0.25),
-    lookback: str = Query(default="3Y", pattern="^(1Y|3Y|5Y|10Y|Max|MAX)$"),
+    lookback: str = Query(default="1Y", pattern="^(1D|1W|1M|YTD|1Y|5Y|Max|MAX)$"),
     conn=Depends(get_connection),
 ):
     return PortfolioApiService(conn).risk(portfolio_id, benchmark, risk_free_rate, lookback.upper())
@@ -561,9 +587,10 @@ def asset_detail(asset_id: str, conn=Depends(get_connection)):
 def asset_prices(
     asset_id: str,
     limit: int = Query(default=365, ge=1, le=5000),
+    range: str = Query(default="1Y", pattern="^(1D|1W|1M|YTD|1Y|5Y|Max|MAX)$"),
     conn=Depends(get_connection),
 ):
-    return AssetApiService(conn).price_history(asset_id, limit)
+    return AssetApiService(conn).price_history(asset_id, limit, range.upper())
 
 
 @router.get("/assets/{asset_id}/analytics")
@@ -583,6 +610,26 @@ def broker_connections(conn=Depends(get_connection)):
 @router.get("/brokers/accounts", response_model=list[BrokerAccountResponse])
 def broker_accounts(conn=Depends(get_connection)):
     return CommandApiService(conn).broker_account_responses()
+
+
+@router.get("/brokers/status", response_model=BrokerStatusResponse)
+def broker_status(conn=Depends(get_connection)):
+    return CommandApiService(conn).broker_status()
+
+
+@router.get("/brokers/import-preview", response_model=BrokerImportPreviewResponse)
+def broker_import_preview(conn=Depends(get_connection)):
+    return CommandApiService(conn).broker_import_preview()
+
+
+@router.get("/brokers/reconciliation", response_model=BrokerReconciliationResponse)
+def broker_reconciliation(conn=Depends(get_connection)):
+    return CommandApiService(conn).broker_reconciliation()
+
+
+@router.get("/brokers/sync-history", response_model=list[BrokerSyncHistoryItem])
+def broker_sync_history(limit: int = Query(default=25, ge=1, le=200), conn=Depends(get_connection)):
+    return CommandApiService(conn).broker_sync_history(limit=limit)
 
 
 @router.post("/brokers/snaptrade/users", response_model=BrokerUserResponse)
@@ -607,10 +654,12 @@ def save_existing_broker_user(
 
 @router.post("/brokers/snaptrade/portal", response_model=BrokerPortalResponse)
 def broker_portal(payload: BrokerPortalRequest, conn=Depends(get_connection)):
-    url = CommandApiService(conn).broker_snaptrade_portal(
-        payload.user_key,
+    service = CommandApiService(conn)
+    url = service.broker_snaptrade_portal(
+        service.broker_user_key_or_default(payload.user_key),
         broker=payload.broker,
         reconnect=payload.reconnect,
+        register_if_missing=True,
     )
     return BrokerPortalResponse(url=url)
 
@@ -618,7 +667,27 @@ def broker_portal(payload: BrokerPortalRequest, conn=Depends(get_connection)):
 @router.post("/brokers/snaptrade/sync", response_model=ActionResult)
 def broker_sync(payload: BrokerSyncRequest, request: Request, conn=Depends(get_connection)):
     with request.app.state.write_lock:
-        result = CommandApiService(conn).broker_snaptrade_sync(payload.user_key)
+        service = CommandApiService(conn)
+        result = service.broker_snaptrade_sync(service.broker_user_key_or_default(payload.user_key))
+    return ActionResult(result=CommandApiService.action_result(result))
+
+
+@router.post("/brokers/snaptrade/sync-due", response_model=ActionResult)
+def broker_sync_due(payload: BrokerDueRefreshRequest, request: Request, conn=Depends(get_connection)):
+    with request.app.state.write_lock:
+        result = CommandApiService(conn).broker_snaptrade_sync_due(
+            max_users=payload.max_users,
+            min_age_hours=payload.min_age_hours,
+            force=payload.force,
+        )
+    return ActionResult(result=CommandApiService.action_result(result))
+
+
+@router.post("/brokers/snaptrade/smoke-test", response_model=ActionResult)
+def broker_smoke_test(request: Request, conn=Depends(get_connection)):
+    with request.app.state.write_lock:
+        service = CommandApiService(conn)
+        result = service.broker_snaptrade_smoke_test(service.broker_user_key_or_default(None))
     return ActionResult(result=CommandApiService.action_result(result))
 
 
@@ -643,6 +712,20 @@ def broker_import(
     with request.app.state.write_lock:
         result = CommandApiService(conn).broker_import_transactions(portfolio_id=payload.portfolio_id)
     return ActionResult(result=CommandApiService.action_result(result))
+
+
+@router.put("/brokers/settings/raw-payload-storage", response_model=BrokerStorageSettingResponse)
+def broker_raw_payload_storage(
+    payload: BrokerStorageSettingRequest,
+    request: Request,
+    conn=Depends(get_connection),
+):
+    with request.app.state.write_lock:
+        service = CommandApiService(conn)
+        service.set_broker_raw_payload_storage_enabled(payload.enabled)
+        return BrokerStorageSettingResponse(
+            raw_payload_storage_enabled=service.broker_raw_payload_storage_enabled(),
+        )
 
 
 @router.get("/ingestion/jobs", response_model=list[IngestionJobResponse])

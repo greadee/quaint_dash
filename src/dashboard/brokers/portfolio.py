@@ -426,9 +426,30 @@ class BrokerPortfolioIntegrationService:
         if row is None:
             return None
         payload = _json_payload(row[0])
-        average_price = _float_or_none(_payload_value(payload, "average_purchase_price"))
-        if average_price is None:
-            average_price = _float_or_none(_payload_value(payload, "averagePrice"))
+        direct_cost = _first_payload_float(
+            payload,
+            "book_cost",
+            "bookCost",
+            "book_value",
+            "bookValue",
+            "cost_basis",
+            "costBasis",
+            "total_cost",
+            "totalCost",
+        )
+        if direct_cost is not None and direct_cost > 0:
+            return direct_cost
+        average_price = _first_payload_float(
+            payload,
+            "average_purchase_price",
+            "averagePurchasePrice",
+            "averagePrice",
+            "avgPrice",
+            "average_cost",
+            "averageCost",
+            "book_price",
+            "bookPrice",
+        )
         if average_price is None or average_price <= 0:
             return None
         return average_price * position.quantity
@@ -764,8 +785,22 @@ def _payload_value(payload: dict[str, Any], key: str) -> Any:
     else:
         return None
     if isinstance(value, dict):
-        return _payload_value(value, "code") or _payload_value(value, "symbol")
+        return (
+            _payload_value(value, "amount")
+            or _payload_value(value, "value")
+            or _payload_value(value, "code")
+            or _payload_value(value, "symbol")
+        )
     return value
+
+
+def _first_payload_float(payload: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        value = _payload_value(payload, key)
+        parsed = _float_or_none(value)
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def _position_weighting(payload: dict[str, Any]) -> float | None:

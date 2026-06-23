@@ -361,6 +361,62 @@ def test_asset_search_and_benchmark_association_suggests_core_sector_and_industr
     }
 
 
+def test_benchmark_association_suggests_expanded_industry_universe(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    _seed_benchmark(db.conn)
+    db.conn.executemany(
+        """
+        INSERT INTO benchmark_index (
+            index_id, index_name, index_family, index_category, region,
+            country_code, currency, is_core, is_active, notes
+        )
+        VALUES (?, ?, ?, 'industry', 'United States', 'US', 'USD', FALSE, TRUE, ?)
+        """,
+        [
+            ("IND_INTERNET", "Internet Industry", "First Trust", "Internet industry"),
+            ("IND_BANKS", "Banks Industry", "SPDR", "Bank industry"),
+            ("IND_PHARMACEUTICALS", "Pharmaceuticals Industry", "iShares", "Pharmaceuticals industry"),
+        ],
+    )
+    db.conn.executemany(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name, sector, industry, country)
+        VALUES (?, ?, 'stock', 'USD', ?, ?, ?, 'US')
+        """,
+        [
+            ("GOOG", "GOOG", "Alphabet Inc.", "Communication Services", "Internet Content & Information"),
+            ("JPM", "JPM", "JPMorgan Chase & Co.", "Financial Services", "Banks - Diversified"),
+            ("LLY", "LLY", "Eli Lilly and Company", "Healthcare", "Medical - Pharmaceuticals"),
+        ],
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        responses = {
+            symbol: client.get(f"/api/v1/benchmarks/associations/asset/{symbol}")
+            for symbol in ("GOOG", "JPM", "LLY")
+        }
+
+    assert {symbol: response.status_code for symbol, response in responses.items()} == {
+        "GOOG": 200,
+        "JPM": 200,
+        "LLY": 200,
+    }
+    assert {
+        symbol: {
+            item["role"]: item["benchmark_index_id"]
+            for item in response.json()["associations"]
+        }["industry"]
+        for symbol, response in responses.items()
+    } == {
+        "GOOG": "IND_INTERNET",
+        "JPM": "IND_BANKS",
+        "LLY": "IND_PHARMACEUTICALS",
+    }
+
+
 def test_seed_and_refresh_use_index_service_paths(tmp_path, monkeypatch):
     calls: list[tuple[str, object]] = []
 

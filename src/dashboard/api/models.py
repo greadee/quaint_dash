@@ -51,6 +51,10 @@ class PortfolioSummary(BaseModel):
     market_value: float
     book_cost: float
     unrealized_gain: float | None
+    unrealized_return_percent: float | None = None
+    total_gain: float | None = None
+    total_return_percent: float | None = None
+    total_gain_source: str = "unrealized"
     projected_value: float | None = None
     projected_value_low: float | None = None
     projected_value_high: float | None = None
@@ -68,6 +72,7 @@ class PositionSummary(BaseModel):
     symbol: str
     name: str | None
     asset_type: str | None
+    allocation_class: str = "Other"
     sector: str | None = None
     industry: str | None = None
     country: str | None = None
@@ -93,6 +98,10 @@ class PositionSummary(BaseModel):
     price_session: str | None = None
     stale_price: bool = False
     stale_reason: str | None = None
+    sector_exposure: dict[str, float] = Field(default_factory=dict)
+    industry_exposure: dict[str, float] = Field(default_factory=dict)
+    country_exposure: dict[str, float] = Field(default_factory=dict)
+    currency_exposure: dict[str, float] = Field(default_factory=dict)
     data_status: str = "available"
 
 
@@ -160,6 +169,7 @@ class PortfolioRiskResponse(BaseModel):
     currency_concentration: dict[str, float] = Field(default_factory=dict)
     average_pairwise_correlation: float | None = None
     risk_contribution_concentration: float | None = None
+    asset_class_concentration: dict[str, float] = Field(default_factory=dict)
     missing_inputs: list[str] = Field(default_factory=list)
     as_of: datetime
 
@@ -623,8 +633,34 @@ class ComparisonFundamentals(BaseModel):
     revenue: float | None = None
     net_income: float | None = None
     eps: float | None = None
+    forward_eps: float | None = None
+    forward_revenue: float | None = None
     pe_ratio: float | None = None
+    forward_pe: float | None = None
     price_to_sales: float | None = None
+    free_cash_flow: float | None = None
+    free_cash_flow_yield: float | None = None
+    gross_margin: float | None = None
+    operating_margin: float | None = None
+    net_margin: float | None = None
+    cash: float | None = None
+    total_debt: float | None = None
+    net_debt: float | None = None
+    net_debt_to_ebitda: float | None = None
+    current_ratio: float | None = None
+    debt_to_equity: float | None = None
+    shares_outstanding: float | None = None
+    dividend_yield: float | None = None
+    buyback_yield: float | None = None
+    stock_based_compensation: float | None = None
+    acquisition_intensity: float | None = None
+    reinvestment_rate: float | None = None
+    roic: float | None = None
+    roic_on_reinvestment: float | None = None
+    customer_concentration: float | None = None
+    revenue_concentration: float | None = None
+    latest_period_end: date | None = None
+    estimate_as_of: datetime | None = None
 
 
 class ValuationContext(BaseModel):
@@ -640,6 +676,8 @@ class ComparisonAssetProfile(BaseModel):
     asset_id: str
     symbol: str
     name: str | None
+    asset_type: str | None = None
+    exchange_code: str | None = None
     sector: str | None
     industry: str | None
     country: str | None
@@ -686,6 +724,76 @@ class ComparisonResponse(BaseModel):
     right: ComparisonAssetProfile | None = None
     benchmark: BenchmarkComparisonProfile | None = None
     sector_context: SectorComparisonContext | None = None
+    insights: list[str] = Field(default_factory=list)
+
+
+class ComparisonHistoryPoint(BaseModel):
+    date: date
+    value: float | None = None
+    close: float | None = None
+    cumulative_return: float | None = None
+
+
+class ComparisonHistorySeries(BaseModel):
+    asset_id: str
+    symbol: str
+    mode: str
+    currency: str
+    start_date: date | None = None
+    end_date: date | None = None
+    observation_count: int
+    source: str | None = None
+    points: list[ComparisonHistoryPoint] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ComparisonFreshness(BaseModel):
+    latest_price_date: date | None = None
+    latest_price_source: str | None = None
+    latest_price_ingested_at: datetime | None = None
+    latest_fiscal_period: date | None = None
+    latest_fundamental_source: str | None = None
+    latest_fundamental_ingested_at: datetime | None = None
+    calculation_timestamp: datetime
+    provider: str
+    stale: bool = False
+    stale_reason: str | None = None
+
+
+class ComparisonCoverage(BaseModel):
+    requested_symbols: list[str]
+    resolved_symbols: list[str]
+    failed_symbols: list[str] = Field(default_factory=list)
+    common_start_date: date | None = None
+    start_date: date | None = None
+    end_date: date | None = None
+    benchmark: str | None = None
+    currency: str
+    mode: str
+    calculation_version: str
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ComparisonFxPolicy(BaseModel):
+    display_currency: str
+    native_currency_count: int
+    historical: bool
+    source: str | None = None
+    rate_count: int = 0
+    as_of: datetime | None = None
+    missing_pairs: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ComparisonWorkspaceResponse(BaseModel):
+    requested_symbols: list[str]
+    assets: list[ComparisonAssetProfile]
+    failed_symbols: list[str] = Field(default_factory=list)
+    benchmark: BenchmarkComparisonProfile | None = None
+    historical_series: list[ComparisonHistorySeries] = Field(default_factory=list)
+    freshness: dict[str, ComparisonFreshness] = Field(default_factory=dict)
+    coverage: ComparisonCoverage
+    fx_policy: ComparisonFxPolicy
     insights: list[str] = Field(default_factory=list)
 
 
@@ -898,7 +1006,7 @@ class BrokerUserResponse(BaseModel):
 
 
 class BrokerPortalRequest(BaseModel):
-    user_key: str = Field(min_length=1, max_length=100)
+    user_key: str | None = Field(default=None, min_length=1, max_length=100)
     broker: str | None = None
     reconnect: str | None = None
 
@@ -908,7 +1016,7 @@ class BrokerPortalResponse(BaseModel):
 
 
 class BrokerSyncRequest(BaseModel):
-    user_key: str = Field(min_length=1, max_length=100)
+    user_key: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 class BrokerConnectionResponse(BaseModel):
@@ -917,12 +1025,17 @@ class BrokerConnectionResponse(BaseModel):
     provider_connection_id: str
     institution_name: str
     status: str
+    account_count: int = 0
+    last_attempted_refresh_at: datetime | None = None
+    last_successful_refresh_at: datetime | None = None
+    last_error: str | None = None
 
 
 class BrokerAccountResponse(BaseModel):
     provider: str
     provider_account_id: str
     provider_connection_id: str
+    masked_account_number: str | None = None
     account_name: str | None
     account_type: str | None
     currency: str | None
@@ -933,6 +1046,146 @@ class BrokerAccountResponse(BaseModel):
     position_count: int = 0
     latest_position_date: date | None = None
     portfolio_id: int | None
+    portfolio_name: str | None = None
+    available_transaction_count: int = 0
+    imported_transaction_count: int = 0
+    unsupported_transaction_count: int = 0
+    latest_activity_date: date | None = None
+    last_imported_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class BrokerStatusResponse(BaseModel):
+    provider: str = "snaptrade"
+    configured: bool
+    broker_profile_ready: bool
+    broker_profile_status: str
+    broker_profile_key: str | None = None
+    raw_payload_storage_enabled: bool
+    scheduled_refresh_enabled: bool
+    freshness_window_hours: int
+    max_users_per_run: int | None = None
+    last_refresh_at: datetime | None = None
+    last_successful_refresh_at: datetime | None = None
+    last_scheduled_run_at: datetime | None = None
+    next_eligible_refresh_at: datetime | None = None
+    provider_message: str | None = None
+
+
+class BrokerSyncHistoryItem(BaseModel):
+    sync_run_id: int
+    provider: str
+    user_key: str | None = None
+    connection_label: str | None = None
+    trigger_type: str = "manual"
+    started_at: datetime
+    completed_at: datetime | None = None
+    duration_seconds: float | None = None
+    accounts_processed: int
+    positions_stored: int
+    activities_stored: int
+    status: str
+    error_summary: str | None = None
+
+
+class BrokerImportCategoryCounts(BaseModel):
+    buys: int = 0
+    sells: int = 0
+    dividends: int = 0
+    interest: int = 0
+    fees: int = 0
+    taxes: int = 0
+    contributions: int = 0
+    withdrawals: int = 0
+    reinvestments: int = 0
+    transfers: int = 0
+    unknown: int = 0
+
+
+class BrokerImportPreviewItem(BaseModel):
+    provider_transaction_id: str
+    institution_name: str | None = None
+    account_name: str | None = None
+    masked_account_number: str | None = None
+    portfolio_id: int | None = None
+    portfolio_name: str | None = None
+    trade_date: date
+    source_type: str
+    category: str
+    status: str
+    symbol: str | None = None
+    quantity: float | None = None
+    price: float | None = None
+    amount: float | None = None
+    currency: str | None = None
+    normalization_result: str
+
+
+class BrokerImportPreviewGroup(BaseModel):
+    institution_name: str | None = None
+    account_name: str | None = None
+    masked_account_number: str | None = None
+    portfolio_id: int | None = None
+    portfolio_name: str | None = None
+    ready_count: int = 0
+    already_imported_count: int = 0
+    unsupported_count: int = 0
+    needs_review_count: int = 0
+    unresolved_asset_count: int = 0
+    failed_validation_count: int = 0
+    category_counts: BrokerImportCategoryCounts = Field(default_factory=BrokerImportCategoryCounts)
+    items: list[BrokerImportPreviewItem] = Field(default_factory=list)
+
+
+class BrokerImportPreviewResponse(BaseModel):
+    generated_at: datetime
+    total_transactions: int
+    ready_count: int
+    already_imported_count: int
+    unsupported_count: int
+    needs_review_count: int
+    unresolved_asset_count: int
+    failed_validation_count: int
+    date_start: date | None = None
+    date_end: date | None = None
+    groups: list[BrokerImportPreviewGroup] = Field(default_factory=list)
+
+
+class BrokerReconciliationItem(BaseModel):
+    institution_name: str | None = None
+    account_name: str | None = None
+    masked_account_number: str | None = None
+    ticker: str | None = None
+    asset_id: str | None = None
+    broker_quantity: float | None = None
+    local_quantity: float | None = None
+    quantity_difference: float | None = None
+    broker_market_value: float | None = None
+    local_market_value: float | None = None
+    value_difference: float | None = None
+    currency: str | None = None
+    broker_data_timestamp: date | None = None
+    local_ledger_timestamp: datetime | None = None
+    status: str
+
+
+class BrokerReconciliationResponse(BaseModel):
+    generated_at: datetime
+    items: list[BrokerReconciliationItem] = Field(default_factory=list)
+
+
+class BrokerStorageSettingRequest(BaseModel):
+    enabled: bool
+
+
+class BrokerStorageSettingResponse(BaseModel):
+    raw_payload_storage_enabled: bool
+
+
+class BrokerDueRefreshRequest(BaseModel):
+    max_users: int | None = Field(default=None, ge=1, le=100)
+    min_age_hours: int = Field(default=1, ge=1, le=168)
+    force: bool = False
 
 
 class BrokerAccountMappingRequest(BaseModel):

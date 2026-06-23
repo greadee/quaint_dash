@@ -110,6 +110,7 @@ def test_portfolio_management_endpoints_are_backend_driven_and_deterministic(tmp
 
     with TestClient(app) as client:
         performance = client.get("/api/v1/portfolios/1/performance?benchmark=SP500&range=MAX")
+        one_day_performance = client.get("/api/v1/portfolios/1/performance?benchmark=SP500&range=1D")
         risk = client.get("/api/v1/portfolios/1/risk?benchmark=SP500&risk_free_rate=0.02")
         fundamentals = client.get("/api/v1/portfolios/1/fundamentals?horizon_years=5")
         max_cagr = client.post(
@@ -125,6 +126,8 @@ def test_portfolio_management_endpoints_are_backend_driven_and_deterministic(tmp
     assert performance.json()["methodology"].startswith("actual daily transaction-aware")
     assert performance.json()["points"][0]["portfolio_return_index"] == 100
     assert performance.json()["benchmark"] == "SP500"
+    assert one_day_performance.status_code == 200
+    assert [point["date"] for point in one_day_performance.json()["points"]] == ["2025-01-02", "2025-01-03"]
     assert risk.status_code == 200
     assert risk.json()["risk_free_rate"] == 0.02
     assert "weight_balance_score" in risk.json()
@@ -137,6 +140,50 @@ def test_portfolio_management_endpoints_are_backend_driven_and_deterministic(tmp
         assert abs(sum(payload["current_weights"].values()) - 1.0) < 0.0001
         assert abs(sum(payload["optimized_weights"].values()) - 1.0) < 0.0001
         assert payload["calculation_timestamp"]
+
+
+def test_portfolio_performance_skips_incomplete_valuation_dates(tmp_path):
+    db_path = tmp_path / "portfolio_performance.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name, base_ccy) VALUES (1, 'Core', 'USD')")
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy)
+        VALUES ('AAA', 'AAA', 'stock', 'USD'), ('BBB', 'BBB', 'stock', 'USD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO txn(txn_id, portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id)
+        VALUES
+            (1, 1, '2025-01-01 09:30:00', 'buy', 'AAA', 10, 10, 'USD', 0, 1),
+            (2, 1, '2025-01-01 09:30:00', 'buy', 'BBB', 10, 10, 'USD', 0, 1)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+        VALUES
+            ('AAA', DATE '2025-01-01', 10, 10, 'test'),
+            ('BBB', DATE '2025-01-01', 10, 10, 'test'),
+            ('AAA', DATE '2025-01-02', 11, 11, 'test'),
+            ('AAA', DATE '2025-01-03', 12, 12, 'test'),
+            ('BBB', DATE '2025-01-03', 10, 10, 'test')
+        """
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/portfolios/1/performance?range=MAX")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [point["date"] for point in payload["points"]] == ["2025-01-01", "2025-01-03"]
+    assert payload["points"][0]["portfolio_return_index"] == 100
+    assert abs(payload["points"][1]["portfolio_return_index"] - 110) < 0.0001
+    assert payload["coverage"] == 1
+    assert any("BBB: daily close on 2025-01-02" in item for item in payload["missing_inputs"])
 
 
 def test_portfolio_rename_conflicts_with_existing_name(tmp_path):
@@ -304,7 +351,7 @@ def test_portfolio_overview_positions_and_transactions(tmp_path):
     assert overview.json()["projected_horizon_years"] == 5
     assert positions.json()[0]["weight"] == 1
     assert positions.json()[0]["name"] == "Apple Inc."
-    assert positions.json()[0]["sector"] == "Technology"
+    assert positions.json()[0]["sector"] == "Information Technology"
     assert positions.json()[0]["industry"] == "Consumer Electronics"
     assert positions.json()[0]["country"] == "US"
     assert transactions.json()["total"] == 1
@@ -339,11 +386,11 @@ def test_portfolio_positions_use_underlying_metadata_for_cdrs(tmp_path):
         asset = client.get("/api/v1/assets/AMD.TO")
 
     assert positions.status_code == 200
-    assert positions.json()[0]["sector"] == "Technology"
+    assert positions.json()[0]["sector"] == "Information Technology"
     assert positions.json()[0]["industry"] == "Semiconductors"
     assert positions.json()[0]["country"] == "US"
     assert asset.status_code == 200
-    assert asset.json()["sector"] == "Technology"
+    assert asset.json()["sector"] == "Information Technology"
     assert asset.json()["industry"] == "Semiconductors"
     assert asset.json()["country"] == "US"
     assert asset.json()["is_cdr"] is True
@@ -367,7 +414,7 @@ def test_asset_detail_uses_known_cdr_classification_when_underlying_is_missing(t
         underlying = client.get("/api/v1/assets/AMD")
 
     assert asset.status_code == 200
-    assert asset.json()["sector"] == "Technology"
+    assert asset.json()["sector"] == "Information Technology"
     assert asset.json()["industry"] == "Semiconductors"
     assert asset.json()["country"] == "US"
     assert asset.json()["is_cdr"] is True
@@ -406,6 +453,39 @@ def test_portfolio_positions_classify_known_cdr_tickers_without_cdr_name(tmp_pat
     assert positions.json()[0]["country"] == "US"
 
 
+def test_portfolio_positions_classify_money_market_and_fixed_income_exposure(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, asset_subtype, ccy, name, sector, industry)
+        VALUES
+            ('CASH.TO', 'CASH.TO', 'etf', 'money_market', 'CAD', 'Global X High Interest Savings ETF', NULL, NULL),
+            ('ZAG.TO', 'ZAG.TO', 'etf', 'bond', 'CAD', 'BMO Aggregate Bond Index ETF', 'Fixed Income', 'Canadian bonds')
+        """
+    )
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO txn(portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id)
+        VALUES
+            (1, '2026-01-02 10:00:00', 'buy', 'CASH.TO', 100, 50, 'CAD', 0, 1),
+            (1, '2026-01-02 10:00:00', 'buy', 'ZAG.TO', 10, 20, 'CAD', 0, 1)
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        positions = client.get("/api/v1/portfolios/1/positions")
+
+    assert positions.status_code == 200
+    by_asset = {item["asset_id"]: item for item in positions.json()}
+    assert by_asset["CASH.TO"]["allocation_class"] == "Money market"
+    assert by_asset["ZAG.TO"]["allocation_class"] == "Fixed income"
+
+
 def test_portfolio_positions_classify_cdr_ticker_aliases(tmp_path):
     db_path = tmp_path / "api.db"
     app = create_app(db_path)
@@ -436,9 +516,77 @@ def test_portfolio_positions_classify_cdr_ticker_aliases(tmp_path):
         positions = client.get("/api/v1/portfolios/1/positions")
 
     assert positions.status_code == 200
-    assert positions.json()[0]["sector"] == "Technology"
+    assert positions.json()[0]["allocation_class"] == "CDR"
+    assert positions.json()[0]["sector"] == "Information Technology"
     assert positions.json()[0]["industry"] == "Software - Application"
     assert positions.json()[0]["country"] == "US"
+
+
+def test_portfolio_positions_canonicalize_exposure_taxonomy_and_etf_maps(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, asset_subtype, ccy, name, sector, industry, country)
+        VALUES
+            ('MU', 'MU', 'stock', NULL, 'USD', 'Micron Technology, Inc.', 'Technology', 'Semiconductors', 'US'),
+            ('NVDA', 'NVDA', 'stock', NULL, 'USD', 'NVIDIA Corporation', 'Information Technology', 'Semiconductors', 'US'),
+            ('LLY', 'LLY', 'stock', NULL, 'USD', 'Eli Lilly and Company', 'Healthcare', 'Medical - Pharmaceuticals', 'US'),
+            ('VTI', 'VTI', 'etf', NULL, 'USD', 'Vanguard Total Stock Market ETF', 'Financial Services', NULL, 'US'),
+            ('VGT', 'VGT', 'etf', NULL, 'USD', 'Vanguard Information Technology ETF', 'Financial Services', NULL, 'US')
+        """
+    )
+    db.conn.execute(
+        """
+        CREATE TABLE etf_holding (
+            asset_id TEXT,
+            holding_symbol TEXT,
+            holding_name TEXT,
+            weight_pct DOUBLE,
+            sector TEXT,
+            country TEXT,
+            currency TEXT
+        )
+        """
+    )
+    db.conn.executemany(
+        """
+        INSERT INTO etf_holding(asset_id, holding_symbol, holding_name, weight_pct, sector, country, currency)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            ("VTI", "AAPL", "Apple", 55, "Technology", "United States", "USD"),
+            ("VTI", "SHOP", "Shopify", 45, "Technology", "Canada", "CAD"),
+        ],
+    )
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO txn(portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id)
+        VALUES
+            (1, '2026-01-02 10:00:00', 'buy', 'MU', 1, 100, 'USD', 0, 1),
+            (1, '2026-01-02 10:00:00', 'buy', 'NVDA', 1, 100, 'USD', 0, 1),
+            (1, '2026-01-02 10:00:00', 'buy', 'LLY', 1, 100, 'USD', 0, 1),
+            (1, '2026-01-02 10:00:00', 'buy', 'VTI', 1, 100, 'USD', 0, 1),
+            (1, '2026-01-02 10:00:00', 'buy', 'VGT', 1, 100, 'USD', 0, 1)
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        positions = client.get("/api/v1/portfolios/1/positions")
+
+    assert positions.status_code == 200
+    by_asset = {item["asset_id"]: item for item in positions.json()}
+    assert by_asset["MU"]["sector"] == "Information Technology"
+    assert by_asset["NVDA"]["sector"] == "Information Technology"
+    assert by_asset["LLY"]["sector"] == "Health Care"
+    assert by_asset["VTI"]["sector"] == "Broad market"
+    assert by_asset["VGT"]["sector"] == "Information Technology"
+    assert by_asset["VTI"]["country_exposure"] == {"CA": 0.45, "US": 0.55}
+    assert by_asset["VTI"]["sector_exposure"] == {"Information Technology": 1.0}
 
 
 def test_portfolio_position_delete_warns_for_broker_linked_holding(tmp_path):

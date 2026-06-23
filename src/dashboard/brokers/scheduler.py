@@ -1,4 +1,4 @@
-"""Daily broker sync scheduling helpers."""
+"""Broker sync scheduling helpers."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ class BrokerSyncScheduler:
     def sync_due_users(
         self,
         max_users: int | None = None,
-        min_age_hours: int = 24,
+        min_age_hours: int = 1,
         force: bool = False,
     ) -> BrokerDueSyncResult:
         if force:
