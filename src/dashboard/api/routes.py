@@ -45,6 +45,7 @@ from dashboard.api.models import (
     BrokerUserResponse,
     ComparisonResponse,
     ComparisonWorkspaceResponse,
+    DataReadinessWorkerStatusResponse,
     IngestionJobResponse,
     IngestionBackgroundStatusResponse,
     IngestionReadinessResponse,
@@ -789,6 +790,29 @@ async def market_freshness_stop(request: Request):
 @router.post("/market/freshness/tick", response_model=ActionResult)
 async def market_freshness_tick(request: Request):
     result = await request.app.state.market_freshness_worker.tick()
+    return ActionResult(result=result)
+
+
+@router.get("/data/readiness/status", response_model=DataReadinessWorkerStatusResponse)
+def data_readiness_status(request: Request):
+    return request.app.state.data_readiness_worker.status()
+
+
+@router.post("/data/readiness/start", response_model=ActionResult)
+async def data_readiness_start(request: Request):
+    request.app.state.data_readiness_worker.enable()
+    return ActionResult(result=request.app.state.data_readiness_worker.status())
+
+
+@router.post("/data/readiness/stop", response_model=ActionResult)
+async def data_readiness_stop(request: Request):
+    await request.app.state.data_readiness_worker.disable()
+    return ActionResult(result=request.app.state.data_readiness_worker.status())
+
+
+@router.post("/data/readiness/tick", response_model=ActionResult)
+async def data_readiness_tick(request: Request):
+    result = await request.app.state.data_readiness_worker.tick()
     return ActionResult(result=result)
 
 

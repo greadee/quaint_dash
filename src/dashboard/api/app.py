@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from dashboard.api.broker_background import BrokerBackgroundConfig, BrokerBackgroundWorker
+from dashboard.api.data_readiness_background import DataReadinessConfig, DataReadinessWorker
 from dashboard.api.dependencies import get_connection
 from dashboard.api.ingestion_background import IngestionBackgroundConfig, IngestionBackgroundWorker
 from dashboard.api.market_freshness_background import MarketFreshnessConfig, MarketFreshnessWorker
@@ -47,14 +48,17 @@ def create_app(
             LOGGER.warning("Broker sync scheduler skipped during API startup: %s", exc)
         worker = app.state.ingestion_background_worker
         market_worker = app.state.market_freshness_worker
+        data_worker = app.state.data_readiness_worker
         broker_worker = app.state.broker_background_worker
         worker.start()
         market_worker.start()
+        data_worker.start()
         broker_worker.start()
         try:
             yield
         finally:
             await broker_worker.stop()
+            await data_worker.stop()
             await market_worker.stop()
             await worker.stop()
 
@@ -77,6 +81,11 @@ def create_app(
         resolved_db_path,
         app.state.write_lock,
         MarketFreshnessConfig.from_env(),
+    )
+    app.state.data_readiness_worker = DataReadinessWorker(
+        resolved_db_path,
+        app.state.write_lock,
+        DataReadinessConfig.from_env(),
     )
     app.state.broker_background_worker = BrokerBackgroundWorker(
         resolved_db_path,

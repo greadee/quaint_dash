@@ -5,6 +5,7 @@ from threading import Lock
 from fastapi.testclient import TestClient
 import pytest
 
+from dashboard.api.data_readiness_background import DataReadinessConfig, DataReadinessWorker
 from dashboard.api.ingestion_background import IngestionBackgroundConfig, IngestionBackgroundWorker
 from dashboard.api.market_freshness_background import MarketFreshnessConfig, MarketFreshnessWorker
 from dashboard.api.app import create_app
@@ -816,6 +817,179 @@ def test_market_freshness_tick_writes_current_prices(tmp_path, monkeypatch):
     db.conn.close()
 
     assert row == ("AAPL", "AAPL", 121.0, "yfinance")
+
+
+def test_data_readiness_status_defaults_disabled(tmp_path):
+    app = create_app(tmp_path / "api.db")
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/data/readiness/status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "enabled": False,
+        "running": False,
+        "last_check_at": None,
+        "last_target_count": None,
+        "last_ready_count": None,
+        "last_valuation_count": None,
+        "last_scheduled_count": None,
+        "last_completed_count": None,
+        "last_pending_count": None,
+        "last_missing": [],
+        "last_error": None,
+        "poll_interval_seconds": 300,
+        "max_assets_per_tick": 50,
+        "max_jobs_per_batch": 10,
+        "max_run_batches_per_tick": 10,
+        "years": 10,
+        "min_price_rows": 3,
+    }
+
+
+def test_data_readiness_tick_schedules_missing_underlying_for_cdr(tmp_path, monkeypatch):
+    db_path = tmp_path / "api.db"
+    db = DB(db_path)
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, asset_subtype, ccy, name)
+        VALUES ('AMD.TO', 'AMD.TO', 'stock', 'cdr', 'CAD', 'AMD Canadian Depositary Receipt')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'AMD.TO', TRUE, 'position')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO position(portfolio_id, asset_id, qty, book_cost, created_at, updated_at)
+        VALUES (1, 'AMD.TO', 1, 10, now(), now())
+        """
+    )
+    db.conn.close()
+
+    def fake_run(self, **kwargs):
+        return 0
+
+    monkeypatch.setattr("dashboard.api.data_readiness_background._hydrate_yfinance_summary", lambda conn, asset_id: False)
+    monkeypatch.setattr(CommandApiService, "run_ingestion_jobs", fake_run)
+
+    worker = DataReadinessWorker(
+        db_path,
+        Lock(),
+        DataReadinessConfig(enabled=True, max_run_batches_per_tick=1),
+    )
+
+    result = asyncio.run(worker.tick())
+
+    assert result["targets"] == 1
+    assert result["ready"] == 0
+    assert result["scheduled_jobs"] == 2
+    assert worker.status()["last_missing"] == [
+        "AMD.TO: price_history, shares_outstanding, income_statements, balance_statements, cashflow_statements"
+    ]
+
+    db = DB(db_path)
+    underlying = db.conn.execute("SELECT asset_id, symbol, asset_type, ccy FROM asset WHERE asset_id = 'AMD'").fetchone()
+    jobs = db.conn.execute(
+        """
+        SELECT asset_id, domain, job_type, dataset, status
+        FROM ingestion_job
+        ORDER BY domain, dataset
+        """
+    ).fetchall()
+    db.conn.close()
+    assert underlying == ("AMD", "AMD", "stock", "USD")
+    assert jobs == [
+        ("AMD", "corporate", "backfill", "financial_statements", "pending"),
+        ("AMD", "market", "backfill", "price_daily", "pending"),
+    ]
+
+
+def test_data_readiness_tick_calculates_cdr_valuation_from_underlying(tmp_path, monkeypatch):
+    db_path = tmp_path / "api.db"
+    db = DB(db_path)
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, asset_subtype, ccy, name, shares_outstanding)
+        VALUES
+            ('AMD', 'AMD', 'stock', NULL, 'USD', 'Advanced Micro Devices', 100),
+            ('AMD.TO', 'AMD.TO', 'stock', 'cdr', 'CAD', 'AMD Canadian Depositary Receipt', NULL)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'AMD.TO', TRUE, 'position')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO position(portfolio_id, asset_id, qty, book_cost, created_at, updated_at)
+        VALUES (1, 'AMD.TO', 1, 10, now(), now())
+        """
+    )
+    for asset_id, close in [("AMD", 20.0), ("AMD.TO", 10.0)]:
+        db.conn.execute(
+            """
+            INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+            VALUES
+                (?, DATE '2026-01-01', ?, ?, 'test'),
+                (?, DATE '2026-01-02', ?, ?, 'test'),
+                (?, DATE '2026-01-03', ?, ?, 'test')
+            """,
+            [
+                asset_id,
+                close - 2,
+                close - 2,
+                asset_id,
+                close - 1,
+                close - 1,
+                asset_id,
+                close,
+                close,
+            ],
+        )
+    db.conn.execute(
+        """
+        INSERT INTO financial_statement(asset_id, statement_type, year, quarter, data_json, source)
+        VALUES
+            ('AMD', 'income', 2025, 4, '{"revenue":500,"netIncome":100,"eps":1}', 'test'),
+            ('AMD', 'income', 2024, 4, '{"revenue":450,"netIncome":90,"eps":0.9}', 'test'),
+            ('AMD', 'balance', 2025, 4, '{"totalStockholdersEquity":250,"totalAssets":500,"totalDebt":50}', 'test'),
+            ('AMD', 'cashflow', 2025, 4, '{"freeCashFlow":100}', 'test'),
+            ('AMD', 'cashflow', 2024, 4, '{"freeCashFlow":90}', 'test')
+        """
+    )
+    db.conn.close()
+
+    def fail_schedule(self, **kwargs):
+        raise AssertionError("complete data should not schedule ingestion")
+
+    def fake_run(self, **kwargs):
+        return 0
+
+    monkeypatch.setattr(CommandApiService, "schedule_ingestion_jobs", fail_schedule)
+    monkeypatch.setattr(CommandApiService, "run_ingestion_jobs", fake_run)
+
+    worker = DataReadinessWorker(
+        db_path,
+        Lock(),
+        DataReadinessConfig(enabled=True, max_run_batches_per_tick=1),
+    )
+
+    result = asyncio.run(worker.tick())
+
+    assert result["targets"] == 1
+    assert result["ready"] == 1
+    assert result["valuations"] == 1
+    assert result["missing"] == []
 
 
 def test_ingestion_background_errors_are_captured(tmp_path, monkeypatch):

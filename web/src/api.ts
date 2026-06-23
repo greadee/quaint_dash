@@ -940,6 +940,25 @@ export type MarketFreshnessStatus = {
   max_symbols_per_tick: number;
   include_watchlist: boolean;
 };
+export type DataReadinessWorkerStatus = {
+  enabled: boolean;
+  running: boolean;
+  last_check_at: string | null;
+  last_target_count: number | null;
+  last_ready_count: number | null;
+  last_valuation_count: number | null;
+  last_scheduled_count: number | null;
+  last_completed_count: number | null;
+  last_pending_count: number | null;
+  last_missing: string[];
+  last_error: string | null;
+  poll_interval_seconds: number;
+  max_assets_per_tick: number;
+  max_jobs_per_batch: number;
+  max_run_batches_per_tick: number;
+  years: number;
+  min_price_rows: number;
+};
 export type IngestionRequirementStatus = {
   key: string;
   label: string;
@@ -1246,6 +1265,10 @@ export const api = {
   startMarketFreshness: () => request<ActionResult>("/market/freshness/start", { method: "POST" }),
   stopMarketFreshness: () => request<ActionResult>("/market/freshness/stop", { method: "POST" }),
   tickMarketFreshness: () => request<ActionResult>("/market/freshness/tick", { method: "POST" }),
+  dataReadinessStatus: () => request<DataReadinessWorkerStatus>("/data/readiness/status"),
+  startDataReadiness: () => request<ActionResult>("/data/readiness/start", { method: "POST" }),
+  stopDataReadiness: () => request<ActionResult>("/data/readiness/stop", { method: "POST" }),
+  tickDataReadiness: () => request<ActionResult>("/data/readiness/tick", { method: "POST" }),
   ingestionReadiness: () => request<IngestionReadiness>("/ingestion/readiness"),
   rankingReadiness: (params: { universe: string; limit?: number }) => {
     const query = new URLSearchParams({

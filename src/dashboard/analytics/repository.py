@@ -24,6 +24,28 @@ from .models import (
 
 _CDR_SYMBOL_ALIASES = {
     "NOWS": "NOW",
+    "VISA": "V",
+}
+
+_KNOWN_CDR_BASE_SYMBOLS = {
+    "AAPL",
+    "AMD",
+    "AMZN",
+    "ANET",
+    "ASML",
+    "AVGO",
+    "GEV",
+    "GOOG",
+    "ISRG",
+    "LLY",
+    "META",
+    "MSFT",
+    "MU",
+    "NOW",
+    "NVDA",
+    "SPGI",
+    "TSLA",
+    "V",
 }
 
 
@@ -239,7 +261,7 @@ class AnalyticsRepository:
         base = _CDR_SYMBOL_ALIASES.get(base, base)
         if base == asset_id or not self._looks_like_cdr_listing(row):
             return asset_id
-        return base if self._has_valuation_inputs(base) else asset_id
+        return base
 
     def annual_dividend_per_share(
         self, asset_id: str, as_of_date: date | None = None
@@ -288,7 +310,35 @@ class AnalyticsRepository:
             """,
             [asset_id.upper().strip()],
         ).fetchone()
-        return float(row[0]) if row and row[0] is not None and row[0] > 0 else None
+        if row and row[0] is not None and row[0] > 0:
+            return float(row[0])
+        rows = self.conn.execute(
+            """
+            SELECT data_json
+            FROM financial_statement
+            WHERE asset_id = ?
+              AND statement_type = 'income'
+            ORDER BY year DESC, quarter DESC
+            LIMIT 8
+            """,
+            [asset_id.upper().strip()],
+        ).fetchall()
+        for statement_row in rows:
+            data = _json_object(statement_row[0])
+            shares = _extract_number(
+                data,
+                (
+                    "weightedAverageShsOutDil",
+                    "weightedAverageShsOut",
+                    "weighted_average_shares_diluted",
+                    "weighted_average_shares",
+                    "sharesOutstanding",
+                    "shares_outstanding",
+                ),
+            )
+            if shares is not None and shares > 0:
+                return shares
+        return None
 
     def latest_free_cash_flow(self, asset_id: str) -> float | None:
         rows = self.conn.execute(
@@ -578,6 +628,8 @@ class AnalyticsRepository:
         name = str(row[3] or "")
         description = str(row[4] or "")
         text = f"{asset_id} {symbol} {asset_subtype} {name} {description}".lower()
+        base = symbol.split(".", maxsplit=1)[0].upper()
+        base = _CDR_SYMBOL_ALIASES.get(base, base)
         if "cdr" in text or "depositary receipt" in text or "depository receipt" in text:
             return True
-        return symbol.upper().endswith(".TO") and "." in symbol
+        return symbol.upper().endswith(".TO") and base in _KNOWN_CDR_BASE_SYMBOLS

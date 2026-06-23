@@ -615,6 +615,24 @@ def test_portfolio_valuation_rollup_uses_cdr_underlying_fundamentals(tmp_path):
     assert "AMD.TO: income statement" not in report.valuation.missing_inputs
 
 
+def test_valuation_asset_id_does_not_treat_all_tsx_stocks_as_cdrs(tmp_path):
+    db = DB(str(tmp_path / "tsx_common_stock.db"))
+    init_db(db)
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, asset_subtype, ccy, name)
+        VALUES
+            ('CSU.TO', 'CSU.TO', 'stock', NULL, 'CAD', 'Constellation Software Inc.'),
+            ('VISA.TO', 'VISA.TO', 'stock', 'cdr', 'CAD', 'Visa CDR')
+        """
+    )
+
+    repo = AnalyticsRepository(db.conn)
+
+    assert repo.valuation_asset_id("CSU.TO") == "CSU.TO"
+    assert repo.valuation_asset_id("VISA.TO") == "V"
+
+
 def test_analytics_report_payload_has_stable_public_shape(tmp_path):
     db = DB(str(tmp_path / "analytics_payload.db"))
     init_db(db)

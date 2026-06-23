@@ -302,6 +302,7 @@ class TickerUniverseRepository:
 
 _CDR_SYMBOL_ALIASES = {
     "NOWS": "NOW",
+    "VISA": "V",
 }
 
 

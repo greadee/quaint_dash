@@ -1248,6 +1248,26 @@ class MarketFreshnessStatusResponse(BaseModel):
     max_symbols_per_tick: int
 
 
+class DataReadinessWorkerStatusResponse(BaseModel):
+    enabled: bool
+    running: bool
+    last_check_at: datetime | None = None
+    last_target_count: int | None = None
+    last_ready_count: int | None = None
+    last_valuation_count: int | None = None
+    last_scheduled_count: int | None = None
+    last_completed_count: int | None = None
+    last_pending_count: int | None = None
+    last_missing: list[str] = Field(default_factory=list)
+    last_error: str | None = None
+    poll_interval_seconds: int
+    max_assets_per_tick: int
+    max_jobs_per_batch: int
+    max_run_batches_per_tick: int
+    years: int
+    min_price_rows: int
+
+
 class IngestionRequirementStatus(BaseModel):
     key: str
     label: str

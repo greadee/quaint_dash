@@ -249,6 +249,8 @@ class FmpCorporateCalendarProvider:
     def _period_to_quarter(period: str) -> Optional[int]:
         if period in {"Q1", "Q2", "Q3", "Q4"}:
             return int(period[1])
+        if period in {"FY", "ANNUAL"}:
+            return 4
 
         return None
 

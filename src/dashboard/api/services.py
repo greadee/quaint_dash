@@ -1376,6 +1376,7 @@ _CDR_CLASSIFICATION_OVERRIDES = {
     "NVDA": {"sector": "Technology", "industry": "Semiconductors", "country": "US"},
     "SPGI": {"sector": "Financial Services", "industry": "Financial Data & Stock Exchanges", "country": "US"},
     "TSLA": {"sector": "Consumer Cyclical", "industry": "Auto Manufacturers", "country": "US"},
+    "V": {"sector": "Financial Services", "industry": "Credit Services", "country": "US"},
     "VISA": {"sector": "Financial Services", "industry": "Credit Services", "country": "US"},
 }
 
@@ -1397,11 +1398,13 @@ _KNOWN_CDR_UNDERLYING_NAMES = {
     "NVDA": "NVIDIA Corporation",
     "SPGI": "S&P Global Inc.",
     "TSLA": "Tesla, Inc.",
+    "V": "Visa Inc.",
     "VISA": "Visa Inc.",
 }
 
 _CDR_SYMBOL_ALIASES = {
     "NOWS": "NOW",
+    "VISA": "V",
 }
 
 _SECTOR_BENCHMARK_BY_KEY = {
