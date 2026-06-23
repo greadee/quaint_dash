@@ -1039,6 +1039,64 @@ def test_stock_rankings_rank_buy_and_sell_signals_from_stored_metrics(tmp_path):
     ]
 
 
+def test_holding_signals_returns_current_holding_factor_grades_without_estimates(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name)
+        VALUES ('BUYME', 'BUYME', 'stock', 'USD', 'Buy Momentum')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO txn(portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id)
+        VALUES (1, '2026-01-02 10:00:00', 'buy', 'BUYME', 1, 100, 'USD', 0, 1)
+        """
+    )
+    for index in range(70):
+        close = 100 + index
+        db.conn.execute(
+            """
+            INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+            VALUES ('BUYME', DATE '2026-01-01' + CAST(? AS INTEGER), ?, ?, 'test')
+            """,
+            [index, close, close],
+        )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/holdings/signals?timeframe=1m")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["timeframe"] == "1m"
+    assert "Grades use stored aggregate factor scores" in payload["methodology"]
+    assert len(payload["items"]) == 1
+    item = payload["items"][0]
+    assert item["symbol"] == "BUYME"
+    assert item["grade"] in {"A", "B", "C", "D", "F"}
+    components = {component["name"]: component for component in item["components"]}
+    assert components["Share price momentum"]["available"] is True
+    assert components["Share price momentum"]["grade"] in {"A", "B"}
+    assert components["News sentiment"]["available"] is False
+    assert components["News sentiment"]["grade"] is None
+
+    db = DB(db_path)
+    estimate_count = db.conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM asset_quote_daily
+        WHERE ing_source = 'ranking_local_estimate'
+        """
+    ).fetchone()[0]
+    db.conn.close()
+    assert estimate_count == 0
+
+
 def test_stock_ranking_snapshot_refresh_persists_current_scores(tmp_path):
     db_path = tmp_path / "api.db"
     app = create_app(db_path)

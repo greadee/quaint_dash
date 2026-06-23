@@ -2,8 +2,8 @@ import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Activity, ArrowUpRight, BarChart3, CircleDollarSign, ShieldCheck, WalletCards } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { Bar, BarChart, Cell, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { api, type OptimizationPreview, type Portfolio, type PortfolioFundamentals, type PortfolioPerformance, type PortfolioRisk, type Position } from "../api";
+import { Bar, BarChart, Cell, Line, LineChart, Pie, PieChart, PolarAngleAxis, PolarGrid, PolarRadiusAxis, Radar, RadarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { api, type HoldingSignal, type OptimizationPreview, type Portfolio, type PortfolioFundamentals, type PortfolioPerformance, type PortfolioRisk, type Position } from "../api";
 import { AnalyticsBlock, DataIssueList, ExposureBars } from "./routeAnalytics";
 import { formatTimestamp, money, number, percent } from "./routeFormatters";
 import { ChartTypeToggle, EmptyRow, ErrorPanel, Loading, Metric, RangeSelector, Signal, TabBar } from "./routeShared";
@@ -142,6 +142,7 @@ export function PortfolioDetailPage() {
   const risk = useQuery({ queryKey: ["portfolio-risk", id, benchmark, range], queryFn: () => api.portfolioRisk(id, { benchmark: benchmark || undefined, lookback: range }), enabled: Number.isFinite(id) });
   const fundamentals = useQuery({ queryKey: ["portfolio-fundamentals", id, 5], queryFn: () => api.portfolioFundamentals(id, 5), enabled: Number.isFinite(id) });
   const transactions = useQuery({ queryKey: ["transactions", id, 25, 0], queryFn: () => api.transactions(id, 25, 0), enabled: Number.isFinite(id) && tab === "activity" });
+  const holdingSignals = useQuery({ queryKey: ["holding-signals", "1m"], queryFn: () => api.holdingSignals("1m"), enabled: Number.isFinite(id) && tab === "holdings" });
   if (portfolio.isLoading) return <Loading />;
   if (portfolio.error) return <ErrorPanel error={portfolio.error} />;
   if (!portfolio.data) return <section className="card"><EmptyRow text="Portfolio not found." /></section>;
@@ -159,7 +160,7 @@ export function PortfolioDetailPage() {
     </section>
     <TabBar tabs={portfolioDetailTabs} selected={tab} onSelect={(value) => setParam("tab", value)} label="Portfolio detail tabs" />
     {tab === "overview" ? <PortfolioOverviewDetail performance={performance.data} risk={risk.data} fundamentals={fundamentals.data} positions={positions.data ?? []} currency={portfolio.data.base_ccy} chartType={chartType} isLoading={performance.isLoading || risk.isLoading || fundamentals.isLoading || positions.isLoading} /> : null}
-    {tab === "holdings" ? <HoldingsTable positions={positions.data ?? []} currency={portfolio.data.base_ccy} isLoading={positions.isLoading} portfolioId={id} /> : null}
+    {tab === "holdings" ? <HoldingsTable positions={positions.data ?? []} signals={holdingSignals.data?.items ?? []} methodology={holdingSignals.data?.methodology} currency={portfolio.data.base_ccy} isLoading={positions.isLoading || holdingSignals.isLoading} portfolioId={id} /> : null}
     {tab === "performance" ? <PortfolioPerformanceView performance={performance.data} isLoading={performance.isLoading} chartType={chartType} /> : null}
     {tab === "risk" ? <PortfolioRiskView risk={risk.data} isLoading={risk.isLoading} /> : null}
     {tab === "optimization" ? <PortfolioOptimizationPanel portfolioId={id} /> : null}
@@ -181,11 +182,75 @@ function PortfolioOverviewDetail({ performance, risk, fundamentals, positions, c
   </section>;
 }
 
-function HoldingsTable({ positions, currency, isLoading, portfolioId }: { positions: Position[]; currency: string; isLoading: boolean; portfolioId: number }) {
+function HoldingsTable({ positions, signals, methodology, currency, isLoading, portfolioId }: { positions: Position[]; signals: HoldingSignal[]; methodology?: string; currency: string; isLoading: boolean; portfolioId: number }) {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<"weight" | "symbol" | "gain">("weight");
+  const signalByAsset = new Map(signals.map((item) => [item.asset_id, item]));
   const filtered = positions.filter((item) => `${item.symbol} ${item.name ?? ""}`.toLowerCase().includes(query.toLowerCase())).sort((left, right) => sort === "symbol" ? left.symbol.localeCompare(right.symbol) : sort === "gain" ? (right.unrealized_gain ?? -Infinity) - (left.unrealized_gain ?? -Infinity) : (right.weight ?? -Infinity) - (left.weight ?? -Infinity));
-  return <section className="card holdings-card"><div className="card-heading"><div><p className="eyebrow">Holdings</p><h2>Positions</h2></div><div className="card-tools"><label>Search<input value={query} onChange={(event) => setQuery(event.target.value)} /></label><label>Sort<select value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}><option value="weight">Weight</option><option value="symbol">Ticker</option><option value="gain">Gain</option></select></label></div></div>{isLoading ? <Loading compact /> : filtered.length ? <div className="table-wrap"><table><thead><tr><th>Ticker</th><th>Class</th><th>Quantity</th><th>Price</th><th>Value</th><th>Weight</th><th>Book</th><th>Gain</th><th>Status</th></tr></thead><tbody>{filtered.map((item) => <tr key={item.asset_id}><td><Link className="asset-link" to={`/assets/${item.asset_id}?from=/portfolios/${portfolioId}%3Ftab%3Dholdings`}><strong>{item.symbol}</strong><span>{item.name ?? item.asset_type ?? "Asset"}</span></Link></td><td>{item.allocation_class ?? "Other"}</td><td>{number(item.quantity, 4)}</td><td>{money(item.latest_price, item.currency)}</td><td>{money(item.market_value, currency)}</td><td>{percent(item.weight)}</td><td>{money(item.book_cost, currency)}</td><td className={(item.unrealized_gain ?? 0) >= 0 ? "positive" : "negative"}>{money(item.unrealized_gain, currency)}</td><td>{item.stale_price ? item.stale_reason ?? "stale" : item.data_status ?? "available"}</td></tr>)}</tbody></table></div> : <EmptyRow text="No holdings match this search." />}</section>;
+  return <section className="card holdings-card"><div className="card-heading"><div><p className="eyebrow">Holdings</p><h2>Positions</h2></div><div className="card-tools"><label>Search<input value={query} onChange={(event) => setQuery(event.target.value)} /></label><label>Sort<select value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}><option value="weight">Weight</option><option value="symbol">Ticker</option><option value="gain">Gain</option></select></label></div></div>{isLoading ? <Loading compact /> : filtered.length ? <><div className="table-wrap"><table><thead><tr><th>Ticker</th><th>Class</th><th>Quantity</th><th>Price</th><th>Value</th><th>Weight</th><th>Book</th><th>Gain</th><th>Status</th></tr></thead><tbody>{filtered.map((item) => <tr key={item.asset_id}><td><Link className="asset-link" to={`/assets/${item.asset_id}?from=/portfolios/${portfolioId}%3Ftab%3Dholdings`}><strong>{item.symbol}</strong><span>{item.name ?? item.asset_type ?? "Asset"}</span></Link></td><td>{item.allocation_class ?? "Other"}</td><td>{number(item.quantity, 4)}</td><td>{money(item.latest_price, item.currency)}</td><td>{money(item.market_value, currency)}</td><td>{percent(item.weight)}</td><td>{money(item.book_cost, currency)}</td><td className={(item.unrealized_gain ?? 0) >= 0 ? "positive" : "negative"}>{money(item.unrealized_gain, currency)}</td><td>{item.stale_price ? item.stale_reason ?? "stale" : item.data_status ?? "available"}</td></tr>)}</tbody></table></div><HoldingKiviatGrid positions={filtered} signalByAsset={signalByAsset} methodology={methodology} /></> : <EmptyRow text="No holdings match this search." />}</section>;
+}
+
+function HoldingKiviatGrid({ positions, signalByAsset, methodology }: { positions: Position[]; signalByAsset: Map<string, HoldingSignal>; methodology?: string }) {
+  return <div className="holding-kiviat-section">
+    <div className="card-heading kiviat-heading"><div><p className="eyebrow">Kiviat factors</p><h3>Holding grades</h3></div><span>{methodology ?? "Stored factor scores load from the holdings signal endpoint."}</span></div>
+    <div className="holding-kiviat-grid">
+      {positions.map((position) => <HoldingKiviatCard key={position.asset_id} position={position} signal={signalByAsset.get(position.asset_id)} />)}
+    </div>
+  </div>;
+}
+
+function HoldingKiviatCard({ position, signal }: { position: Position; signal?: HoldingSignal }) {
+  const chartData = (signal?.components ?? []).map((component) => ({
+    factor: shortFactor(component.name),
+    score: component.score == null ? 50 : Math.max(0, Math.min(100, (component.score + 100) / 2)),
+    rawScore: component.score,
+    grade: component.grade ?? "Incomplete",
+    available: component.available,
+    detail: component.detail,
+  }));
+  const strengths = signal?.components.filter((component) => component.available && (component.score ?? 0) >= 25) ?? [];
+  const weaknesses = signal?.components.filter((component) => component.available && (component.score ?? 0) <= -10) ?? [];
+  const missing = signal?.components.filter((component) => !component.available) ?? [];
+  return <article className={`holding-kiviat-card ${actionClass(signal?.action)}`}>
+    <div className="holding-kiviat-title">
+      <div><strong>{position.symbol}</strong><span>{position.name ?? position.asset_type ?? "Asset"}</span></div>
+      <b>{signal?.grade ?? "Incomplete"}</b>
+    </div>
+    <div className="holding-kiviat-chart" aria-label={`${position.symbol} factor Kiviat diagram`}>
+      {chartData.length ? <ResponsiveContainer width="100%" height="100%">
+        <RadarChart data={chartData} outerRadius="72%">
+          <PolarGrid />
+          <PolarAngleAxis dataKey="factor" tick={{ fontSize: 10 }} />
+          <PolarRadiusAxis angle={90} domain={[0, 100]} tick={false} axisLine={false} />
+          <Radar dataKey="score" name="Factor grade" stroke="#245c4f" fill="#245c4f" fillOpacity={0.22} />
+          <Tooltip formatter={(value, _name, item) => [`${number((Number(value) - 50) * 2, 1)} score`, `${item.payload.grade}`]} />
+        </RadarChart>
+      </ResponsiveContainer> : <EmptyRow text="No factor scores are available for this holding yet." />}
+    </div>
+    <div className="holding-grade-strip">
+      <span>{signal?.action ?? "No signal"}</span>
+      <span>Confidence {percent(signal?.confidence)}</span>
+      <span>1m return {percent(signal?.return_value)}</span>
+    </div>
+    <FactorSummary title="Strengths" items={strengths} empty="No strong positive factors." />
+    <FactorSummary title="Weaknesses" items={weaknesses} empty="No material weak factors." />
+    {missing.length ? <FactorSummary title="Missing" items={missing} empty="" /> : null}
+  </article>;
+}
+
+function FactorSummary({ title, items, empty }: { title: string; items: NonNullable<HoldingSignal["components"]>; empty: string }) {
+  return <div className="factor-summary"><strong>{title}</strong>{items.length ? items.slice(0, 3).map((item) => <span key={`${title}-${item.name}`}>{item.name}: {item.grade ?? "Incomplete"}</span>) : <span>{empty}</span>}</div>;
+}
+
+function shortFactor(name: string) {
+  return name.replace("Share price ", "Price ").replace("Institutional buying", "Inst. buying");
+}
+
+function actionClass(action: string | undefined) {
+  const normalized = action?.toLowerCase() ?? "";
+  if (normalized.includes("buy")) return "buy";
+  if (normalized.includes("sell")) return "sell";
+  return "hold";
 }
 
 function PortfolioPerformanceView({ performance, isLoading, chartType, compact = false }: { performance?: PortfolioPerformance; isLoading: boolean; chartType: ChartType; compact?: boolean }) {

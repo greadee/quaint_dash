@@ -3483,23 +3483,43 @@ class PortfolioApiService:
             raise ValueError("timeframe must be one of 1d, 1w, 1m, or 1y")
 
         items: list[HoldingSignalResponse] = []
+        ranking_timeframe = _holding_ranking_timeframe(timeframe)
         comparison = ComparisonApiService(self.conn)
         for position in self.list_positions():
             prices = comparison._prices(position.asset_id)
             return_value = _period_return(prices, period)
             latest_price = prices[0][1] if prices else position.latest_price
-            closes = [row[1] for row in reversed(prices)]
-            volatility = _realized_volatility_from_closes(closes)
-            profile = comparison.asset_profile(position.asset_id)
-            components = _holding_signal_components(
-                timeframe=timeframe,
-                return_value=return_value,
-                volatility=volatility,
-                valuation=profile.valuation,
+            ranking = self._stock_ranking_item(
+                {
+                    "asset_id": position.asset_id,
+                    "symbol": position.symbol,
+                    "name": position.name,
+                    "exchange_code": None,
+                    "currency": position.currency,
+                    "latest_price": _float_or_none(latest_price),
+                    "market_value": position.market_value,
+                    "is_tracked": True,
+                    "is_held": True,
+                    "is_watchlisted": False,
+                    "latest_price_date": prices[0][0] if prices else None,
+                    "catalog_only": False,
+                },
+                factor="aggregate",
+                timeframe=ranking_timeframe,
             )
-            available = [item.contribution for item in components if item.contribution is not None]
-            signal_score = sum(available) / len(available) if available else 0.0
-            confidence = len(available) / len(components) if components else 0.0
+            components = [
+                HoldingSignalComponent(
+                    name=component.name,
+                    metric=component.metric,
+                    value=component.value,
+                    contribution=component.score,
+                    score=component.score,
+                    grade=_score_grade(component.score) if component.available else None,
+                    available=component.available,
+                    detail=component.detail,
+                )
+                for component in ranking.components
+            ]
             items.append(
                 HoldingSignalResponse(
                     asset_id=position.asset_id,
@@ -3511,10 +3531,11 @@ class PortfolioApiService:
                     latest_price=_float_or_none(latest_price),
                     timeframe=timeframe,
                     return_value=return_value,
-                    signal_score=round(signal_score, 2),
-                    signal_strength=round(abs(signal_score), 2),
-                    action=_holding_signal_action(signal_score),
-                    confidence=round(confidence, 2),
+                    signal_score=ranking.score,
+                    signal_strength=ranking.score_strength,
+                    grade=_score_grade(ranking.score),
+                    action=ranking.action,
+                    confidence=ranking.confidence,
                     data_points=len(prices),
                     components=components,
                 )
@@ -3531,8 +3552,8 @@ class PortfolioApiService:
             timeframe=timeframe,
             methodology=(
                 f"Ranked by absolute buy/sell signal strength over {_SIGNAL_TIMEFRAME_LABELS[timeframe]}. "
-                "Score combines stored price momentum, valuation gaps from fundamentals where available, "
-                "and realized volatility as a risk modifier. Missing components reduce confidence."
+                "Grades use stored aggregate factor scores from price momentum, news sentiment, retail sentiment, "
+                "earnings momentum, and institutional buying inputs. Missing components reduce confidence."
             ),
             items=items,
         )
@@ -7672,6 +7693,29 @@ def _holding_signal_action(score: float) -> str:
     if score <= -25:
         return "Sell"
     return "Hold"
+
+
+def _holding_ranking_timeframe(timeframe: str) -> str:
+    return {
+        "1d": "daily",
+        "1w": "weekly",
+        "1m": "monthly",
+        "1y": "yearly",
+    }[timeframe]
+
+
+def _score_grade(score: float | None) -> str:
+    if score is None:
+        return "Incomplete"
+    if score >= 65:
+        return "A"
+    if score >= 25:
+        return "B"
+    if score >= -10:
+        return "C"
+    if score >= -45:
+        return "D"
+    return "F"
 
 
 def _relative_gap(value: float | None, comparison: float | None) -> float | None:

@@ -92,6 +92,22 @@ header strong { font-size: 14px; } .avatar { margin-left: auto; border-radius: 5
 .signal-row-actions { display: flex; justify-content: flex-end; }
 .signal-row-actions button { padding: 8px 10px; font-size: 12px; white-space: nowrap; }
 .signal-methodology { margin: 0; border-top: 1px solid #eaede8; padding: 12px 22px 18px; color: #68736f; font-size: 12px; line-height: 1.5; }
+.holding-kiviat-section { border-top: 1px solid #eaede8; margin-top: 10px; padding: 18px 20px 20px; }
+.kiviat-heading { padding: 0 0 14px; }
+.holding-kiviat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+.holding-kiviat-card { border: 1px solid #e4e7e2; border-radius: 8px; background: #fff; padding: 14px; display: grid; gap: 12px; min-width: 0; }
+.holding-kiviat-card.buy { border-color: #b7e4ca; }
+.holding-kiviat-card.sell { border-color: #fecaca; }
+.holding-kiviat-title { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
+.holding-kiviat-title div { display: grid; gap: 4px; min-width: 0; }
+.holding-kiviat-title strong { overflow-wrap: anywhere; }
+.holding-kiviat-title span, .holding-grade-strip span, .factor-summary span { color: #7b8583; font-size: 11px; line-height: 1.35; }
+.holding-kiviat-title b { width: 34px; height: 34px; border-radius: 8px; background: #182231; color: #fff; display: grid; place-items: center; font-size: 12px; flex: 0 0 auto; }
+.holding-kiviat-chart { height: 210px; min-width: 0; }
+.holding-grade-strip { display: flex; flex-wrap: wrap; gap: 7px; }
+.holding-grade-strip span { border: 1px solid #e4e7e2; border-radius: 999px; padding: 5px 8px; background: #fff; }
+.factor-summary { display: grid; gap: 5px; }
+.factor-summary strong { font-size: 11px; text-transform: uppercase; letter-spacing: .7px; color: #596460; }
 .signal-workbench { overflow: visible; }
 .signal-workbench-heading { align-items: start; }
 .signal-control-bar { border-top: 1px solid #eaede8; border-bottom: 1px solid #eaede8; padding: 14px 20px; display: grid; grid-template-columns: minmax(130px, 170px) minmax(130px, 170px) minmax(130px, 170px) 1fr; gap: 12px; align-items: end; }

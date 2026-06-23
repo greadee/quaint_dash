@@ -12,6 +12,7 @@ const apiMock = vi.hoisted(() => ({
   aggregatePositions: vi.fn(),
   portfolio: vi.fn(),
   positions: vi.fn(),
+  holdingSignals: vi.fn(),
   portfolioPerformance: vi.fn(),
   portfolioRisk: vi.fn(),
   portfolioFundamentals: vi.fn(),
@@ -29,6 +30,11 @@ vi.mock("recharts", () => {
     Line: passthrough,
     PieChart: passthrough,
     Pie: passthrough,
+    RadarChart: passthrough,
+    Radar: passthrough,
+    PolarGrid: passthrough,
+    PolarAngleAxis: passthrough,
+    PolarRadiusAxis: passthrough,
     Cell: passthrough,
     Tooltip: passthrough,
     XAxis: passthrough,
@@ -274,5 +280,123 @@ describe("PortfolioWorkspacePage", () => {
     await user.click(screen.getByRole("button", { name: "Pie" }));
 
     expect(screen.getByLabelText("Allocation pie chart")).toBeInTheDocument();
+  });
+
+  it("renders holding Kiviat factor diagrams from backend holding signals", async () => {
+    apiMock.portfolio.mockResolvedValue({
+      portfolio_id: 1,
+      name: "Core Growth",
+      base_ccy: "CAD",
+      market_value: 75000,
+      book_cost: 60000,
+      unrealized_gain: 15000,
+      position_count: 1,
+    });
+    apiMock.positions.mockResolvedValue([
+      {
+        asset_id: "NVDA",
+        symbol: "NVDA",
+        name: "NVIDIA",
+        sector: "Technology",
+        country: "US",
+        industry: "Semiconductors",
+        asset_type: "stock",
+        allocation_class: "Stock",
+        currency: "USD",
+        quantity: 10,
+        book_cost: 60000,
+        latest_price: 750,
+        market_value: 75000,
+        unrealized_gain: 15000,
+        total_return_percent: 0.25,
+        weight: 1,
+        broker_linked: false,
+        broker_account_count: 0,
+        stale_price: false,
+      },
+    ]);
+    apiMock.holdingSignals.mockResolvedValue({
+      timeframe: "1m",
+      methodology: "Grades use stored aggregate factor scores.",
+      items: [{
+        asset_id: "NVDA",
+        symbol: "NVDA",
+        name: "NVIDIA",
+        currency: "USD",
+        market_value: 75000,
+        weight: 1,
+        latest_price: 750,
+        timeframe: "1m",
+        return_value: 0.12,
+        signal_score: 42,
+        signal_strength: 42,
+        grade: "B",
+        action: "Buy",
+        confidence: 0.8,
+        data_points: 70,
+        components: [
+          { name: "Share price momentum", metric: "monthly return blend", value: 0.12, contribution: 72, score: 72, grade: "A", available: true, detail: "Stored price momentum." },
+          { name: "News sentiment", metric: "daily sentiment", value: -0.2, contribution: -22, score: -22, grade: "D", available: true, detail: "Stored news sentiment." },
+          { name: "Retail sentiment", metric: "daily sentiment", value: null, contribution: null, score: null, grade: null, available: false, detail: "Needs retail sentiment." },
+        ],
+      }],
+    });
+    apiMock.portfolioPerformance.mockResolvedValue({
+      portfolio_id: 1,
+      range: "1Y",
+      benchmark: null,
+      points: [],
+      observation_count: 0,
+      actual_twr_cagr: null,
+      benchmark_cagr: null,
+      excess_cagr: null,
+      coverage: 0,
+      missing_inputs: [],
+    });
+    apiMock.portfolioRisk.mockResolvedValue({
+      portfolio_id: 1,
+      risk_free_rate: 0,
+      annualized_return: null,
+      annualized_volatility: null,
+      sharpe_ratio: null,
+      sortino_ratio: null,
+      beta: null,
+      alpha: null,
+      correlation: null,
+      maximum_drawdown: null,
+      downside_deviation: null,
+      observation_count: 0,
+      effective_number_of_holdings: 1,
+      hhi: 1,
+      weight_balance_score: 1,
+      asset_class_concentration: {},
+      sector_concentration: {},
+      geographic_concentration: {},
+      currency_concentration: {},
+      missing_inputs: [],
+    });
+    apiMock.portfolioFundamentals.mockResolvedValue({
+      portfolio_id: 1,
+      base_currency: "CAD",
+      horizon_years: 5,
+      weighted_expected_cagr: { value: null, coverage: 0 },
+      pe_ratio: { value: null, coverage: 0 },
+      price_to_free_cash_flow: { value: null, coverage: 0 },
+      dividend_yield: { value: null, coverage: 0 },
+      margin_of_safety: { value: null, coverage: 0 },
+      holdings: [],
+      missing_inputs: [],
+    });
+
+    renderPortfolioDetail("/portfolios/1?tab=holdings");
+
+    expect(await screen.findByText("Holding grades")).toBeInTheDocument();
+    expect(screen.getByLabelText("NVDA factor Kiviat diagram")).toBeInTheDocument();
+    expect(screen.getByText("Strengths")).toBeInTheDocument();
+    expect(screen.getByText("Share price momentum: A")).toBeInTheDocument();
+    expect(screen.getByText("Weaknesses")).toBeInTheDocument();
+    expect(screen.getByText("News sentiment: D")).toBeInTheDocument();
+    expect(screen.getByText("Missing")).toBeInTheDocument();
+    expect(screen.getByText("Retail sentiment: Incomplete")).toBeInTheDocument();
   });
 });

@@ -379,6 +379,9 @@ class HoldingSignalComponent(BaseModel):
     metric: str
     value: float | None = None
     contribution: float | None = None
+    score: float | None = None
+    grade: str | None = None
+    available: bool = True
     detail: str
 
 
@@ -394,6 +397,7 @@ class HoldingSignalResponse(BaseModel):
     return_value: float | None
     signal_score: float
     signal_strength: float
+    grade: str
     action: str
     confidence: float
     data_points: int

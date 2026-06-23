@@ -299,6 +299,39 @@ export type StockRankingSnapshotRefreshResponse = {
   snapshot_date: string;
   refreshed_count: number;
 };
+export type HoldingSignalComponent = {
+  name: string;
+  metric: string;
+  value: number | null;
+  contribution: number | null;
+  score: number | null;
+  grade: string | null;
+  available: boolean;
+  detail: string;
+};
+export type HoldingSignal = {
+  asset_id: string;
+  symbol: string;
+  name: string | null;
+  currency: string;
+  market_value: number | null;
+  weight: number | null;
+  latest_price: number | null;
+  timeframe: string;
+  return_value: number | null;
+  signal_score: number;
+  signal_strength: number;
+  grade: string;
+  action: string;
+  confidence: number;
+  data_points: number;
+  components: HoldingSignalComponent[];
+};
+export type HoldingSignalsResponse = {
+  timeframe: string;
+  methodology: string;
+  items: HoldingSignal[];
+};
 export type WatchlistAssetResponse = {
   asset_id: string;
   symbol: string;
@@ -1143,6 +1176,7 @@ export const api = {
   portfolio: (id: number) => request<Portfolio>(`/portfolios/${id}`),
   positions: (id: number) => request<Position[]>(`/portfolios/${id}/positions`),
   aggregatePositions: () => request<Position[]>("/portfolios/aggregate/positions"),
+  holdingSignals: (timeframe = "1m") => request<HoldingSignalsResponse>(`/holdings/signals?timeframe=${timeframe}`),
   transactions: (id: number, limit = 8, offset = 0) =>
     request<Page<Transaction>>(`/portfolios/${id}/transactions?limit=${limit}&offset=${offset}`),
   aggregateTransactions: (limit = 8, offset = 0) =>

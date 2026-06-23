@@ -53,6 +53,7 @@ from dashboard.api.models import (
     IngestionRunRequest,
     IngestionScheduleRequest,
     MarketFreshnessStatusResponse,
+    HoldingSignalsResponse,
     OverviewUpdatesResponse,
     Page,
     PortfolioCreate,
@@ -194,6 +195,14 @@ def stock_rankings(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/holdings/signals", response_model=HoldingSignalsResponse)
+def holding_signals(
+    timeframe: str = Query(default="1m", pattern="^(1d|1w|1m|1y)$"),
+    conn=Depends(get_connection),
+):
+    return PortfolioApiService(conn).holding_signals(timeframe)
 
 
 @router.post("/rankings/stocks/snapshots", response_model=StockRankingSnapshotRefreshResponse)
