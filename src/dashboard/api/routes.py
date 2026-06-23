@@ -51,6 +51,7 @@ from dashboard.api.models import (
     IngestionRetryFailedRequest,
     IngestionRunRequest,
     IngestionScheduleRequest,
+    MarketFreshnessStatusResponse,
     OverviewUpdatesResponse,
     Page,
     PortfolioCreate,
@@ -765,6 +766,29 @@ async def ingestion_background_stop(request: Request):
 @router.post("/ingestion/background/tick", response_model=ActionResult)
 async def ingestion_background_tick(request: Request):
     result = await request.app.state.ingestion_background_worker.tick()
+    return ActionResult(result=result)
+
+
+@router.get("/market/freshness/status", response_model=MarketFreshnessStatusResponse)
+def market_freshness_status(request: Request):
+    return request.app.state.market_freshness_worker.status()
+
+
+@router.post("/market/freshness/start", response_model=ActionResult)
+async def market_freshness_start(request: Request):
+    request.app.state.market_freshness_worker.enable()
+    return ActionResult(result=request.app.state.market_freshness_worker.status())
+
+
+@router.post("/market/freshness/stop", response_model=ActionResult)
+async def market_freshness_stop(request: Request):
+    await request.app.state.market_freshness_worker.disable()
+    return ActionResult(result=request.app.state.market_freshness_worker.status())
+
+
+@router.post("/market/freshness/tick", response_model=ActionResult)
+async def market_freshness_tick(request: Request):
+    result = await request.app.state.market_freshness_worker.tick()
     return ActionResult(result=result)
 
 

@@ -7,10 +7,12 @@ import { money, percent } from "./routeFormatters";
 import { EmptyRow, Loading, Metric } from "./routeShared";
 import type { MoverDefault } from "./routeTypes";
 
+const MARKET_REFRESH_REFETCH_MS = 60_000;
+
 export function OverviewPage({ moverDefault }: { moverDefault: MoverDefault }) {
   const [showAllMovers, setShowAllMovers] = useState(moverDefault === "all");
-  const updates = useQuery({ queryKey: ["overview-updates"], queryFn: api.overviewUpdates });
-  const portfolios = useQuery({ queryKey: ["portfolios"], queryFn: api.portfolios });
+  const updates = useQuery({ queryKey: ["overview-updates"], queryFn: api.overviewUpdates, refetchInterval: MARKET_REFRESH_REFETCH_MS });
+  const portfolios = useQuery({ queryKey: ["portfolios"], queryFn: api.portfolios, refetchInterval: MARKET_REFRESH_REFETCH_MS });
   const brokers = useQuery({ queryKey: ["broker-accounts"], queryFn: api.brokerAccounts });
   const jobs = useQuery({ queryKey: ["jobs", "failed", ""], queryFn: () => api.ingestionJobs("failed") });
   const portfolioCount = portfolios.data?.length ?? 0;

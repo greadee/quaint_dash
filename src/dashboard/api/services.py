@@ -1460,6 +1460,10 @@ class PortfolioApiService:
                 WHERE close IS NOT NULL
                 QUALIFY ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY date DESC) = 1
             ),
+            current_prices AS (
+                SELECT asset_id, price
+                FROM current_asset_price
+            ),
             latest_broker_positions AS (
                 SELECT
                     provider,
@@ -1492,12 +1496,13 @@ class PortfolioApiService:
                     COUNT(*) FILTER (WHERE h.quantity <> 0) AS position_count,
                     COALESCE(SUM(h.book_cost) FILTER (WHERE h.quantity <> 0), 0) AS book_cost,
                     COALESCE(
-                        SUM(COALESCE(h.quantity * bp.price, h.quantity * lp.price, h.book_cost))
+                        SUM(COALESCE(h.quantity * bp.price, h.quantity * cp.price, h.quantity * lp.price, h.book_cost))
                             FILTER (WHERE h.quantity <> 0),
                         0
                     ) AS market_value
                 FROM holdings h
                 LEFT JOIN latest_prices lp ON lp.asset_id = h.asset_id
+                LEFT JOIN current_prices cp ON cp.asset_id = h.asset_id
                 LEFT JOIN broker_prices bp
                   ON bp.portfolio_id = h.portfolio_id
                  AND bp.asset_id = h.asset_id
@@ -1745,6 +1750,10 @@ class PortfolioApiService:
                 WHERE close IS NOT NULL
                 QUALIFY ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY date DESC) = 1
             ),
+            current_prices AS (
+                SELECT asset_id, price, provider, market_session, updated_at
+                FROM current_asset_price
+            ),
             latest_broker_positions AS (
                 SELECT
                     provider,
@@ -1792,12 +1801,16 @@ class PortfolioApiService:
                 END AS country,
                 a.ccy,
                 COALESCE(bl.broker_account_count, 0) AS broker_account_count,
-                COALESCE(bp.price, lp.price) AS price,
-                COALESCE(h.quantity * bp.price, h.quantity * lp.price, h.book_cost) AS market_value
+                COALESCE(bp.price, cp.price, lp.price) AS price,
+                COALESCE(h.quantity * bp.price, h.quantity * cp.price, h.quantity * lp.price, h.book_cost) AS market_value,
+                cp.provider AS live_price_provider,
+                cp.market_session AS live_price_session,
+                cp.updated_at AS live_price_updated_at
                 FROM holdings h
                 JOIN asset a ON a.asset_id = h.asset_id
                 {_ENRICHED_ASSET_JOIN}
                 LEFT JOIN latest_prices lp ON lp.asset_id = h.asset_id
+                LEFT JOIN current_prices cp ON cp.asset_id = h.asset_id
                 LEFT JOIN broker_prices bp ON bp.asset_id = h.asset_id
                 LEFT JOIN broker_links bl ON bl.asset_id = h.asset_id
             )
@@ -1820,7 +1833,10 @@ class PortfolioApiService:
                 CASE
                     WHEN SUM(market_value) OVER () = 0 THEN NULL
                     ELSE market_value / SUM(market_value) OVER ()
-                END
+                END,
+                live_price_provider,
+                live_price_session,
+                live_price_updated_at
             FROM valued
             ORDER BY market_value DESC NULLS LAST, asset_id
             """,
@@ -1880,6 +1896,11 @@ class PortfolioApiService:
             industry_exposure=exposure_maps["industry"],
             country_exposure=exposure_maps["country"],
             currency_exposure=exposure_maps["currency"],
+            price_source=row[16] or ("broker" if int(row[9]) > 0 else "asset_quote_daily"),
+            price_session=row[17],
+            price_timestamp=row[18],
+            stale_price=row[12] is None,
+            stale_reason=None if row[12] is not None else "no usable price",
         )
 
     def _position_exposure_maps(self, asset_id: str) -> dict[str, dict[str, float]]:
@@ -1953,6 +1974,10 @@ class PortfolioApiService:
                 WHERE close IS NOT NULL
                 QUALIFY ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY date DESC) = 1
             ),
+            current_prices AS (
+                SELECT asset_id, price
+                FROM current_asset_price
+            ),
             latest_broker_positions AS (
                 SELECT
                     provider,
@@ -2004,12 +2029,13 @@ class PortfolioApiService:
                     END AS country,
                     a.ccy,
                     COALESCE(bl.broker_account_count, 0) AS broker_account_count,
-                    COALESCE(bp.price, lp.price) AS price,
-                    COALESCE(h.quantity * bp.price, h.quantity * lp.price, h.book_cost) AS market_value
+                    COALESCE(bp.price, cp.price, lp.price) AS price,
+                    COALESCE(h.quantity * bp.price, h.quantity * cp.price, h.quantity * lp.price, h.book_cost) AS market_value
                 FROM holdings h
                 JOIN asset a ON a.asset_id = h.asset_id
                 {_ENRICHED_ASSET_JOIN}
                 LEFT JOIN latest_prices lp ON lp.asset_id = h.asset_id
+                LEFT JOIN current_prices cp ON cp.asset_id = h.asset_id
                 LEFT JOIN broker_prices bp
                   ON bp.portfolio_id = h.portfolio_id
                  AND bp.asset_id = h.asset_id
@@ -4517,11 +4543,16 @@ class AssetApiService:
             SELECT
                 {_ENRICHED_ASSET_SELECT},
                 (
-                    SELECT COALESCE(q.adj_close, q.close)
-                    FROM asset_quote_daily q
-                    WHERE q.asset_id = a.asset_id
-                    ORDER BY q.date DESC
-                    LIMIT 1
+                    SELECT COALESCE(
+                        (SELECT cp.price FROM current_asset_price cp WHERE cp.asset_id = a.asset_id),
+                        (
+                            SELECT COALESCE(q.adj_close, q.close)
+                            FROM asset_quote_daily q
+                            WHERE q.asset_id = a.asset_id
+                            ORDER BY q.date DESC
+                            LIMIT 1
+                        )
+                    )
                 )
             FROM asset a
             {_ENRICHED_ASSET_JOIN}
@@ -4566,11 +4597,16 @@ class AssetApiService:
             SELECT
                 {_ENRICHED_ASSET_SELECT},
                 (
-                    SELECT COALESCE(q.adj_close, q.close)
-                    FROM asset_quote_daily q
-                    WHERE q.asset_id = a.asset_id
-                    ORDER BY q.date DESC
-                    LIMIT 1
+                    SELECT COALESCE(
+                        (SELECT cp.price FROM current_asset_price cp WHERE cp.asset_id = a.asset_id),
+                        (
+                            SELECT COALESCE(q.adj_close, q.close)
+                            FROM asset_quote_daily q
+                            WHERE q.asset_id = a.asset_id
+                            ORDER BY q.date DESC
+                            LIMIT 1
+                        )
+                    )
                 )
             FROM asset a
             {_ENRICHED_ASSET_JOIN}

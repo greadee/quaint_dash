@@ -149,7 +149,7 @@ class TickerUniverseRepository:
             scopes.append(("watchlist", self.watchlist_asset_ids()))
 
         for scope, asset_ids in scopes:
-            for asset_id, symbol, exchange_code in self._asset_symbol_rows(asset_ids):
+            for asset_id, symbol, exchange_code, asset_subtype, name, description in self._asset_symbol_rows(asset_ids):
                 subscriptions.setdefault(
                     symbol,
                     TickerSubscription(
@@ -159,6 +159,23 @@ class TickerUniverseRepository:
                         source_scope=scope,
                     ),
                 )
+                underlying = _cdr_underlying_symbol(
+                    asset_id=asset_id,
+                    symbol=symbol,
+                    asset_subtype=asset_subtype,
+                    name=name,
+                    description=description,
+                )
+                if underlying and underlying != symbol:
+                    subscriptions.setdefault(
+                        underlying,
+                        TickerSubscription(
+                            asset_id=underlying,
+                            symbol=underlying,
+                            exchange_code=None,
+                            source_scope=f"{scope}_underlying",
+                        ),
+                    )
 
         return sorted(subscriptions.values(), key=lambda item: item.symbol)
 
@@ -225,17 +242,29 @@ class TickerUniverseRepository:
         ).fetchall()
         return [row[0] for row in rows]
 
-    def _asset_symbol_rows(self, asset_ids: list[str]) -> list[tuple[str, str, str | None]]:
+    def _asset_symbol_rows(
+        self,
+        asset_ids: list[str],
+    ) -> list[tuple[str, str, str | None, str | None, str | None, str | None]]:
         if not asset_ids:
             return []
 
         placeholders = ", ".join("?" for _ in asset_ids)
         symbol_expr = "COALESCE(symbol, asset_id)" if self._has_column("asset", "symbol") else "asset_id"
         exchange_expr = "exchange_code" if self._has_column("asset", "exchange_code") else "NULL"
+        subtype_expr = "asset_subtype" if self._has_column("asset", "asset_subtype") else "NULL"
+        name_expr = "name" if self._has_column("asset", "name") else "NULL"
+        description_expr = "description" if self._has_column("asset", "description") else "NULL"
 
         rows = self.conn.execute(
             f"""
-            SELECT asset_id, {symbol_expr} AS symbol, {exchange_expr} AS exchange_code
+            SELECT
+                asset_id,
+                {symbol_expr} AS symbol,
+                {exchange_expr} AS exchange_code,
+                {subtype_expr} AS asset_subtype,
+                {name_expr} AS name,
+                {description_expr} AS description
             FROM asset
             WHERE asset_id IN ({placeholders})
             ORDER BY symbol
@@ -243,7 +272,7 @@ class TickerUniverseRepository:
             asset_ids,
         ).fetchall()
 
-        return [(row[0], row[1], row[2]) for row in rows]
+        return [(row[0], row[1], row[2], row[3], row[4], row[5]) for row in rows]
 
     def _quantity_column(self) -> str | None:
         if self._has_column("position", "qty"):
@@ -269,3 +298,27 @@ class TickerUniverseRepository:
 
         rows = self.conn.execute(f"PRAGMA table_info('{table_name}')").fetchall()
         return any(row[1] == column_name for row in rows)
+
+
+_CDR_SYMBOL_ALIASES = {
+    "NOWS": "NOW",
+}
+
+
+def _cdr_underlying_symbol(
+    *,
+    asset_id: str,
+    symbol: str,
+    asset_subtype: str | None,
+    name: str | None,
+    description: str | None,
+) -> str | None:
+    text = " ".join(
+        str(value or "")
+        for value in (asset_id, symbol, asset_subtype, name, description)
+    ).lower()
+    if "cdr" not in text and "depositary receipt" not in text and "depository receipt" not in text:
+        return None
+
+    base = (symbol or asset_id).split(".", maxsplit=1)[0].upper()
+    return _CDR_SYMBOL_ALIASES.get(base, base) or None

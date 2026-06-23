@@ -918,13 +918,27 @@ export type IngestionBackgroundStatus = {
   last_schedule_count: number | null;
   last_run_at: string | null;
   last_completed_count: number | null;
+  last_pending_count: number | null;
   last_error: string | null;
   schedule_interval_seconds: number;
   run_interval_seconds: number;
   max_jobs_per_tick: number;
+  max_run_batches_per_tick: number;
   max_assets_per_schedule: number;
   years: number;
   prices_only: boolean;
+};
+export type MarketFreshnessStatus = {
+  enabled: boolean;
+  running: boolean;
+  last_poll_at: string | null;
+  last_refreshed_count: number | null;
+  last_subscription_count: number | null;
+  last_error: string | null;
+  poll_interval_seconds: number;
+  lookback_days: number;
+  max_symbols_per_tick: number;
+  include_watchlist: boolean;
 };
 export type IngestionRequirementStatus = {
   key: string;
@@ -1228,6 +1242,10 @@ export const api = {
   startIngestionBackground: () => request<ActionResult>("/ingestion/background/start", { method: "POST" }),
   stopIngestionBackground: () => request<ActionResult>("/ingestion/background/stop", { method: "POST" }),
   tickIngestionBackground: () => request<ActionResult>("/ingestion/background/tick", { method: "POST" }),
+  marketFreshnessStatus: () => request<MarketFreshnessStatus>("/market/freshness/status"),
+  startMarketFreshness: () => request<ActionResult>("/market/freshness/start", { method: "POST" }),
+  stopMarketFreshness: () => request<ActionResult>("/market/freshness/stop", { method: "POST" }),
+  tickMarketFreshness: () => request<ActionResult>("/market/freshness/tick", { method: "POST" }),
   ingestionReadiness: () => request<IngestionReadiness>("/ingestion/readiness"),
   rankingReadiness: (params: { universe: string; limit?: number }) => {
     const query = new URLSearchParams({

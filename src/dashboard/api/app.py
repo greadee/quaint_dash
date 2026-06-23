@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from dashboard.api.broker_background import BrokerBackgroundConfig, BrokerBackgroundWorker
 from dashboard.api.dependencies import get_connection
 from dashboard.api.ingestion_background import IngestionBackgroundConfig, IngestionBackgroundWorker
+from dashboard.api.market_freshness_background import MarketFreshnessConfig, MarketFreshnessWorker
 from dashboard.api.models import ErrorResponse, HealthResponse
 from dashboard.api.routes import router
 from dashboard.brokers.snaptrade import SnapTradeError
@@ -45,13 +46,16 @@ def create_app(
         except Exception as exc:
             LOGGER.warning("Broker sync scheduler skipped during API startup: %s", exc)
         worker = app.state.ingestion_background_worker
+        market_worker = app.state.market_freshness_worker
         broker_worker = app.state.broker_background_worker
         worker.start()
+        market_worker.start()
         broker_worker.start()
         try:
             yield
         finally:
             await broker_worker.stop()
+            await market_worker.stop()
             await worker.stop()
 
     app = FastAPI(
@@ -68,6 +72,11 @@ def create_app(
         resolved_db_path,
         app.state.write_lock,
         IngestionBackgroundConfig.from_env(),
+    )
+    app.state.market_freshness_worker = MarketFreshnessWorker(
+        resolved_db_path,
+        app.state.write_lock,
+        MarketFreshnessConfig.from_env(),
     )
     app.state.broker_background_worker = BrokerBackgroundWorker(
         resolved_db_path,

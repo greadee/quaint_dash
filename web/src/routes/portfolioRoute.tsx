@@ -36,13 +36,14 @@ const exposureTabs: { value: ExposureDimension; label: string }[] = [
   { value: "currency", label: "Currency" },
 ];
 const pieColors = ["#245c4f", "#7b6f5c", "#486b8f", "#9a6b54", "#6b7c45", "#8b5f79", "#587072", "#b18b3a"];
+const MARKET_REFRESH_REFETCH_MS = 60_000;
 export function PortfolioWorkspacePage() {
   const [params, setParams] = useSearchParams();
   const selected = (params.get("tab") as PortfolioTopTab | null) ?? "aggregate";
   const gainView = ((params.get("gain") as GainView | null) ?? "total") === "unrealized" ? "unrealized" : "total";
-  const portfolios = useQuery({ queryKey: ["portfolios"], queryFn: api.portfolios });
-  const aggregate = useQuery({ queryKey: ["portfolio-aggregate"], queryFn: api.aggregatePortfolio, enabled: Boolean(portfolios.data?.length) });
-  const positions = useQuery({ queryKey: ["positions", "all"], queryFn: api.aggregatePositions, enabled: selected === "aggregate" });
+  const portfolios = useQuery({ queryKey: ["portfolios"], queryFn: api.portfolios, refetchInterval: MARKET_REFRESH_REFETCH_MS });
+  const aggregate = useQuery({ queryKey: ["portfolio-aggregate"], queryFn: api.aggregatePortfolio, enabled: Boolean(portfolios.data?.length), refetchInterval: MARKET_REFRESH_REFETCH_MS });
+  const positions = useQuery({ queryKey: ["positions", "all"], queryFn: api.aggregatePositions, enabled: selected === "aggregate", refetchInterval: MARKET_REFRESH_REFETCH_MS });
   const firstPortfolioId = portfolios.data?.[0]?.portfolio_id;
   const fundamentals = useQuery({ queryKey: ["portfolio-fundamentals", firstPortfolioId], queryFn: () => api.portfolioFundamentals(firstPortfolioId!), enabled: selected === "fundamentals" && Boolean(firstPortfolioId) });
   const setTab = (tab: PortfolioTopTab) => setParams((current) => { const next = new URLSearchParams(current); next.set("tab", tab); return next; });
@@ -135,8 +136,8 @@ export function PortfolioDetailPage() {
   const chartType = ((params.get("chart") as ChartType | null) ?? "line") === "bar" ? "bar" : "line";
   const benchmark = params.get("benchmark") ?? "";
   const setParam = (key: string, value: string) => setParams((current) => { const next = new URLSearchParams(current); if (value) next.set(key, value); else next.delete(key); return next; });
-  const portfolio = useQuery({ queryKey: ["portfolio", id], queryFn: () => api.portfolio(id), enabled: Number.isFinite(id) });
-  const positions = useQuery({ queryKey: ["positions", id], queryFn: () => api.positions(id), enabled: Number.isFinite(id) });
+  const portfolio = useQuery({ queryKey: ["portfolio", id], queryFn: () => api.portfolio(id), enabled: Number.isFinite(id), refetchInterval: MARKET_REFRESH_REFETCH_MS });
+  const positions = useQuery({ queryKey: ["positions", id], queryFn: () => api.positions(id), enabled: Number.isFinite(id), refetchInterval: MARKET_REFRESH_REFETCH_MS });
   const performance = useQuery({ queryKey: ["portfolio-performance", id, benchmark, range], queryFn: () => api.portfolioPerformance(id, { benchmark: benchmark || undefined, range }), enabled: Number.isFinite(id) });
   const risk = useQuery({ queryKey: ["portfolio-risk", id, benchmark, range], queryFn: () => api.portfolioRisk(id, { benchmark: benchmark || undefined, lookback: range }), enabled: Number.isFinite(id) });
   const fundamentals = useQuery({ queryKey: ["portfolio-fundamentals", id, 5], queryFn: () => api.portfolioFundamentals(id, 5), enabled: Number.isFinite(id) });

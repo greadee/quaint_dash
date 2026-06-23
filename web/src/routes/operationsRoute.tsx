@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, Trash2 } from "lucide-react";
-import { api, type IngestionBackgroundStatus, type IngestionReadiness, type StockRankingReadiness } from "../api";
+import { api, type IngestionBackgroundStatus, type IngestionReadiness, type MarketFreshnessStatus, type StockRankingReadiness } from "../api";
 import { boundedInt, dateRange, formatActionResult, formatCount, formatDuration, formatTimestamp } from "./routeFormatters";
 import { EmptyRow, ErrorPanel, HelpDisclosure, Loading, Signal } from "./routeShared";
 import type { HelpItem } from "./routeTypes";
@@ -33,8 +33,17 @@ const ingestionHelp: HelpItem[] = [
 function backgroundStatusDetail(status: IngestionBackgroundStatus): string {
   const schedule = `Scheduled ${formatTimestamp(status.last_schedule_at)}`;
   const run = `ran ${formatTimestamp(status.last_run_at)}`;
+  const pending = status.last_pending_count === null ? "pending unknown" : `${status.last_pending_count} pending`;
   const scope = `${status.max_assets_per_schedule} assets, ${status.years} years, ${status.prices_only ? "prices only" : "prices/dividends/splits"}`;
-  return `${schedule}; ${run}. Scope: ${scope}.`;
+  const drain = `${status.max_run_batches_per_tick} batches, ${status.max_jobs_per_tick} jobs each, ${pending}`;
+  return `${schedule}; ${run}. Drain: ${drain}. Scope: ${scope}.`;
+}
+
+function marketFreshnessStatusDetail(status: MarketFreshnessStatus): string {
+  const lastPoll = `Polled ${formatTimestamp(status.last_poll_at)}`;
+  const coverage = `${formatCount(status.last_refreshed_count, "symbol")} refreshed from ${formatCount(status.last_subscription_count, "subscription")}`;
+  const scope = `${status.max_symbols_per_tick} symbols, ${status.lookback_days} day lookback${status.include_watchlist ? ", watchlist included" : ""}`;
+  return `${lastPoll}. ${coverage}. Scope: ${scope}.`;
 }
 
 export function OperationsPage() {
@@ -74,6 +83,11 @@ export function OperationsPage() {
   const background = useQuery({
     queryKey: ["ingestion-background-status"],
     queryFn: api.ingestionBackgroundStatus,
+    refetchInterval: 10000,
+  });
+  const marketFreshness = useQuery({
+    queryKey: ["market-freshness-status"],
+    queryFn: api.marketFreshnessStatus,
     refetchInterval: 10000,
   });
   const readiness = useQuery({
@@ -162,8 +176,32 @@ export function OperationsPage() {
       client.invalidateQueries({ queryKey: ["ranking-readiness"] });
     },
   });
-  const isBusy = schedule.isPending || run.isPending || retry.isPending || clearHistory.isPending || startBackground.isPending || stopBackground.isPending || tickBackground.isPending;
-  const actionError = schedule.error ?? run.error ?? retry.error ?? clearHistory.error ?? startBackground.error ?? stopBackground.error ?? tickBackground.error;
+  const startMarketFreshness = useMutation({
+    mutationFn: api.startMarketFreshness,
+    onSuccess: () => {
+      setMessage("Market freshness worker started.");
+      client.invalidateQueries({ queryKey: ["market-freshness-status"] });
+    },
+  });
+  const stopMarketFreshness = useMutation({
+    mutationFn: api.stopMarketFreshness,
+    onSuccess: () => {
+      setMessage("Market freshness worker stopped.");
+      client.invalidateQueries({ queryKey: ["market-freshness-status"] });
+    },
+  });
+  const tickMarketFreshness = useMutation({
+    mutationFn: api.tickMarketFreshness,
+    onSuccess: (result) => {
+      setMessage(`Market freshness cycle finished: ${formatActionResult(result.result)}`);
+      client.invalidateQueries({ queryKey: ["market-freshness-status"] });
+      client.invalidateQueries({ queryKey: ["jobs"] });
+      client.invalidateQueries({ queryKey: ["ingestion-readiness"] });
+      client.invalidateQueries({ queryKey: ["ranking-readiness"] });
+    },
+  });
+  const isBusy = schedule.isPending || run.isPending || retry.isPending || clearHistory.isPending || startBackground.isPending || stopBackground.isPending || tickBackground.isPending || startMarketFreshness.isPending || stopMarketFreshness.isPending || tickMarketFreshness.isPending;
+  const actionError = schedule.error ?? run.error ?? retry.error ?? clearHistory.error ?? startBackground.error ?? stopBackground.error ?? tickBackground.error ?? startMarketFreshness.error ?? stopMarketFreshness.error ?? tickMarketFreshness.error;
   const scheduleAsset = (selectedAssetId: string) => {
     setPipeline("all");
     setAssetId(selectedAssetId);
@@ -183,8 +221,9 @@ export function OperationsPage() {
       staleOnly: true,
     });
   };
-  return <div className="page"><div className="page-title"><div><p className="eyebrow">Data health</p><h1>Operations</h1><p className="page-subtitle">Background due work keeps routine data moving. Manual controls remain here for backfills, retries, provider-sensitive refreshes, and explicit runs.</p></div><div className="actions"><button onClick={() => { jobs.refetch(); background.refetch(); readiness.refetch(); rankingReadiness.refetch(); }} disabled={jobs.isFetching || background.isFetching || readiness.isFetching || rankingReadiness.isFetching}><RefreshCw size={17}/>Refresh</button><button className="danger" onClick={() => window.confirm("Clear ingestion job history and sync status rows? Market data and broker connections will stay intact.") && clearHistory.mutate()} disabled={isBusy}><Trash2 size={17}/>Clear history</button><button className="primary" onClick={() => window.confirm("Run pending ingestion jobs with these options?") && run.mutate()} disabled={isBusy}><RefreshCw size={17}/>Run jobs</button></div></div>
+  return <div className="page"><div className="page-title"><div><p className="eyebrow">Data health</p><h1>Operations</h1><p className="page-subtitle">Background due work keeps routine data moving. Manual controls remain here for backfills, retries, provider-sensitive refreshes, and explicit runs.</p></div><div className="actions"><button onClick={() => { jobs.refetch(); background.refetch(); marketFreshness.refetch(); readiness.refetch(); rankingReadiness.refetch(); }} disabled={jobs.isFetching || background.isFetching || marketFreshness.isFetching || readiness.isFetching || rankingReadiness.isFetching}><RefreshCw size={17}/>Refresh</button><button className="danger" onClick={() => window.confirm("Clear ingestion job history and sync status rows? Market data and broker connections will stay intact.") && clearHistory.mutate()} disabled={isBusy}><Trash2 size={17}/>Clear history</button><button className="primary" onClick={() => window.confirm("Run pending ingestion jobs with these options?") && run.mutate()} disabled={isBusy}><RefreshCw size={17}/>Run jobs</button></div></div>
     <IngestionBackgroundCard status={background.data} isLoading={background.isLoading} error={background.error} onStart={() => startBackground.mutate()} onStop={() => stopBackground.mutate()} onTick={() => tickBackground.mutate()} isBusy={isBusy} />
+    <MarketFreshnessCard status={marketFreshness.data} isLoading={marketFreshness.isLoading} error={marketFreshness.error} onStart={() => startMarketFreshness.mutate()} onStop={() => stopMarketFreshness.mutate()} onTick={() => tickMarketFreshness.mutate()} isBusy={isBusy} />
     <IngestionReadinessCard readiness={readiness.data} isLoading={readiness.isLoading} error={readiness.error} onScheduleAsset={scheduleAsset} isBusy={isBusy} />
     <RankingReadinessCard readiness={rankingReadiness.data} isLoading={rankingReadiness.isLoading} error={rankingReadiness.error} onScheduleAsset={scheduleRankingAsset} isBusy={isBusy} />
     <section className="card operations-control">
@@ -273,7 +312,8 @@ function IngestionBackgroundCard({
         <Signal label="Last scheduled" value={isLoading ? "Loading" : formatCount(status?.last_schedule_count, "job")} />
         <Signal label="Last completed" value={isLoading ? "Loading" : formatCount(status?.last_completed_count, "job")} />
         <Signal label="Schedule cadence" value={status ? formatDuration(status.schedule_interval_seconds) : "Unavailable"} />
-        <Signal label="Run cadence" value={status ? `${formatDuration(status.run_interval_seconds)} / ${status.max_jobs_per_tick} job cap` : "Unavailable"} />
+        <Signal label="Run cadence" value={status ? `${formatDuration(status.run_interval_seconds)} / ${status.max_run_batches_per_tick} batches` : "Unavailable"} />
+        <Signal label="Pending jobs" value={isLoading ? "Loading" : formatCount(status?.last_pending_count, "job")} />
         <div className="background-actions">
           <button className={status?.enabled ? "" : "primary"} onClick={() => window.confirm("Start the routine ingestion worker for this API session? It will schedule due work and run bounded batches in the background.") && onStart()} disabled={isBusy || isLoading || status?.enabled}>Start worker</button>
           <button onClick={() => window.confirm("Stop the routine ingestion worker? Manual controls will still work.") && onStop()} disabled={isBusy || isLoading || !status?.enabled}>Stop worker</button>
@@ -282,6 +322,50 @@ function IngestionBackgroundCard({
         <div className="background-status-note">
           <strong>{status?.enabled ? "Routine maintenance is configured." : "Routine maintenance is off."}</strong>
           <span>{status ? backgroundStatusDetail(status) : "Status has not loaded yet."}</span>
+          {status?.last_error ? <em>{status.last_error}</em> : null}
+        </div>
+      </div>
+    )}
+  </section>;
+}
+
+function MarketFreshnessCard({
+  status,
+  isLoading,
+  error,
+  onStart,
+  onStop,
+  onTick,
+  isBusy,
+}: {
+  status?: MarketFreshnessStatus;
+  isLoading: boolean;
+  error: Error | null;
+  onStart: () => void;
+  onStop: () => void;
+  onTick: () => void;
+  isBusy: boolean;
+}) {
+  const stateLabel = status?.enabled ? (status.running ? "running" : "enabled") : "disabled";
+  return <section className="card operations-background">
+    <div className="card-heading">
+      <div><p className="eyebrow">Market freshness</p><h2>Holding price worker</h2></div>
+      <div className="card-tools"><span className={`pill ${status?.running ? "running" : status?.enabled ? "done" : ""}`}>{isLoading ? "loading" : stateLabel}</span></div>
+    </div>
+    {error ? <ErrorPanel error={error} /> : (
+      <div className="background-status-grid">
+        <Signal label="Last refreshed" value={isLoading ? "Loading" : formatCount(status?.last_refreshed_count, "symbol")} />
+        <Signal label="Subscriptions" value={isLoading ? "Loading" : formatCount(status?.last_subscription_count, "symbol")} />
+        <Signal label="Poll cadence" value={status ? formatDuration(status.poll_interval_seconds) : "Unavailable"} />
+        <Signal label="Symbol cap" value={status ? formatCount(status.max_symbols_per_tick, "symbol") : "Unavailable"} />
+        <div className="background-actions">
+          <button className={status?.enabled ? "" : "primary"} onClick={() => window.confirm("Start the market freshness worker for this API session? It refreshes current prices for tracked holdings in the background.") && onStart()} disabled={isBusy || isLoading || status?.enabled}>Start worker</button>
+          <button onClick={() => window.confirm("Stop the market freshness worker? Stored prices will remain available.") && onStop()} disabled={isBusy || isLoading || !status?.enabled}>Stop worker</button>
+          <button onClick={() => window.confirm("Run one market freshness cycle now?") && onTick()} disabled={isBusy || isLoading}><RefreshCw size={17}/>Refresh prices</button>
+        </div>
+        <div className="background-status-note">
+          <strong>{status?.enabled ? "Holding prices are being refreshed." : "Holding price refresh is off."}</strong>
+          <span>{status ? marketFreshnessStatusDetail(status) : "Status has not loaded yet."}</span>
           {status?.last_error ? <em>{status.last_error}</em> : null}
         </div>
       </div>

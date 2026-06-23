@@ -166,6 +166,53 @@ def test_stream_subscriptions_fallback_to_asset_id_when_symbol_is_null():
     assert subscriptions[0].symbol == "MSFT"
 
 
+def test_stream_subscriptions_include_cdr_and_underlying_when_cdr_is_held():
+    conn = make_new_universe_conn()
+    conn.execute("ALTER TABLE asset ADD COLUMN asset_subtype TEXT")
+    conn.execute("ALTER TABLE asset ADD COLUMN name TEXT")
+    conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, exchange_code, asset_type, asset_subtype, name, track)
+        VALUES ('AMD.TO', 'AMD.TO', 'XTSE', 'stock', 'cdr', 'Advanced Micro Devices CDR', TRUE)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'AMD.TO', TRUE, 'position')
+        """
+    )
+
+    subscriptions = TickerUniverseRepository(conn).stream_subscriptions()
+
+    assert [(item.symbol, item.asset_id, item.source_scope) for item in subscriptions] == [
+        ("AMD", "AMD", "portfolio_underlying"),
+        ("AMD.TO", "AMD.TO", "portfolio"),
+    ]
+
+
+def test_stream_subscriptions_do_not_duplicate_underlying_when_it_is_held_directly():
+    conn = make_new_universe_conn()
+    conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, exchange_code, asset_type, track)
+        VALUES ('AMD', 'AMD', 'XNAS', 'stock', TRUE)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'AMD', TRUE, 'position')
+        """
+    )
+
+    subscriptions = TickerUniverseRepository(conn).stream_subscriptions()
+
+    assert [(item.symbol, item.asset_id, item.source_scope) for item in subscriptions] == [
+        ("AMD", "AMD", "portfolio"),
+    ]
+
+
 def test_sync_portfolio_tickers_from_positions_handles_qty_and_ignores_zero_positions():
     conn = make_new_universe_conn()
     conn.execute(

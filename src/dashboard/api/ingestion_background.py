@@ -18,22 +18,25 @@ LOGGER = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class IngestionBackgroundConfig:
-    enabled: bool = False
-    schedule_interval_seconds: int = 3600
-    run_interval_seconds: int = 300
-    max_jobs_per_tick: int = 2
-    max_assets_per_schedule: int = 25
+    enabled: bool = True
+    schedule_interval_seconds: int = 900
+    run_interval_seconds: int = 30
+    max_jobs_per_tick: int = 10
+    max_run_batches_per_tick: int = 6
+    max_assets_per_schedule: int = 50
     years: int = 10
     prices_only: bool = False
 
     @classmethod
     def from_env(cls) -> "IngestionBackgroundConfig":
+        default_enabled = not _running_under_pytest()
         return cls(
-            enabled=_truthy_env("INGESTION_BACKGROUND_ENABLED", default=False),
-            schedule_interval_seconds=_int_env("INGESTION_BACKGROUND_SCHEDULE_INTERVAL_SECONDS", 3600),
-            run_interval_seconds=_int_env("INGESTION_BACKGROUND_RUN_INTERVAL_SECONDS", 300),
-            max_jobs_per_tick=_int_env("INGESTION_BACKGROUND_MAX_JOBS_PER_TICK", 2),
-            max_assets_per_schedule=_int_env("INGESTION_BACKGROUND_MAX_ASSETS_PER_SCHEDULE", 25),
+            enabled=_truthy_env("INGESTION_BACKGROUND_ENABLED", default=default_enabled),
+            schedule_interval_seconds=_int_env("INGESTION_BACKGROUND_SCHEDULE_INTERVAL_SECONDS", 900),
+            run_interval_seconds=_int_env("INGESTION_BACKGROUND_RUN_INTERVAL_SECONDS", 30),
+            max_jobs_per_tick=_int_env("INGESTION_BACKGROUND_MAX_JOBS_PER_TICK", 10),
+            max_run_batches_per_tick=_int_env("INGESTION_BACKGROUND_MAX_RUN_BATCHES_PER_TICK", 6),
+            max_assets_per_schedule=_int_env("INGESTION_BACKGROUND_MAX_ASSETS_PER_SCHEDULE", 50),
             years=_int_env("INGESTION_BACKGROUND_YEARS", 10),
             prices_only=_truthy_env("INGESTION_BACKGROUND_PRICES_ONLY", default=False),
         )
@@ -52,6 +55,7 @@ class IngestionBackgroundWorker:
         self.last_schedule_count: int | None = None
         self.last_run_at: datetime | None = None
         self.last_completed_count: int | None = None
+        self.last_pending_count: int | None = None
         self.last_error: str | None = None
 
     @property
@@ -169,10 +173,18 @@ class IngestionBackgroundWorker:
             db = DB(self.db_path)
             try:
                 init_db(db)
-                return CommandApiService(db.conn).run_ingestion_jobs(
-                    domain="all",
-                    max_jobs=self.config.max_jobs_per_tick,
-                )
+                service = CommandApiService(db.conn)
+                total = 0
+                for _ in range(self.config.max_run_batches_per_tick):
+                    completed = service.run_ingestion_jobs(
+                        domain="all",
+                        max_jobs=self.config.max_jobs_per_tick,
+                    )
+                    total += completed
+                    if completed < self.config.max_jobs_per_tick:
+                        break
+                self.last_pending_count = _pending_job_count(db.conn)
+                return total
             finally:
                 db.conn.close()
 
@@ -184,10 +196,12 @@ class IngestionBackgroundWorker:
             "last_schedule_count": self.last_schedule_count,
             "last_run_at": self.last_run_at,
             "last_completed_count": self.last_completed_count,
+            "last_pending_count": self.last_pending_count,
             "last_error": self.last_error,
             "schedule_interval_seconds": self.config.schedule_interval_seconds,
             "run_interval_seconds": self.config.run_interval_seconds,
             "max_jobs_per_tick": self.config.max_jobs_per_tick,
+            "max_run_batches_per_tick": self.config.max_run_batches_per_tick,
             "max_assets_per_schedule": self.config.max_assets_per_schedule,
             "years": self.config.years,
             "prices_only": self.config.prices_only,
@@ -211,3 +225,18 @@ def _int_env(name: str, default: int) -> int:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _pending_job_count(conn) -> int:
+    row = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM ingestion_job
+        WHERE status IN ('pending', 'running')
+        """
+    ).fetchone()
+    return int(row[0])
+
+
+def _running_under_pytest() -> bool:
+    return "PYTEST_CURRENT_TEST" in os.environ

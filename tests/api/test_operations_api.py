@@ -6,13 +6,15 @@ from fastapi.testclient import TestClient
 import pytest
 
 from dashboard.api.ingestion_background import IngestionBackgroundConfig, IngestionBackgroundWorker
+from dashboard.api.market_freshness_background import MarketFreshnessConfig, MarketFreshnessWorker
 from dashboard.api.app import create_app
 from dashboard.api.services import CommandApiService
 from dashboard.brokers.models import BrokerAccount, BrokerConnection, BrokerPosition, BrokerSyncResult, BrokerTransaction, BrokerUser
 from dashboard.brokers.repository import BrokerSyncRepository
 from dashboard.brokers.secrets import LocalSecretCipher
 from dashboard.brokers.sync import BrokerSyncSummary
-from dashboard.db.db_conn import DB
+from dashboard.db.db_conn import DB, init_db
+from dashboard.ingestion.price_history.models import PriceDailyRow
 
 
 def test_broker_lists_redacted_connections_and_accounts(tmp_path):
@@ -573,11 +575,13 @@ def test_ingestion_background_status_defaults_disabled(tmp_path):
         "last_schedule_count": None,
         "last_run_at": None,
         "last_completed_count": None,
+        "last_pending_count": None,
         "last_error": None,
-        "schedule_interval_seconds": 3600,
-        "run_interval_seconds": 300,
-        "max_jobs_per_tick": 2,
-        "max_assets_per_schedule": 25,
+        "schedule_interval_seconds": 900,
+        "run_interval_seconds": 30,
+        "max_jobs_per_tick": 10,
+        "max_run_batches_per_tick": 6,
+        "max_assets_per_schedule": 50,
         "years": 10,
         "prices_only": False,
     }
@@ -656,6 +660,7 @@ def test_ingestion_background_enabled_tick_uses_capped_schedule_and_run(tmp_path
             years=3,
             prices_only=True,
             max_jobs_per_tick=2,
+            max_run_batches_per_tick=1,
         ),
     )
 
@@ -697,14 +702,120 @@ def test_ingestion_background_tick_endpoint_runs_one_bounded_cycle(tmp_path, mon
     assert response.status_code == 200
     assert response.json()["result"] == {"scheduled_jobs": 3, "completed_jobs": 2}
     assert calls == [
-        (
-            "schedule",
-            {"max_assets": 25, "years": 10, "prices_only": False},
-        ),
-        ("run", {"domain": "all", "max_jobs": 2}),
+            (
+                "schedule",
+                {"max_assets": 50, "years": 10, "prices_only": False},
+            ),
+        ("run", {"domain": "all", "max_jobs": 10}),
     ]
     assert status.json()["last_schedule_count"] == 3
     assert status.json()["last_completed_count"] == 2
+
+
+def test_ingestion_background_run_drains_multiple_batches(tmp_path, monkeypatch):
+    calls: list[int] = []
+
+    def fake_run(self, **kwargs):
+        calls.append(kwargs["max_jobs"])
+        return 3 if len(calls) < 3 else 1
+
+    monkeypatch.setattr(CommandApiService, "run_ingestion_jobs", fake_run)
+
+    worker = IngestionBackgroundWorker(
+        tmp_path / "api.db",
+        Lock(),
+        IngestionBackgroundConfig(
+            enabled=True,
+            max_jobs_per_tick=3,
+            max_run_batches_per_tick=5,
+        ),
+    )
+
+    assert asyncio.run(worker.tick_run()) == 7
+    assert calls == [3, 3, 3]
+    assert worker.status()["last_completed_count"] == 7
+
+
+def test_market_freshness_status_defaults_disabled(tmp_path):
+    app = create_app(tmp_path / "api.db")
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/market/freshness/status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "enabled": False,
+        "running": False,
+        "last_poll_at": None,
+        "last_refreshed_count": None,
+        "last_subscription_count": None,
+        "last_error": None,
+        "poll_interval_seconds": 900,
+        "include_watchlist": False,
+        "lookback_days": 7,
+        "max_symbols_per_tick": 50,
+    }
+
+
+def test_market_freshness_tick_writes_current_prices(tmp_path, monkeypatch):
+    db_path = tmp_path / "api.db"
+    db = DB(db_path)
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy)
+        VALUES ('AAPL', 'AAPL', 'stock', 'USD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'AAPL', TRUE, 'position')
+        """
+    )
+    db.conn.close()
+
+    class FakeYahooProvider:
+        def fetch_price_daily(self, asset_id, start_date, end_date):
+            return [
+                PriceDailyRow(
+                    asset_id=asset_id,
+                    price_date=date(2026, 6, 23),
+                    open_price=119,
+                    high_price=122,
+                    low_price=118,
+                    close_price=121,
+                    adj_close_price=121,
+                    volume=1000,
+                    source="fake",
+                )
+            ]
+
+    monkeypatch.setattr(
+        "dashboard.api.market_freshness_background.YahooPriceProvider",
+        FakeYahooProvider,
+    )
+
+    worker = MarketFreshnessWorker(
+        db_path,
+        Lock(),
+        MarketFreshnessConfig(enabled=True, max_symbols_per_tick=10),
+    )
+
+    assert asyncio.run(worker.tick_poll()) == 1
+
+    db = DB(db_path)
+    row = db.conn.execute(
+        """
+        SELECT asset_id, symbol, price, provider
+        FROM current_asset_price
+        WHERE asset_id = 'AAPL'
+        """
+    ).fetchone()
+    db.conn.close()
+
+    assert row == ("AAPL", "AAPL", 121.0, "yfinance")
 
 
 def test_ingestion_background_errors_are_captured(tmp_path, monkeypatch):

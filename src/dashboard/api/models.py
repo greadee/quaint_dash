@@ -1224,13 +1224,28 @@ class IngestionBackgroundStatusResponse(BaseModel):
     last_schedule_count: int | None = None
     last_run_at: datetime | None = None
     last_completed_count: int | None = None
+    last_pending_count: int | None = None
     last_error: str | None = None
     schedule_interval_seconds: int
     run_interval_seconds: int
     max_jobs_per_tick: int
+    max_run_batches_per_tick: int
     max_assets_per_schedule: int
     years: int
     prices_only: bool
+
+
+class MarketFreshnessStatusResponse(BaseModel):
+    enabled: bool
+    running: bool
+    last_poll_at: datetime | None = None
+    last_refreshed_count: int | None = None
+    last_subscription_count: int | None = None
+    last_error: str | None = None
+    poll_interval_seconds: int
+    include_watchlist: bool
+    lookback_days: int
+    max_symbols_per_tick: int
 
 
 class IngestionRequirementStatus(BaseModel):
