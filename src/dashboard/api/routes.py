@@ -200,9 +200,10 @@ def stock_rankings(
 @router.get("/holdings/signals", response_model=HoldingSignalsResponse)
 def holding_signals(
     timeframe: str = Query(default="1m", pattern="^(1d|1w|1m|1y)$"),
+    portfolio_id: int | None = Query(default=None, ge=0),
     conn=Depends(get_connection),
 ):
-    return PortfolioApiService(conn).holding_signals(timeframe)
+    return PortfolioApiService(conn).holding_signals(timeframe, portfolio_id=portfolio_id)
 
 
 @router.post("/rankings/stocks/snapshots", response_model=StockRankingSnapshotRefreshResponse)

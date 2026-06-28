@@ -1176,7 +1176,11 @@ export const api = {
   portfolio: (id: number) => request<Portfolio>(`/portfolios/${id}`),
   positions: (id: number) => request<Position[]>(`/portfolios/${id}/positions`),
   aggregatePositions: () => request<Position[]>("/portfolios/aggregate/positions"),
-  holdingSignals: (timeframe = "1m") => request<HoldingSignalsResponse>(`/holdings/signals?timeframe=${timeframe}`),
+  holdingSignals: (timeframe = "1m", portfolioId?: number) => {
+    const params = new URLSearchParams({ timeframe });
+    if (portfolioId != null) params.set("portfolio_id", String(portfolioId));
+    return request<HoldingSignalsResponse>(`/holdings/signals?${params.toString()}`);
+  },
   transactions: (id: number, limit = 8, offset = 0) =>
     request<Page<Transaction>>(`/portfolios/${id}/transactions?limit=${limit}&offset=${offset}`),
   aggregateTransactions: (limit = 8, offset = 0) =>

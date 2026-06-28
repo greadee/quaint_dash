@@ -3477,14 +3477,14 @@ class PortfolioApiService:
             return False
         return not (triggered_before and first_date and first_date > triggered_before)
 
-    def holding_signals(self, timeframe: str) -> HoldingSignalsResponse:
+    def holding_signals(self, timeframe: str, portfolio_id: int | None = None) -> HoldingSignalsResponse:
         period = _SIGNAL_TIMEFRAME_PERIODS.get(timeframe)
         if period is None:
             raise ValueError("timeframe must be one of 1d, 1w, 1m, or 1y")
 
         items: list[HoldingSignalResponse] = []
         comparison = ComparisonApiService(self.conn)
-        for position in self.list_positions():
+        for position in self.list_positions(portfolio_id):
             prices = comparison._prices(position.asset_id)
             return_value = _period_return(prices, period)
             latest_price = prices[0][1] if prices else position.latest_price

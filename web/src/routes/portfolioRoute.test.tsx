@@ -403,5 +403,6 @@ describe("PortfolioWorkspacePage", () => {
     expect(screen.getByText("Sentiment: D")).toBeInTheDocument();
     expect(screen.getByText("Missing")).toBeInTheDocument();
     expect(screen.getByText("Ownership: Incomplete")).toBeInTheDocument();
+    expect(apiMock.holdingSignals).toHaveBeenCalledWith("1m", 1);
   });
 });

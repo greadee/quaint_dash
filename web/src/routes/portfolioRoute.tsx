@@ -142,7 +142,7 @@ export function PortfolioDetailPage() {
   const risk = useQuery({ queryKey: ["portfolio-risk", id, benchmark, range], queryFn: () => api.portfolioRisk(id, { benchmark: benchmark || undefined, lookback: range }), enabled: Number.isFinite(id) });
   const fundamentals = useQuery({ queryKey: ["portfolio-fundamentals", id, 5], queryFn: () => api.portfolioFundamentals(id, 5), enabled: Number.isFinite(id) });
   const transactions = useQuery({ queryKey: ["transactions", id, 25, 0], queryFn: () => api.transactions(id, 25, 0), enabled: Number.isFinite(id) && tab === "activity" });
-  const holdingSignals = useQuery({ queryKey: ["holding-signals", "1m"], queryFn: () => api.holdingSignals("1m"), enabled: Number.isFinite(id) && tab === "holdings" });
+  const holdingSignals = useQuery({ queryKey: ["holding-signals", id, "1m"], queryFn: () => api.holdingSignals("1m", id), enabled: Number.isFinite(id) && tab === "holdings" });
   if (portfolio.isLoading) return <Loading />;
   if (portfolio.error) return <ErrorPanel error={portfolio.error} />;
   if (!portfolio.data) return <section className="card"><EmptyRow text="Portfolio not found." /></section>;

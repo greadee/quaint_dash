@@ -1044,17 +1044,22 @@ def test_holding_signals_returns_current_holding_factor_grades_without_estimates
     app = create_app(db_path)
     db = DB(db_path)
     db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (2, 'Other')")
     db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
     db.conn.execute(
         """
         INSERT INTO asset(asset_id, symbol, asset_type, ccy, name, mkt_cap)
-        VALUES ('BUYME', 'BUYME', 'stock', 'USD', 'Buy Momentum', 1000)
+        VALUES
+            ('BUYME', 'BUYME', 'stock', 'USD', 'Buy Momentum', 1000),
+            ('OTH', 'OTH', 'stock', 'USD', 'Other Holding', 1000)
         """
     )
     db.conn.execute(
         """
         INSERT INTO txn(portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id)
-        VALUES (1, '2026-01-02 10:00:00', 'buy', 'BUYME', 1, 100, 'USD', 0, 1)
+        VALUES
+            (1, '2026-01-02 10:00:00', 'buy', 'BUYME', 1, 100, 'USD', 0, 1),
+            (2, '2026-01-02 10:00:00', 'buy', 'OTH', 1, 100, 'USD', 0, 1)
         """
     )
     for index in range(70):
@@ -1062,9 +1067,11 @@ def test_holding_signals_returns_current_holding_factor_grades_without_estimates
         db.conn.execute(
             """
             INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
-            VALUES ('BUYME', DATE '2026-01-01' + CAST(? AS INTEGER), ?, ?, 'test')
+            VALUES
+                ('BUYME', DATE '2026-01-01' + CAST(? AS INTEGER), ?, ?, 'test'),
+                ('OTH', DATE '2026-01-01' + CAST(? AS INTEGER), ?, ?, 'test')
             """,
-            [index, close, close],
+            [index, close, close, index, close, close],
         )
     db.conn.execute(
         """
@@ -1101,7 +1108,7 @@ def test_holding_signals_returns_current_holding_factor_grades_without_estimates
     db.conn.close()
 
     with TestClient(app) as client:
-        response = client.get("/api/v1/holdings/signals?timeframe=1m")
+        response = client.get("/api/v1/holdings/signals?timeframe=1m&portfolio_id=1")
 
     assert response.status_code == 200
     payload = response.json()
