@@ -317,7 +317,7 @@ describe("PortfolioWorkspacePage", () => {
     ]);
     apiMock.holdingSignals.mockResolvedValue({
       timeframe: "1m",
-      methodology: "Grades use stored aggregate factor scores.",
+      methodology: "Kiviat grades use stored factor inputs.",
       items: [{
         asset_id: "NVDA",
         symbol: "NVDA",
@@ -335,9 +335,14 @@ describe("PortfolioWorkspacePage", () => {
         confidence: 0.8,
         data_points: 70,
         components: [
-          { name: "Share price momentum", metric: "monthly return blend", value: 0.12, contribution: 72, score: 72, grade: "A", available: true, detail: "Stored price momentum." },
-          { name: "News sentiment", metric: "daily sentiment", value: -0.2, contribution: -22, score: -22, grade: "D", available: true, detail: "Stored news sentiment." },
-          { name: "Retail sentiment", metric: "daily sentiment", value: null, contribution: null, score: null, grade: null, available: false, detail: "Needs retail sentiment." },
+          { name: "Value", metric: "valuation discount", value: -0.2, contribution: 42, score: 42, grade: "B", available: true, detail: "Stored valuation inputs." },
+          { name: "Growth", metric: "revenue/EPS/FCF growth", value: 0.18, contribution: 72, score: 72, grade: "A", available: true, detail: "Stored growth inputs." },
+          { name: "Quality", metric: "ROIC and reinvestment", value: 0.22, contribution: 55, score: 55, grade: "B", available: true, detail: "Stored quality inputs." },
+          { name: "Profitability", metric: "margins and cash flow", value: 0.3, contribution: 61, score: 61, grade: "B", available: true, detail: "Stored profitability inputs." },
+          { name: "Financial strength", metric: "balance sheet", value: 0.1, contribution: 48, score: 48, grade: "B", available: true, detail: "Stored balance sheet inputs." },
+          { name: "Momentum", metric: "monthly price trend", value: 0.12, contribution: 72, score: 72, grade: "A", available: true, detail: "Stored price momentum." },
+          { name: "Sentiment", metric: "news and retail tone", value: -0.2, contribution: -22, score: -22, grade: "D", available: true, detail: "Stored sentiment inputs." },
+          { name: "Ownership", metric: "institutional and buyback support", value: null, contribution: null, score: null, grade: null, available: false, detail: "Needs ownership inputs." },
         ],
       }],
     });
@@ -393,10 +398,10 @@ describe("PortfolioWorkspacePage", () => {
     expect(await screen.findByText("Holding grades")).toBeInTheDocument();
     expect(screen.getByLabelText("NVDA factor Kiviat diagram")).toBeInTheDocument();
     expect(screen.getByText("Strengths")).toBeInTheDocument();
-    expect(screen.getByText("Share price momentum: A")).toBeInTheDocument();
+    expect(screen.getByText("Growth: A")).toBeInTheDocument();
     expect(screen.getByText("Weaknesses")).toBeInTheDocument();
-    expect(screen.getByText("News sentiment: D")).toBeInTheDocument();
+    expect(screen.getByText("Sentiment: D")).toBeInTheDocument();
     expect(screen.getByText("Missing")).toBeInTheDocument();
-    expect(screen.getByText("Retail sentiment: Incomplete")).toBeInTheDocument();
+    expect(screen.getByText("Ownership: Incomplete")).toBeInTheDocument();
   });
 });

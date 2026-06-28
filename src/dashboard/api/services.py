@@ -3483,43 +3483,21 @@ class PortfolioApiService:
             raise ValueError("timeframe must be one of 1d, 1w, 1m, or 1y")
 
         items: list[HoldingSignalResponse] = []
-        ranking_timeframe = _holding_ranking_timeframe(timeframe)
         comparison = ComparisonApiService(self.conn)
         for position in self.list_positions():
             prices = comparison._prices(position.asset_id)
             return_value = _period_return(prices, period)
             latest_price = prices[0][1] if prices else position.latest_price
-            ranking = self._stock_ranking_item(
-                {
-                    "asset_id": position.asset_id,
-                    "symbol": position.symbol,
-                    "name": position.name,
-                    "exchange_code": None,
-                    "currency": position.currency,
-                    "latest_price": _float_or_none(latest_price),
-                    "market_value": position.market_value,
-                    "is_tracked": True,
-                    "is_held": True,
-                    "is_watchlisted": False,
-                    "latest_price_date": prices[0][0] if prices else None,
-                    "catalog_only": False,
-                },
-                factor="aggregate",
-                timeframe=ranking_timeframe,
+            profile = comparison.asset_profile(position.asset_id)
+            components = self._holding_factor_grade_components(
+                position.asset_id,
+                timeframe=timeframe,
+                profile=profile,
+                prices=prices,
             )
-            components = [
-                HoldingSignalComponent(
-                    name=component.name,
-                    metric=component.metric,
-                    value=component.value,
-                    contribution=component.score,
-                    score=component.score,
-                    grade=_score_grade(component.score) if component.available else None,
-                    available=component.available,
-                    detail=component.detail,
-                )
-                for component in ranking.components
-            ]
+            available_scores = [component.score for component in components if component.available and component.score is not None]
+            signal_score = sum(available_scores) / len(available_scores) if available_scores else 0.0
+            confidence = len(available_scores) / len(components) if components else 0.0
             items.append(
                 HoldingSignalResponse(
                     asset_id=position.asset_id,
@@ -3531,11 +3509,11 @@ class PortfolioApiService:
                     latest_price=_float_or_none(latest_price),
                     timeframe=timeframe,
                     return_value=return_value,
-                    signal_score=ranking.score,
-                    signal_strength=ranking.score_strength,
-                    grade=_score_grade(ranking.score),
-                    action=ranking.action,
-                    confidence=ranking.confidence,
+                    signal_score=round(signal_score, 2),
+                    signal_strength=round(abs(signal_score), 2),
+                    grade=_score_grade(signal_score) if available_scores else "Incomplete",
+                    action=_holding_signal_action(signal_score),
+                    confidence=round(confidence, 2),
                     data_points=len(prices),
                     components=components,
                 )
@@ -3552,11 +3530,92 @@ class PortfolioApiService:
             timeframe=timeframe,
             methodology=(
                 f"Ranked by absolute buy/sell signal strength over {_SIGNAL_TIMEFRAME_LABELS[timeframe]}. "
-                "Grades use stored aggregate factor scores from price momentum, news sentiment, retail sentiment, "
-                "earnings momentum, and institutional buying inputs. Missing components reduce confidence."
+                "Kiviat grades use stored factor inputs for value, growth, quality, profitability, financial strength, "
+                "momentum, sentiment, and ownership. Missing components reduce confidence."
             ),
             items=items,
         )
+
+    def _holding_factor_grade_components(
+        self,
+        asset_id: str,
+        *,
+        timeframe: str,
+        profile: ComparisonAssetProfile,
+        prices: list[tuple[date, float]],
+    ) -> list[HoldingSignalComponent]:
+        ranking_timeframe = _holding_ranking_timeframe(timeframe)
+        earnings = self._earnings_momentum_score(asset_id)
+        news = self._sentiment_score(asset_id, "news", ranking_timeframe)
+        retail = self._sentiment_score(asset_id, "retail", ranking_timeframe)
+        institutional = self._institutional_buying_score(asset_id)
+        price_momentum = self._price_momentum_score(asset_id, ranking_timeframe)
+        return [
+            _holding_factor_component(
+                "Value",
+                "valuation discount",
+                _holding_value_score(profile),
+                _holding_value_value(profile),
+                "Cheaper valuation versus history/peers plus free-cash-flow and dividend yield improves this grade.",
+                "Needs valuation gaps, free-cash-flow yield, or dividend yield.",
+            ),
+            _holding_factor_component(
+                "Growth",
+                "revenue/EPS/FCF growth",
+                _score_from_ranking_components(earnings["components"]),
+                _first_component_value(earnings["components"]),
+                "Uses stored income-statement growth and latest earnings surprise inputs.",
+                "Needs statement growth or earnings surprise data.",
+            ),
+            _holding_factor_component(
+                "Quality",
+                "ROIC and reinvestment",
+                _holding_quality_score(profile),
+                _average_present([profile.fundamentals.roic, profile.fundamentals.roic_on_reinvestment]),
+                "Higher returns on invested capital, reinvestment productivity, and lower concentration improve this grade.",
+                "Needs ROIC, reinvestment, or concentration inputs.",
+            ),
+            _holding_factor_component(
+                "Profitability",
+                "margins and cash flow",
+                _holding_profitability_score(profile),
+                _average_present([profile.fundamentals.gross_margin, profile.fundamentals.operating_margin, profile.fundamentals.net_margin]),
+                "Gross, operating, net margin, and free-cash-flow yield determine this grade.",
+                "Needs margin or free-cash-flow inputs.",
+            ),
+            _holding_factor_component(
+                "Financial strength",
+                "balance sheet",
+                _holding_financial_strength_score(profile),
+                profile.fundamentals.debt_to_equity,
+                "Lower leverage, manageable net debt, and current-ratio coverage improve this grade.",
+                "Needs balance-sheet leverage or liquidity inputs.",
+            ),
+            _holding_factor_component(
+                "Momentum",
+                f"{_SIGNAL_TIMEFRAME_LABELS[timeframe]} price trend",
+                price_momentum["score"],
+                _period_return(prices, _SIGNAL_TIMEFRAME_PERIODS[timeframe]),
+                "Uses stored daily-close price momentum with realized volatility as a risk modifier.",
+                "Needs enough stored daily closes for price momentum.",
+            ),
+            _holding_factor_component(
+                "Sentiment",
+                "news and retail tone",
+                _average_present([news["score"], retail["score"]]),
+                _average_present([_first_component_value(news["components"]), _first_component_value(retail["components"])]),
+                "Blends stored news sentiment, retail/social sentiment, and sentiment momentum.",
+                "Needs stored news or retail sentiment observations.",
+            ),
+            _holding_factor_component(
+                "Ownership",
+                "institutional and buyback support",
+                _holding_ownership_score(profile, institutional["score"]),
+                profile.fundamentals.buyback_yield,
+                "Institutional accumulation, buybacks, and lower stock-based compensation improve this grade.",
+                "Needs institutional flow, buyback, or stock-compensation inputs.",
+            ),
+        ]
 
     def stock_rankings(
         self,
@@ -7716,6 +7775,120 @@ def _score_grade(score: float | None) -> str:
     if score >= -45:
         return "D"
     return "F"
+
+
+def _holding_factor_component(
+    name: str,
+    metric: str,
+    score: float | None,
+    value: float | None,
+    detail: str,
+    missing_detail: str,
+) -> HoldingSignalComponent:
+    return HoldingSignalComponent(
+        name=name,
+        metric=metric,
+        value=value,
+        contribution=score,
+        score=round(score, 2) if score is not None else None,
+        grade=_score_grade(score) if score is not None else None,
+        available=score is not None,
+        detail=detail if score is not None else missing_detail,
+    )
+
+
+def _holding_value_score(profile: ComparisonAssetProfile) -> float | None:
+    valuation = profile.valuation
+    fundamentals = profile.fundamentals
+    valuation_scores = [
+        _scaled_signal(_negative_optional(valuation.historical_pe_discount), 0.35),
+        _scaled_signal(_negative_optional(valuation.sector_pe_premium), 0.35),
+        _scaled_signal(_negative_optional(valuation.industry_pe_premium), 0.35),
+        _scaled_signal(fundamentals.free_cash_flow_yield, 0.08),
+        _scaled_signal(fundamentals.dividend_yield, 0.04),
+    ]
+    return _average_present(valuation_scores)
+
+
+def _holding_value_value(profile: ComparisonAssetProfile) -> float | None:
+    return _average_present(
+        [
+            profile.valuation.historical_pe_discount,
+            profile.valuation.sector_pe_premium,
+            profile.valuation.industry_pe_premium,
+        ]
+    )
+
+
+def _holding_quality_score(profile: ComparisonAssetProfile) -> float | None:
+    fundamentals = profile.fundamentals
+    return _average_present(
+        [
+            _scaled_signal(fundamentals.roic, 0.18),
+            _scaled_signal(fundamentals.roic_on_reinvestment, 0.25),
+            _scaled_signal(0.50 - fundamentals.customer_concentration, 0.50) if fundamentals.customer_concentration is not None else None,
+            _scaled_signal(0.55 - fundamentals.revenue_concentration, 0.55) if fundamentals.revenue_concentration is not None else None,
+        ]
+    )
+
+
+def _holding_profitability_score(profile: ComparisonAssetProfile) -> float | None:
+    fundamentals = profile.fundamentals
+    return _average_present(
+        [
+            _scaled_signal(fundamentals.gross_margin, 0.55),
+            _scaled_signal(fundamentals.operating_margin, 0.25),
+            _scaled_signal(fundamentals.net_margin, 0.18),
+            _scaled_signal(fundamentals.free_cash_flow_yield, 0.08),
+        ]
+    )
+
+
+def _holding_financial_strength_score(profile: ComparisonAssetProfile) -> float | None:
+    fundamentals = profile.fundamentals
+    net_debt_score = None
+    if fundamentals.net_debt_to_ebitda is not None:
+        net_debt_score = _scaled_signal(2.5 - fundamentals.net_debt_to_ebitda, 2.5)
+    leverage_score = None
+    if fundamentals.debt_to_equity is not None:
+        leverage_score = _scaled_signal(1.2 - fundamentals.debt_to_equity, 1.2)
+    liquidity_score = None
+    if fundamentals.current_ratio is not None:
+        liquidity_score = _scaled_signal(min(fundamentals.current_ratio, 3.0) - 1.0, 1.5)
+    return _average_present([net_debt_score, leverage_score, liquidity_score])
+
+
+def _holding_ownership_score(profile: ComparisonAssetProfile, institutional_score: float | None) -> float | None:
+    fundamentals = profile.fundamentals
+    sbc_intensity = (
+        fundamentals.stock_based_compensation / fundamentals.revenue
+        if fundamentals.stock_based_compensation is not None and fundamentals.revenue and fundamentals.revenue > 0
+        else None
+    )
+    return _average_present(
+        [
+            institutional_score,
+            _scaled_signal(fundamentals.buyback_yield, 0.04),
+            _scaled_signal(0.08 - sbc_intensity, 0.08) if sbc_intensity is not None else None,
+        ]
+    )
+
+
+def _score_from_ranking_components(components: list[StockRankingComponent]) -> float | None:
+    return _average_present([component.score for component in components if component.available])
+
+
+def _first_component_value(components: list[StockRankingComponent]) -> float | None:
+    for component in components:
+        if component.value is not None:
+            return component.value
+        if component.score is not None:
+            return component.score
+    return None
+
+
+def _negative_optional(value: float | None) -> float | None:
+    return -value if value is not None else None
 
 
 def _relative_gap(value: float | None, comparison: float | None) -> float | None:

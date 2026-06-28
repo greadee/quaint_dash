@@ -243,7 +243,10 @@ function FactorSummary({ title, items, empty }: { title: string; items: NonNulla
 }
 
 function shortFactor(name: string) {
-  return name.replace("Share price ", "Price ").replace("Institutional buying", "Inst. buying");
+  return name
+    .replace("Financial strength", "Fin. strength")
+    .replace("Profitability", "Profit")
+    .replace("Institutional buying", "Inst. buying");
 }
 
 function actionClass(action: string | undefined) {

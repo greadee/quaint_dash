@@ -1047,8 +1047,8 @@ def test_holding_signals_returns_current_holding_factor_grades_without_estimates
     db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
     db.conn.execute(
         """
-        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name)
-        VALUES ('BUYME', 'BUYME', 'stock', 'USD', 'Buy Momentum')
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name, mkt_cap)
+        VALUES ('BUYME', 'BUYME', 'stock', 'USD', 'Buy Momentum', 1000)
         """
     )
     db.conn.execute(
@@ -1066,6 +1066,38 @@ def test_holding_signals_returns_current_holding_factor_grades_without_estimates
             """,
             [index, close, close],
         )
+    db.conn.execute(
+        """
+        INSERT INTO financial_statement(asset_id, statement_type, year, quarter, period_end_date, data_json, source)
+        VALUES
+            ('BUYME', 'income', 2025, 4, '2025-10-02', '{"revenue":800,"grossProfit":420,"operatingIncome":160,"netIncome":100,"eps":1.0,"ebitda":200}', 'test'),
+            ('BUYME', 'income', 2026, 1, '2026-01-02', '{"revenue":1000,"grossProfit":600,"operatingIncome":300,"netIncome":200,"eps":2.0,"ebitda":360,"customerConcentration":30,"revenueConcentration":35}', 'test'),
+            ('BUYME', 'balance', 2026, 1, '2026-01-02', '{"cashAndCashEquivalents":150,"totalDebt":50,"totalCurrentAssets":300,"totalCurrentLiabilities":100,"totalStockholdersEquity":500}', 'test'),
+            ('BUYME', 'cashflow', 2026, 1, '2026-01-02', '{"freeCashFlow":120,"stockBasedCompensation":20,"commonStockRepurchased":-30}', 'test')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO earnings_calendar_event(asset_id, earnings_date, eps_estimated, eps_actual, revenue_estimated, revenue_actual, source)
+        VALUES ('BUYME', '2026-02-01', 1.8, 2.0, 950, 1000, 'test')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO ticker_sentiment_daily(
+            asset_id, ticker, date, retail_sentiment_score, news_sentiment_score,
+            blended_sentiment_score, reddit_post_count, x_post_count, article_count,
+            sentiment_momentum_1d, sentiment_momentum_7d, sentiment_momentum_30d
+        )
+        VALUES ('BUYME', 'BUYME', CURRENT_DATE, 0.4, 0.5, 0.45, 3, 2, 4, 0.05, 0.12, 0.2)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO institutional_buying_daily(asset_id, ticker, date, net_flow_score, accumulation_score, volume_ratio, source)
+        VALUES ('BUYME', 'BUYME', CURRENT_DATE, 35, 45, 1.4, 'test')
+        """
+    )
     db.conn.close()
 
     with TestClient(app) as client:
@@ -1074,16 +1106,31 @@ def test_holding_signals_returns_current_holding_factor_grades_without_estimates
     assert response.status_code == 200
     payload = response.json()
     assert payload["timeframe"] == "1m"
-    assert "Grades use stored aggregate factor scores" in payload["methodology"]
+    assert "Kiviat grades use stored factor inputs" in payload["methodology"]
     assert len(payload["items"]) == 1
     item = payload["items"][0]
     assert item["symbol"] == "BUYME"
     assert item["grade"] in {"A", "B", "C", "D", "F"}
     components = {component["name"]: component for component in item["components"]}
-    assert components["Share price momentum"]["available"] is True
-    assert components["Share price momentum"]["grade"] in {"A", "B"}
-    assert components["News sentiment"]["available"] is False
-    assert components["News sentiment"]["grade"] is None
+    assert list(components) == [
+        "Value",
+        "Growth",
+        "Quality",
+        "Profitability",
+        "Financial strength",
+        "Momentum",
+        "Sentiment",
+        "Ownership",
+    ]
+    assert components["Value"]["available"] is True
+    assert components["Growth"]["available"] is True
+    assert components["Quality"]["available"] is True
+    assert components["Profitability"]["available"] is True
+    assert components["Financial strength"]["available"] is True
+    assert components["Momentum"]["available"] is True
+    assert components["Sentiment"]["available"] is True
+    assert components["Ownership"]["available"] is True
+    assert components["Growth"]["grade"] in {"A", "B"}
 
     db = DB(db_path)
     estimate_count = db.conn.execute(
