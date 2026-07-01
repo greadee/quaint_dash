@@ -6,6 +6,7 @@ import { api, type SignalDetailResponse, type SignalRow } from "../api";
 import { money, number, percent, signedNumber } from "./routeFormatters";
 import { EmptyRow, ErrorPanel, Loading } from "./routeShared";
 import type { AppNotification } from "./routeTypes";
+import { OptionalFeaturesEmpty, PageFeatureMenu, usePageFeature } from "../pageFeatureStore";
 
 const actionErrorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 
@@ -14,6 +15,9 @@ export function StockRankingsPage({ notify }: { notify: (message: string, tone?:
   const [params, setParams] = useSearchParams();
   const [expandedId, setExpandedId] = useState<string | null>(params.get("signal"));
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const showSummaryStrip = usePageFeature("signals", "signals.summaryStrip");
+  const showPriorityPanels = usePageFeature("signals", "signals.priorityPanels");
+  const showMethodology = usePageFeature("signals", "signals.methodology");
   const filters = signalFiltersFromParams(params);
   const signals = useQuery({
     queryKey: ["signals", filters],
@@ -92,25 +96,27 @@ export function StockRankingsPage({ notify }: { notify: (message: string, tone?:
         </div>
       </div>
       <div className="actions">
+        <PageFeatureMenu pageId="signals" />
         <button onClick={() => signals.refetch()} disabled={signals.isFetching}><RefreshCw size={17} />Refresh</button>
         <button onClick={() => notify("Saved views use URL filters in this local build.")}><Save size={17}/>Saved view</button>
         <a className="button-link" href="#signal-methodology"><Info size={17}/>Methodology</a>
       </div>
     </div>
-    <section className="signal-summary-strip" aria-label="Signal summary">
+    <OptionalFeaturesEmpty pageId="signals" />
+    {showSummaryStrip ? <section className="signal-summary-strip" aria-label="Signal summary">
       {signals.isLoading ? Array.from({ length: 6 }).map((_item, index) => <div className="signal-summary-tile skeleton" key={index} />) : signals.data?.metrics.map((metric) => (
         <button key={metric.key} className="signal-summary-tile" onClick={() => applyMetric(metric.filter_params)}>
           <span>{metric.label}</span>
           <strong>{metric.value}</strong>
         </button>
       ))}
-    </section>
+    </section> : null}
     {signals.data?.partial_provider_failures.length ? <div className="signal-degraded" role="status">Partial provider coverage: {signals.data.partial_provider_failures.join(", ")}. Valid cached signals remain visible.</div> : null}
     {signals.isError ? <ErrorPanel error={signals.error} /> : null}
-    <section className="signal-priority-grid">
+    {showPriorityPanels ? <section className="signal-priority-grid">
       <SignalPrioritySection title="Needs attention" items={signals.data?.needs_attention ?? []} empty="No high-priority risks currently meet the filters." onOpen={openSignal} />
       <SignalPrioritySection title="Top opportunities" items={signals.data?.top_opportunities ?? []} empty="No high-confidence opportunities currently meet the filters." onOpen={openSignal} />
-    </section>
+    </section> : null}
     <section className="card signal-explorer">
       <div className="signal-explorer-toolbar">
         <div>
@@ -180,7 +186,7 @@ export function StockRankingsPage({ notify }: { notify: (message: string, tone?:
         </>
       ) : <EmptyRow text={Object.keys(filters).length ? "No signals match the selected filters. Clear filters or broaden the confidence and priority thresholds." : "No active signals. Stored ranking inputs are not available for the tracked universe yet."} />}
       {signals.isFetching && !signals.isLoading ? <p className="signal-refreshing" role="status">Refreshing signals while keeping current results visible.</p> : null}
-      <p id="signal-methodology" className="signal-methodology">{signals.data?.methodology ?? "Signal methodology loads with the server-side signal response."}</p>
+      {showMethodology ? <p id="signal-methodology" className="signal-methodology">{signals.data?.methodology ?? "Signal methodology loads with the server-side signal response."}</p> : null}
     </section>
   </div>;
 }

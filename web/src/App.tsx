@@ -30,6 +30,7 @@ import {
   type AppNotification,
   type AppSettings,
 } from "./appRoutes";
+import { PageFeatureProvider } from "./pageFeatureStore";
 
 const defaultAppSettings: AppSettings = {
   theme: "light",
@@ -67,6 +68,7 @@ export default function App() {
     document.documentElement.dataset.theme = settings.theme;
   }, [settings.theme]);
   return (
+    <PageFeatureProvider>
     <div className={`app-shell ${settings.density === "compact" ? "density-compact" : ""} ${settings.featureColor ? "" : "feature-muted"}`}>
       <aside className={menuOpen ? "sidebar sidebar-open" : "sidebar"}>
         <div className="brand"><ChartNoAxesCombined size={21} /><span>Quaint Dash</span></div>
@@ -110,6 +112,7 @@ export default function App() {
         <ActionNotification notification={notification} onClose={() => setNotification(null)} />
       </main>
     </div>
+    </PageFeatureProvider>
   );
 }
 

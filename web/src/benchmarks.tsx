@@ -62,6 +62,7 @@ import {
   type SortDirection,
 } from "./benchmarkUtils";
 import { ChartTypeToggle } from "./routes/routeShared";
+import { OptionalFeaturesEmpty, PageFeatureMenu, usePageFeature } from "./pageFeatureStore";
 
 type Notify = (message: string, tone?: "success" | "error") => void;
 
@@ -98,6 +99,10 @@ export function BenchmarksWorkspacePage({ notify }: { notify: Notify }) {
   const sort = validSort(params.get("sort"));
   const direction = validDirection(params.get("direction"));
   const chartType = params.get("chart") === "bar" ? "bar" : "line";
+  const showSnapshot = usePageFeature("benchmarks", "benchmarks.snapshot");
+  const showComparisonChart = usePageFeature("benchmarks", "benchmarks.comparisonChart");
+  const showLeadership = usePageFeature("benchmarks", "benchmarks.leadership");
+  const showStatus = usePageFeature("benchmarks", "benchmarks.status");
 
   const benchmarks = useQuery({
     queryKey: ["benchmarks-workspace", search, category, currency],
@@ -221,6 +226,7 @@ export function BenchmarksWorkspacePage({ notify }: { notify: Notify }) {
           </div>
         </div>
         <div className="actions benchmarks-admin-actions">
+          <PageFeatureMenu pageId="benchmarks" />
           <button disabled={seed.isPending} onClick={() => seed.mutate({ scope: "all" })}><Database size={16} />Seed all</button>
           <button disabled={harden.isPending} onClick={() => harden.mutate()}><ShieldCheck size={16} />Harden view</button>
         </div>
@@ -261,8 +267,9 @@ export function BenchmarksWorkspacePage({ notify }: { notify: Notify }) {
       </nav>
 
       {benchmarks.error ? <BenchmarkError message={actionErrorMessage(benchmarks.error)} /> : null}
-      <BenchmarkSnapshot snapshot={snapshot} period={period} />
-      <BenchmarkComparisonChart
+      <OptionalFeaturesEmpty pageId="benchmarks" />
+      {showSnapshot ? <BenchmarkSnapshot snapshot={snapshot} period={period} /> : null}
+      {showComparisonChart ? <BenchmarkComparisonChart
         normalized={normalized}
         chartData={chartData}
         baseline={baseline}
@@ -273,7 +280,7 @@ export function BenchmarksWorkspacePage({ notify }: { notify: Notify }) {
         period={period}
         chartType={chartType}
         onChartTypeChange={(value) => updateParam("chart", value)}
-      />
+      /> : null}
       <BenchmarkExplorer
         rows={rows}
         isLoading={benchmarks.isLoading}
@@ -284,8 +291,8 @@ export function BenchmarksWorkspacePage({ notify }: { notify: Notify }) {
         onSort={changeSort}
         onToggle={toggleSelected}
       />
-      <BenchmarkLeadership rows={rows} />
-      <BenchmarkStatusPanel rows={rows} />
+      {showLeadership ? <BenchmarkLeadership rows={rows} /> : null}
+      {showStatus ? <BenchmarkStatusPanel rows={rows} /> : null}
     </div>
   );
 }
@@ -544,10 +551,16 @@ export function BenchmarkDetailPage({ notify }: { notify: Notify }) {
   const queryClient = useQueryClient();
   const id = benchmarkId.toUpperCase();
   const detail = useQuery({ queryKey: ["benchmark-detail-route", id], queryFn: () => api.benchmark(id), enabled: Boolean(id) });
+  const showRisk = usePageFeature("benchmark.detail", "benchmark.detail.risk");
+  const showIdentity = usePageFeature("benchmark.detail", "benchmark.detail.identity");
+  const showQuality = usePageFeature("benchmark.detail", "benchmark.detail.quality");
+  const showExposure = usePageFeature("benchmark.detail", "benchmark.detail.exposure");
+  const showConstituents = usePageFeature("benchmark.detail", "benchmark.detail.constituents");
+  const showActions = usePageFeature("benchmark.detail", "benchmark.detail.actions");
   const prices = useQuery({ queryKey: ["benchmark-detail-prices", id], queryFn: () => api.benchmarkPrices(id, { limit: 1400 }), enabled: Boolean(id) });
-  const metrics = useQuery({ queryKey: ["benchmark-detail-metrics", id], queryFn: () => api.benchmarkMetrics(id, 1400), enabled: Boolean(id) });
-  const exposures = useQuery({ queryKey: ["benchmark-detail-exposures", id], queryFn: () => api.benchmarkExposures(id), enabled: Boolean(id) });
-  const constituents = useQuery({ queryKey: ["benchmark-detail-constituents", id], queryFn: () => api.benchmarkConstituents(id, { limit: 25 }), enabled: Boolean(id) });
+  const metrics = useQuery({ queryKey: ["benchmark-detail-metrics", id], queryFn: () => api.benchmarkMetrics(id, 1400), enabled: Boolean(id) && showRisk });
+  const exposures = useQuery({ queryKey: ["benchmark-detail-exposures", id], queryFn: () => api.benchmarkExposures(id), enabled: Boolean(id) && showExposure });
+  const constituents = useQuery({ queryKey: ["benchmark-detail-constituents", id], queryFn: () => api.benchmarkConstituents(id, { limit: 25 }), enabled: Boolean(id) && showConstituents });
   const refresh = useMutation({
     mutationFn: ({ jobType }: { jobType: "daily_price" | "composition" | "metrics" }) => api.refreshBenchmark(id, { job_type: jobType }),
     onSuccess: () => {
@@ -570,26 +583,28 @@ export function BenchmarkDetailPage({ notify }: { notify: Notify }) {
       {detail.error ? <BenchmarkError message={actionErrorMessage(detail.error)} /> : detail.isLoading ? <BenchmarkSkeleton rows={10} /> : detail.data ? (
         <>
           <BenchmarkDetailHeader detail={detail.data} />
+          <div className="actions"><PageFeatureMenu pageId="benchmark.detail" /></div>
+          <OptionalFeaturesEmpty pageId="benchmark.detail" />
           <section className="benchmark-detail-grid">
             <BenchmarkDetailChart detail={detail.data} prices={prices.data ?? []} normalized={normalized} />
-            <BenchmarkRiskPanel metric={latestMetric} detail={detail.data} metrics={metrics.data ?? []} />
+            {showRisk ? <BenchmarkRiskPanel metric={latestMetric} detail={detail.data} metrics={metrics.data ?? []} /> : null}
           </section>
           <section className="benchmark-detail-grid">
-            <BenchmarkIdentityPanel detail={detail.data} />
-            <BenchmarkQualityPanel detail={detail.data} />
+            {showIdentity ? <BenchmarkIdentityPanel detail={detail.data} /> : null}
+            {showQuality ? <BenchmarkQualityPanel detail={detail.data} /> : null}
           </section>
           <section className="benchmark-detail-grid">
-            <BenchmarkExposurePanel exposures={exposures.data ?? []} isLoading={exposures.isLoading} />
-            <BenchmarkConstituentPanel constituents={constituents.data?.items ?? []} isLoading={constituents.isLoading} />
+            {showExposure ? <BenchmarkExposurePanel exposures={exposures.data ?? []} isLoading={exposures.isLoading} /> : null}
+            {showConstituents ? <BenchmarkConstituentPanel constituents={constituents.data?.items ?? []} isLoading={constituents.isLoading} /> : null}
           </section>
-          <section className="card benchmark-actions-card">
+          {showActions ? <section className="card benchmark-actions-card">
             <div className="card-heading"><div><p className="eyebrow">Manual refresh</p><h2>Data actions</h2></div></div>
             <div className="benchmark-card-actions">
               <button disabled={refresh.isPending} onClick={() => refresh.mutate({ jobType: "daily_price" })}><RefreshCw size={16} />Prices</button>
               <button disabled={refresh.isPending} onClick={() => refresh.mutate({ jobType: "metrics" })}><Activity size={16} />Metrics</button>
               <button disabled={refresh.isPending} onClick={() => refresh.mutate({ jobType: "composition" })}><Database size={16} />Composition</button>
             </div>
-          </section>
+          </section> : null}
         </>
       ) : null}
     </div>

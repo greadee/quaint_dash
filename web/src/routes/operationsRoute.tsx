@@ -5,6 +5,7 @@ import { api, type DataReadinessWorkerStatus, type IngestionBackgroundStatus, ty
 import { boundedInt, dateRange, formatActionResult, formatCount, formatDuration, formatTimestamp } from "./routeFormatters";
 import { EmptyRow, ErrorPanel, HelpDisclosure, Loading, Signal } from "./routeShared";
 import type { HelpItem } from "./routeTypes";
+import { OptionalFeaturesEmpty, PageFeatureMenu, usePageFeature } from "../pageFeatureStore";
 
 type StockRankingFactor = "aggregate" | "share_price_momentum" | "news_sentiment" | "retail_sentiment" | "earnings_momentum" | "institutional_buying";
 type StockRankingUniverse = "tracked" | "all";
@@ -71,6 +72,11 @@ export function OperationsPage() {
   const [runMaxJobs, setRunMaxJobs] = useState("1");
   const [retryMaxJobs, setRetryMaxJobs] = useState("25");
   const [message, setMessage] = useState("");
+  const showRoutineWorker = usePageFeature("operations", "operations.routineWorker");
+  const showMarketFreshness = usePageFeature("operations", "operations.marketFreshness");
+  const showDataReadiness = usePageFeature("operations", "operations.dataReadiness");
+  const showProjectionReadiness = usePageFeature("operations", "operations.projectionReadiness");
+  const showRankingReadiness = usePageFeature("operations", "operations.rankingReadiness");
   type ScheduleOverride = {
     pipeline?: string;
     assetId?: string;
@@ -90,22 +96,26 @@ export function OperationsPage() {
   const background = useQuery({
     queryKey: ["ingestion-background-status"],
     queryFn: api.ingestionBackgroundStatus,
-    refetchInterval: 10000,
+    enabled: showRoutineWorker,
+    refetchInterval: showRoutineWorker ? 10000 : false,
   });
   const marketFreshness = useQuery({
     queryKey: ["market-freshness-status"],
-    queryFn: api.marketFreshnessStatus,
-    refetchInterval: 10000,
+    queryFn: api.marketFreshnessStatus ?? (() => Promise.resolve(undefined)),
+    enabled: showMarketFreshness && typeof api.marketFreshnessStatus === "function",
+    refetchInterval: showMarketFreshness ? 10000 : false,
   });
   const dataReadiness = useQuery({
     queryKey: ["data-readiness-status"],
-    queryFn: api.dataReadinessStatus,
-    refetchInterval: 10000,
+    queryFn: api.dataReadinessStatus ?? (() => Promise.resolve(undefined)),
+    enabled: showDataReadiness && typeof api.dataReadinessStatus === "function",
+    refetchInterval: showDataReadiness ? 10000 : false,
   });
   const readiness = useQuery({
     queryKey: ["ingestion-readiness"],
     queryFn: api.ingestionReadiness,
-    refetchInterval: 10000,
+    enabled: showProjectionReadiness,
+    refetchInterval: showProjectionReadiness ? 10000 : false,
   });
   const rankingReadiness = useQuery({
     queryKey: ["ranking-readiness", scheduleRankingUniverse],
@@ -113,7 +123,8 @@ export function OperationsPage() {
       universe: scheduleRankingUniverse,
       limit: boundedInt(maxAssets, 25, 1, 100),
     }),
-    refetchInterval: 10000,
+    enabled: showRankingReadiness,
+    refetchInterval: showRankingReadiness ? 10000 : false,
   });
   const schedule = useMutation({
     mutationFn: (override?: ScheduleOverride) => api.scheduleIngestion({
@@ -257,12 +268,13 @@ export function OperationsPage() {
       staleOnly: true,
     });
   };
-  return <div className="page"><div className="page-title"><div><p className="eyebrow">Data health</p><h1>Operations</h1><p className="page-subtitle">Background due work keeps routine data moving. Manual controls remain here for backfills, retries, provider-sensitive refreshes, and explicit runs.</p></div><div className="actions"><button onClick={() => { jobs.refetch(); background.refetch(); marketFreshness.refetch(); dataReadiness.refetch(); readiness.refetch(); rankingReadiness.refetch(); }} disabled={jobs.isFetching || background.isFetching || marketFreshness.isFetching || dataReadiness.isFetching || readiness.isFetching || rankingReadiness.isFetching}><RefreshCw size={17}/>Refresh</button><button className="danger" onClick={() => window.confirm("Clear ingestion job history and sync status rows? Market data and broker connections will stay intact.") && clearHistory.mutate()} disabled={isBusy}><Trash2 size={17}/>Clear history</button><button className="primary" onClick={() => window.confirm("Run pending ingestion jobs with these options?") && run.mutate()} disabled={isBusy}><RefreshCw size={17}/>Run jobs</button></div></div>
-    <IngestionBackgroundCard status={background.data} isLoading={background.isLoading} error={background.error} onStart={() => startBackground.mutate()} onStop={() => stopBackground.mutate()} onTick={() => tickBackground.mutate()} isBusy={isBusy} />
-    <MarketFreshnessCard status={marketFreshness.data} isLoading={marketFreshness.isLoading} error={marketFreshness.error} onStart={() => startMarketFreshness.mutate()} onStop={() => stopMarketFreshness.mutate()} onTick={() => tickMarketFreshness.mutate()} isBusy={isBusy} />
-    <DataReadinessCard status={dataReadiness.data} isLoading={dataReadiness.isLoading} error={dataReadiness.error} onStart={() => startDataReadiness.mutate()} onStop={() => stopDataReadiness.mutate()} onTick={() => tickDataReadiness.mutate()} isBusy={isBusy} />
-    <IngestionReadinessCard readiness={readiness.data} isLoading={readiness.isLoading} error={readiness.error} onScheduleAsset={scheduleAsset} isBusy={isBusy} />
-    <RankingReadinessCard readiness={rankingReadiness.data} isLoading={rankingReadiness.isLoading} error={rankingReadiness.error} onScheduleAsset={scheduleRankingAsset} isBusy={isBusy} />
+  return <div className="page"><div className="page-title"><div><p className="eyebrow">Data health</p><h1>Operations</h1><p className="page-subtitle">Background due work keeps routine data moving. Manual controls remain here for backfills, retries, provider-sensitive refreshes, and explicit runs.</p></div><div className="actions"><PageFeatureMenu pageId="operations" /><button onClick={() => { jobs.refetch(); background.refetch(); marketFreshness.refetch(); dataReadiness.refetch(); readiness.refetch(); rankingReadiness.refetch(); }} disabled={jobs.isFetching || background.isFetching || marketFreshness.isFetching || dataReadiness.isFetching || readiness.isFetching || rankingReadiness.isFetching}><RefreshCw size={17}/>Refresh</button><button className="danger" onClick={() => window.confirm("Clear ingestion job history and sync status rows? Market data and broker connections will stay intact.") && clearHistory.mutate()} disabled={isBusy}><Trash2 size={17}/>Clear history</button><button className="primary" onClick={() => window.confirm("Run pending ingestion jobs with these options?") && run.mutate()} disabled={isBusy}><RefreshCw size={17}/>Run jobs</button></div></div>
+    <OptionalFeaturesEmpty pageId="operations" />
+    {showRoutineWorker ? <IngestionBackgroundCard status={background.data} isLoading={background.isLoading} error={background.error} onStart={() => startBackground.mutate()} onStop={() => stopBackground.mutate()} onTick={() => tickBackground.mutate()} isBusy={isBusy} /> : null}
+    {showMarketFreshness ? <MarketFreshnessCard status={marketFreshness.data} isLoading={marketFreshness.isLoading} error={marketFreshness.error} onStart={() => startMarketFreshness.mutate()} onStop={() => stopMarketFreshness.mutate()} onTick={() => tickMarketFreshness.mutate()} isBusy={isBusy} /> : null}
+    {showDataReadiness ? <DataReadinessCard status={dataReadiness.data} isLoading={dataReadiness.isLoading} error={dataReadiness.error} onStart={() => startDataReadiness.mutate()} onStop={() => stopDataReadiness.mutate()} onTick={() => tickDataReadiness.mutate()} isBusy={isBusy} /> : null}
+    {showProjectionReadiness ? <IngestionReadinessCard readiness={readiness.data} isLoading={readiness.isLoading} error={readiness.error} onScheduleAsset={scheduleAsset} isBusy={isBusy} /> : null}
+    {showRankingReadiness ? <RankingReadinessCard readiness={rankingReadiness.data} isLoading={rankingReadiness.isLoading} error={rankingReadiness.error} onScheduleAsset={scheduleRankingAsset} isBusy={isBusy} /> : null}
     <section className="card operations-control">
       <div className="card-heading"><div><p className="eyebrow">Manual controls</p><h2>Ingestion actions</h2></div><div className="card-tools"><HelpDisclosure title="Manual ingestion actions" items={ingestionHelp} /><span>{isBusy ? "working" : "ready"}</span></div></div>
       <div className="operations-grid">

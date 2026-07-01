@@ -37,6 +37,7 @@ import {
 import { formatActionResult, formatTimestamp, money, number } from "./routeFormatters";
 import { EmptyRow, ErrorPanel, Loading, TabBar } from "./routeShared";
 import type { AppNotification } from "./routeTypes";
+import { OptionalFeaturesEmpty, PageFeatureMenu, usePageFeature } from "../pageFeatureStore";
 
 type BrokerTab = "accounts" | "import" | "history" | "settings";
 type AccountFilter = "all" | "unmapped" | "import_ready" | "attention";
@@ -94,6 +95,7 @@ export function BrokersPage({ notify }: { notify: (message: string, tone?: AppNo
   const [announcement, setAnnouncement] = useState("");
   const [assignmentDrafts, setAssignmentDrafts] = useState<Record<string, string>>({});
   const [newPortfolioNames, setNewPortfolioNames] = useState<Record<string, string>>({});
+  const showSummaryCards = usePageFeature("brokers", "brokers.summaryCards");
 
   const statusQuery = useQuery({ queryKey: ["broker-status"], queryFn: api.brokerStatus });
   const portfolios = useQuery({ queryKey: ["portfolios"], queryFn: api.portfolios });
@@ -277,6 +279,7 @@ export function BrokersPage({ notify }: { notify: (message: string, tone?: AppNo
           <p className="broker-refresh-stamp">Global last refresh: <strong>{formatTimestamp(summary.globalLastRefresh)}</strong></p>
         </div>
         <div className="actions broker-hero-actions">
+          <PageFeatureMenu pageId="brokers" />
           <button className="primary" onClick={() => connect.mutate(undefined)} disabled={isBusy}>
             <ExternalLink size={17} />Connect broker
           </button>
@@ -300,7 +303,8 @@ export function BrokersPage({ notify }: { notify: (message: string, tone?: AppNo
         <BrokerEmptyState isBusy={isBusy} onConnect={() => connect.mutate(undefined)} onTest={() => smokeTest.mutate()} />
       ) : (
         <>
-          <BrokerSummaryCards summary={summary} onFilter={(filter) => {
+          <OptionalFeaturesEmpty pageId="brokers" />
+          {showSummaryCards ? <BrokerSummaryCards summary={summary} onFilter={(filter) => {
             if (filter === "accounts") {
               setTab("accounts");
               setAccountFilter("all");
@@ -313,7 +317,7 @@ export function BrokersPage({ notify }: { notify: (message: string, tone?: AppNo
               setTab("accounts");
               setAccountFilter("attention");
             }
-          }} />
+          }} /> : null}
 
           <TabBar tabs={brokerTabs} selected={selectedTab} onSelect={setTab} label="Broker workspace" />
 
