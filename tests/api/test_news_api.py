@@ -107,3 +107,44 @@ def test_news_read_and_saved_state_persists(tmp_path):
     assert detail.json()["is_read"] is True
     assert detail.json()["is_saved"] is True
     assert unsaved.json()["is_saved"] is False
+
+
+def test_news_provider_health_and_alert_rules(tmp_path):
+    db_path = tmp_path / "api-news-ops.db"
+    app = create_app(db_path)
+    _seed_news_db(db_path)
+
+    payload = {
+        "rule_name": "NVDA breaking regulatory",
+        "target_scope": "asset",
+        "keyword_query": "regulatory",
+        "min_importance": 0.7,
+        "breaking_only": True,
+        "asset_ids": ["NVDA"],
+        "portfolio_ids": [1],
+    }
+
+    with TestClient(app) as client:
+        health = client.get("/api/v1/news/health")
+        created = client.post("/api/v1/news/alerts", json=payload)
+        alert_id = created.json()["alert_rule_id"]
+        listed = client.get("/api/v1/news/alerts")
+        updated = client.patch(
+            f"/api/v1/news/alerts/{alert_id}",
+            json={**payload, "rule_name": "NVDA high importance", "breaking_only": False},
+        )
+        deleted = client.delete(f"/api/v1/news/alerts/{alert_id}")
+
+    assert health.status_code == 200
+    assert health.json()[0]["provider_code"] == "mock_news"
+    assert health.json()[0]["status"] in {"healthy", "stale"}
+    assert created.status_code == 201
+    assert created.json()["asset_ids"] == ["NVDA"]
+    assert created.json()["portfolio_ids"] == [1]
+    assert listed.status_code == 200
+    assert listed.json()[0]["alert_rule_id"] == alert_id
+    assert updated.status_code == 200
+    assert updated.json()["rule_name"] == "NVDA high importance"
+    assert updated.json()["breaking_only"] is False
+    assert deleted.status_code == 200
+    assert deleted.json()["result"]["alert_rule_id"] == alert_id

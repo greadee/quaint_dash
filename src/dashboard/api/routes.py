@@ -60,8 +60,11 @@ from dashboard.api.models import (
     MarketFreshnessStatusResponse,
     HoldingSignalsResponse,
     NewsArticleResponse,
+    NewsAlertRuleRequest,
+    NewsAlertRuleResponse,
     NewsCategorySummaryResponse,
     NewsFeedResponse,
+    NewsProviderHealthResponse,
     NewsProviderResponse,
     NewsUserStateResponse,
     OverviewUpdatesResponse,
@@ -221,9 +224,50 @@ def news_providers(conn=Depends(get_connection)):
     return NewsApiService(conn).providers()
 
 
+@router.get("/news/health", response_model=list[NewsProviderHealthResponse])
+def news_provider_health(
+    stale_after_minutes: int = Query(default=60, ge=1, le=1440),
+    conn=Depends(get_connection),
+):
+    return NewsApiService(conn).provider_health(stale_after_minutes=stale_after_minutes)
+
+
 @router.get("/news/categories", response_model=list[NewsCategorySummaryResponse])
 def news_categories(conn=Depends(get_connection)):
     return NewsApiService(conn).categories()
+
+
+@router.get("/news/alerts", response_model=list[NewsAlertRuleResponse])
+def news_alert_rules(conn=Depends(get_connection)):
+    return NewsApiService(conn).alert_rules()
+
+
+@router.post("/news/alerts", response_model=NewsAlertRuleResponse, status_code=status.HTTP_201_CREATED)
+def news_create_alert_rule(
+    payload: NewsAlertRuleRequest,
+    request: Request,
+    conn=Depends(get_connection),
+):
+    with request.app.state.write_lock:
+        return NewsApiService(conn).create_alert_rule(payload)
+
+
+@router.patch("/news/alerts/{alert_rule_id}", response_model=NewsAlertRuleResponse)
+def news_update_alert_rule(
+    alert_rule_id: int,
+    payload: NewsAlertRuleRequest,
+    request: Request,
+    conn=Depends(get_connection),
+):
+    with request.app.state.write_lock:
+        return NewsApiService(conn).update_alert_rule(alert_rule_id, payload)
+
+
+@router.delete("/news/alerts/{alert_rule_id}", response_model=ActionResult)
+def news_delete_alert_rule(alert_rule_id: int, request: Request, conn=Depends(get_connection)):
+    with request.app.state.write_lock:
+        result = NewsApiService(conn).delete_alert_rule(alert_rule_id)
+    return ActionResult(result=result)
 
 
 @router.get("/signals", response_model=SignalsSummaryResponse)

@@ -9,8 +9,11 @@ from dashboard.api.models import (
     NewsArticleAssetResponse,
     NewsArticleCategoryResponse,
     NewsArticleResponse,
+    NewsAlertRuleRequest,
+    NewsAlertRuleResponse,
     NewsCategorySummaryResponse,
     NewsFeedResponse,
+    NewsProviderHealthResponse,
     NewsProviderResponse,
     NewsStoryClusterSummary,
     NewsUserStateResponse,
@@ -308,6 +311,208 @@ class NewsApiService:
             for row in rows
         ]
 
+    def provider_health(self, stale_after_minutes: int = 60) -> list[NewsProviderHealthResponse]:
+        rows = self.conn.execute(
+            """
+            SELECT
+                p.provider_code,
+                p.provider_name,
+                p.is_enabled,
+                s.sync_status,
+                s.last_attempted_at,
+                s.last_succeeded_at,
+                s.last_error_at,
+                s.last_error_message,
+                COALESCE(s.articles_received, 0),
+                COALESCE(s.articles_inserted, 0),
+                COALESCE(s.articles_updated, 0),
+                COALESCE(s.articles_rejected, 0)
+            FROM news_provider p
+            LEFT JOIN news_ingestion_state s ON s.provider_id = p.provider_id
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY p.provider_id
+                ORDER BY s.last_attempted_at DESC NULLS LAST, s.updated_at DESC NULLS LAST
+            ) = 1
+            ORDER BY p.priority, p.provider_code
+            """
+        ).fetchall()
+        health: list[NewsProviderHealthResponse] = []
+        for row in rows:
+            last_succeeded = row[5]
+            staleness = None
+            if last_succeeded is not None:
+                comparison_now = datetime.now(UTC) if last_succeeded.tzinfo else datetime.now()
+                staleness = max(0.0, (comparison_now - last_succeeded).total_seconds() / 60)
+            status_text = "healthy"
+            if row[6] is not None or row[3] == "failed":
+                status_text = "failed"
+            elif last_succeeded is None:
+                status_text = "not_started"
+            elif staleness is not None and staleness > stale_after_minutes:
+                status_text = "stale"
+            health.append(
+                NewsProviderHealthResponse(
+                    provider_code=row[0],
+                    provider_name=row[1],
+                    is_enabled=bool(row[2]),
+                    sync_status=row[3],
+                    last_attempted_at=row[4],
+                    last_succeeded_at=last_succeeded,
+                    last_error_at=row[6],
+                    last_error_message=row[7],
+                    articles_received=int(row[8]),
+                    articles_inserted=int(row[9]),
+                    articles_updated=int(row[10]),
+                    articles_rejected=int(row[11]),
+                    feed_staleness_minutes=staleness,
+                    status=status_text,
+                )
+            )
+        return health
+
+    def create_alert_rule(
+        self,
+        payload: NewsAlertRuleRequest,
+        *,
+        user_id: str = "local",
+    ) -> NewsAlertRuleResponse:
+        alert_rule_id = int(self.conn.execute("SELECT nextval('seq_news_alert_rule_id')").fetchone()[0])
+        self.conn.execute(
+            """
+            INSERT INTO news_alert_rule(
+                alert_rule_id, user_id, rule_name, target_scope, keyword_query,
+                min_importance, sentiment_threshold, breaking_only, delivery_channel,
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, now(), now())
+            """,
+            [
+                alert_rule_id,
+                user_id,
+                payload.rule_name,
+                payload.target_scope,
+                payload.keyword_query,
+                payload.min_importance,
+                payload.sentiment_threshold,
+                payload.breaking_only,
+                payload.delivery_channel,
+            ],
+        )
+        self._replace_alert_assets(alert_rule_id, payload.asset_ids)
+        self._replace_alert_portfolios(alert_rule_id, payload.portfolio_ids)
+        return self.alert_rule(alert_rule_id, user_id=user_id)
+
+    def update_alert_rule(
+        self,
+        alert_rule_id: int,
+        payload: NewsAlertRuleRequest,
+        *,
+        user_id: str = "local",
+    ) -> NewsAlertRuleResponse:
+        if self.conn.execute(
+            "SELECT 1 FROM news_alert_rule WHERE alert_rule_id = ? AND user_id = ?",
+            [alert_rule_id, user_id],
+        ).fetchone() is None:
+            raise LookupError(f"News alert rule not found: {alert_rule_id}")
+        self.conn.execute("DELETE FROM news_alert_rule_asset WHERE alert_rule_id = ?", [alert_rule_id])
+        self.conn.execute("DELETE FROM news_alert_rule_portfolio WHERE alert_rule_id = ?", [alert_rule_id])
+        result = self.conn.execute(
+            """
+            UPDATE news_alert_rule
+            SET rule_name = ?,
+                target_scope = ?,
+                keyword_query = ?,
+                min_importance = ?,
+                sentiment_threshold = ?,
+                breaking_only = ?,
+                delivery_channel = ?,
+                updated_at = now()
+            WHERE alert_rule_id = ? AND user_id = ?
+            RETURNING alert_rule_id
+            """,
+            [
+                payload.rule_name,
+                payload.target_scope,
+                payload.keyword_query,
+                payload.min_importance,
+                payload.sentiment_threshold,
+                payload.breaking_only,
+                payload.delivery_channel,
+                alert_rule_id,
+                user_id,
+            ],
+        ).fetchone()
+        if result is None:
+            raise LookupError(f"News alert rule not found: {alert_rule_id}")
+        self._replace_alert_assets(alert_rule_id, payload.asset_ids)
+        self._replace_alert_portfolios(alert_rule_id, payload.portfolio_ids)
+        return self.alert_rule(alert_rule_id, user_id=user_id)
+
+    def delete_alert_rule(self, alert_rule_id: int, *, user_id: str = "local") -> dict[str, int | str]:
+        if self.conn.execute(
+            "SELECT 1 FROM news_alert_rule WHERE alert_rule_id = ? AND user_id = ?",
+            [alert_rule_id, user_id],
+        ).fetchone() is None:
+            raise LookupError(f"News alert rule not found: {alert_rule_id}")
+        self.conn.execute("DELETE FROM news_alert_delivery WHERE alert_rule_id = ?", [alert_rule_id])
+        self.conn.execute("DELETE FROM news_alert_rule_asset WHERE alert_rule_id = ?", [alert_rule_id])
+        self.conn.execute("DELETE FROM news_alert_rule_portfolio WHERE alert_rule_id = ?", [alert_rule_id])
+        self.conn.execute("DELETE FROM news_alert_rule WHERE alert_rule_id = ? AND user_id = ?", [alert_rule_id, user_id])
+        return {"status": "deleted", "alert_rule_id": alert_rule_id}
+
+    def alert_rule(self, alert_rule_id: int, *, user_id: str = "local") -> NewsAlertRuleResponse:
+        rules = self.alert_rules(user_id=user_id, alert_rule_id=alert_rule_id)
+        if not rules:
+            raise LookupError(f"News alert rule not found: {alert_rule_id}")
+        return rules[0]
+
+    def alert_rules(
+        self,
+        *,
+        user_id: str = "local",
+        alert_rule_id: int | None = None,
+    ) -> list[NewsAlertRuleResponse]:
+        params: list[Any] = [user_id]
+        rule_filter = ""
+        if alert_rule_id is not None:
+            rule_filter = "AND alert_rule_id = ?"
+            params.append(alert_rule_id)
+        rows = self.conn.execute(
+            f"""
+            SELECT
+                alert_rule_id, user_id, rule_name, target_scope, keyword_query,
+                min_importance, sentiment_threshold, breaking_only, is_active,
+                delivery_channel, created_at, updated_at
+            FROM news_alert_rule
+            WHERE user_id = ?
+            {rule_filter}
+            ORDER BY is_active DESC, updated_at DESC, alert_rule_id DESC
+            """,
+            params,
+        ).fetchall()
+        rule_ids = [int(row[0]) for row in rows]
+        assets = self._alert_assets(rule_ids)
+        portfolios = self._alert_portfolios(rule_ids)
+        return [
+            NewsAlertRuleResponse(
+                alert_rule_id=int(row[0]),
+                user_id=row[1],
+                rule_name=row[2],
+                target_scope=row[3],
+                keyword_query=row[4],
+                min_importance=row[5],
+                sentiment_threshold=row[6],
+                breaking_only=bool(row[7]),
+                is_active=bool(row[8]),
+                delivery_channel=row[9],
+                asset_ids=assets.get(int(row[0]), []),
+                portfolio_ids=portfolios.get(int(row[0]), []),
+                created_at=row[10],
+                updated_at=row[11],
+            )
+            for row in rows
+        ]
+
     def set_read_state(
         self,
         article_id: int,
@@ -375,6 +580,58 @@ class NewsApiService:
             is_saved=bool(row[4]),
             saved_at=row[5],
         )
+
+    def _replace_alert_assets(self, alert_rule_id: int, asset_ids: list[str]) -> None:
+        self.conn.execute("DELETE FROM news_alert_rule_asset WHERE alert_rule_id = ?", [alert_rule_id])
+        for asset_id in dict.fromkeys(item.upper().strip() for item in asset_ids if item.strip()):
+            self.conn.execute(
+                "INSERT INTO news_alert_rule_asset(alert_rule_id, asset_id) VALUES (?, ?)",
+                [alert_rule_id, asset_id],
+            )
+
+    def _replace_alert_portfolios(self, alert_rule_id: int, portfolio_ids: list[int]) -> None:
+        self.conn.execute("DELETE FROM news_alert_rule_portfolio WHERE alert_rule_id = ?", [alert_rule_id])
+        for portfolio_id in dict.fromkeys(portfolio_ids):
+            self.conn.execute(
+                "INSERT INTO news_alert_rule_portfolio(alert_rule_id, portfolio_id) VALUES (?, ?)",
+                [alert_rule_id, portfolio_id],
+            )
+
+    def _alert_assets(self, rule_ids: list[int]) -> dict[int, list[str]]:
+        if not rule_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in rule_ids)
+        rows = self.conn.execute(
+            f"""
+            SELECT alert_rule_id, asset_id
+            FROM news_alert_rule_asset
+            WHERE alert_rule_id IN ({placeholders})
+            ORDER BY alert_rule_id, asset_id
+            """,
+            rule_ids,
+        ).fetchall()
+        grouped: dict[int, list[str]] = {}
+        for row in rows:
+            grouped.setdefault(int(row[0]), []).append(row[1])
+        return grouped
+
+    def _alert_portfolios(self, rule_ids: list[int]) -> dict[int, list[int]]:
+        if not rule_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in rule_ids)
+        rows = self.conn.execute(
+            f"""
+            SELECT alert_rule_id, portfolio_id
+            FROM news_alert_rule_portfolio
+            WHERE alert_rule_id IN ({placeholders})
+            ORDER BY alert_rule_id, portfolio_id
+            """,
+            rule_ids,
+        ).fetchall()
+        grouped: dict[int, list[int]] = {}
+        for row in rows:
+            grouped.setdefault(int(row[0]), []).append(int(row[1]))
+        return grouped
 
     def _filters(self, **filters: Any) -> tuple[list[str], list[Any]]:
         where = ["COALESCE(a.is_active, TRUE) = TRUE"]

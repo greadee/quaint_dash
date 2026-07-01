@@ -462,6 +462,52 @@ class NewsUserStateResponse(BaseModel):
     saved_at: datetime | None = None
 
 
+class NewsProviderHealthResponse(BaseModel):
+    provider_code: str
+    provider_name: str
+    is_enabled: bool
+    sync_status: str | None = None
+    last_attempted_at: datetime | None = None
+    last_succeeded_at: datetime | None = None
+    last_error_at: datetime | None = None
+    last_error_message: str | None = None
+    articles_received: int = 0
+    articles_inserted: int = 0
+    articles_updated: int = 0
+    articles_rejected: int = 0
+    feed_staleness_minutes: float | None = None
+    status: str
+
+
+class NewsAlertRuleRequest(BaseModel):
+    rule_name: str = Field(min_length=1, max_length=120)
+    target_scope: str = Field(default="custom", pattern="^(custom|asset|portfolio|watchlist|all_holdings)$")
+    keyword_query: str | None = Field(default=None, max_length=160)
+    min_importance: float | None = Field(default=None, ge=0, le=1)
+    sentiment_threshold: float | None = Field(default=None, ge=-1, le=1)
+    breaking_only: bool = False
+    delivery_channel: str = Field(default="in_app", pattern="^(in_app|email|push|sms|slack|discord|webhook)$")
+    asset_ids: list[str] = Field(default_factory=list, max_length=50)
+    portfolio_ids: list[int] = Field(default_factory=list, max_length=25)
+
+
+class NewsAlertRuleResponse(BaseModel):
+    alert_rule_id: int
+    user_id: str = "local"
+    rule_name: str
+    target_scope: str
+    keyword_query: str | None = None
+    min_importance: float | None = None
+    sentiment_threshold: float | None = None
+    breaking_only: bool = False
+    is_active: bool = True
+    delivery_channel: str = "in_app"
+    asset_ids: list[str] = Field(default_factory=list)
+    portfolio_ids: list[int] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
 class OverviewUpdatesResponse(BaseModel):
     total_market_value: float
     position_count: int
