@@ -87,7 +87,7 @@ Use `PageLayoutButton` in page header actions beside `PageFeatureMenu`.
 <PageLayoutToolbar pageId="compare" />
 ```
 
-Normal mode is protected: widgets are not draggable, drag handles are hidden, charts and tables keep their normal interactions, and widget content remains selectable. `Customize layout` enters an explicit edit mode. Edit mode shows a persistent toolbar with Add widgets, Reset layout, Cancel, and Done.
+Normal mode is protected: widgets are not draggable, drag handles are hidden, charts and tables keep their normal interactions, and widget content remains selectable. `Customize layout` enters an explicit edit mode. Edit mode shows a persistent toolbar with Add widgets, Undo, Redo, Reset layout, Cancel, and Done.
 
 Wrap movable/removable/resizable widgets with `LayoutWidget`:
 
@@ -97,7 +97,7 @@ Wrap movable/removable/resizable widgets with `LayoutWidget`:
 </LayoutWidget>
 ```
 
-In edit mode, `LayoutWidget` adds a dedicated drag handle, keyboard move controls, a preset size selector when multiple sizes are supported, and Remove from page for removable widgets. The widget body is inert while editing to prevent chart drags, links, table scrolling, and text selection from conflicting with layout operations.
+In edit mode, `LayoutWidget` adds a dedicated drag handle, keyboard move controls, a preset size selector when multiple sizes are supported, and Remove from page for removable widgets. The widget body is inert while editing to prevent chart drags, links, table scrolling, and text selection from conflicting with layout operations. Dragging over another widget highlights the snap target and displays the target footprint.
 
 ## Grid System
 
@@ -111,7 +111,7 @@ The canonical grid uses 12 logical columns with predefined sizes:
 
 Widgets snap by normalized order and footprint. Collision handling uses deterministic vertical compaction: widgets are walked in order, placed left to right, and wrapped to the next row when the footprint would exceed 12 columns. Widgets never overlap and hidden widgets do not mount.
 
-Movement is intentionally constrained. The first implementation supports drag-handle drop before another widget plus keyboard Up/Down controls. It does not expose freeform pixel placement or unrestricted resizing.
+Movement is intentionally constrained. The implementation supports drag-handle drop before another widget, visible drop targets, keyboard Up/Down controls, and session undo/redo. It does not expose freeform pixel placement or unrestricted resizing.
 
 ## Persistence
 
@@ -215,4 +215,4 @@ Never make page title, primary navigation, core selectors, destructive/security 
 
 ## Technology Decision
 
-The app does not currently carry a drag-and-drop or grid dependency. The implemented approach uses browser drag events plus explicit keyboard controls and the existing React state layer. This keeps bundle size low and avoids adding a second layout state system. Known limitations: drag preview and collision behavior are order-based rather than a full visual grid engine, and undo/redo is deferred because Cancel restores the full saved layout for the current edit session.
+The app does not currently carry a drag-and-drop or grid dependency. The implemented approach uses browser drag events plus explicit keyboard controls and the existing React state layer. This keeps bundle size low and avoids adding a second layout state system. Collision behavior is intentionally order-based so widgets snap into the deterministic dashboard grid instead of becoming freeform windows.

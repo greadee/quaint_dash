@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 import { PAGE_FEATURE_STORAGE_KEY } from "./pageFeatures";
@@ -128,6 +128,26 @@ describe("PageLayout controls", () => {
     expect(screen.getByText("Valuation widget")).toBeInTheDocument();
   });
 
+  it("supports undo and redo for draft layout edits", async () => {
+    const user = userEvent.setup();
+    render(<LayoutHarness />);
+
+    await user.click(screen.getByRole("button", { name: /customize layout/i }));
+    expect(screen.getByRole("button", { name: /undo/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /redo/i })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: /remove valuation metrics from page/i }));
+    expect(screen.queryByText("Valuation widget")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /undo/i })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: /undo/i }));
+    expect(screen.getByText("Valuation widget")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /redo/i })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: /redo/i }));
+    expect(screen.queryByText("Valuation widget")).not.toBeInTheDocument();
+  });
+
   it("supports keyboard reordering through the drag handle", async () => {
     const user = userEvent.setup();
     render(<LayoutHarness />);
@@ -139,5 +159,21 @@ describe("PageLayout controls", () => {
 
     await user.click(screen.getByRole("button", { name: /move valuation metrics later/i }));
     expect(Number(valuation.style.order)).toBeGreaterThan(Number(growth.style.order));
+  });
+
+  it("marks a dragged-over widget as the snap target", async () => {
+    const user = userEvent.setup();
+    render(<LayoutHarness />);
+
+    await user.click(screen.getByRole("button", { name: /customize layout/i }));
+    const valuation = screen.getByText("Valuation widget").closest(".layout-widget") as HTMLElement;
+    const growth = screen.getByText("Growth widget").closest(".layout-widget") as HTMLElement;
+
+    expect(within(valuation).getByRole("button", { name: /^move valuation metrics$/i })).toBeInTheDocument();
+    fireEvent.dragEnter(growth, { dataTransfer: { getData: () => "" } });
+
+    expect(growth).toHaveClass("drop-target");
+    expect(growth).toHaveAttribute("data-drop-label", "Drop before Growth metrics");
+    expect(growth).toHaveAttribute("data-footprint", "12 x 4");
   });
 });

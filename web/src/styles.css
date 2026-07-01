@@ -1663,6 +1663,29 @@ header {
   border: 1px solid rgba(36, 92, 79, .18);
   border-radius: 8px;
 }
+.layout-widget.drop-target {
+  border-color: var(--accent);
+  background:
+    linear-gradient(0deg, rgba(36, 92, 79, .08), rgba(36, 92, 79, .08)),
+    repeating-linear-gradient(135deg, rgba(0,0,0,.025), rgba(0,0,0,.025) 8px, transparent 8px, transparent 16px);
+}
+.layout-widget.drop-target::before {
+  content: attr(data-drop-label) " • " attr(data-footprint);
+  position: absolute;
+  inset: 42px 8px auto;
+  z-index: 1;
+  display: inline-flex;
+  width: fit-content;
+  max-width: calc(100% - 16px);
+  padding: 5px 8px;
+  border: 1px solid rgba(36, 92, 79, .3);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 900;
+  pointer-events: none;
+}
 .layout-widget.editing .layout-widget-content.inert {
   pointer-events: none;
   user-select: none;
