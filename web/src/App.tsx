@@ -8,6 +8,7 @@ import {
   Database,
   LayoutDashboard,
   Menu,
+  Newspaper,
   Search,
   Settings,
   WalletCards,
@@ -19,6 +20,7 @@ import {
   AssetDetailPage,
   BrokersPage,
   ComparePage,
+  NewsTerminalPage,
   OperationsPage,
   OverviewPage,
   PortfolioDetailPage,
@@ -76,6 +78,7 @@ export default function App() {
         <nav>
           <NavLink to="/" end><LayoutDashboard />Overview</NavLink>
           <NavLink to="/portfolios"><WalletCards />Portfolios</NavLink>
+          <NavLink to="/news"><Newspaper />News</NavLink>
           <NavLink to="/signals"><Activity />Signals</NavLink>
           <NavLink to="/compare"><BarChart3 />Compare</NavLink>
           <NavLink to="/benchmarks"><Search />Benchmarks</NavLink>
@@ -96,6 +99,7 @@ export default function App() {
             <Route path="/" element={<OverviewPage moverDefault={settings.moverDefault} />} />
             <Route path="/portfolios" element={<PortfolioWorkspacePage />} />
             <Route path="/portfolios/:portfolioId" element={<PortfolioDetailPage />} />
+            <Route path="/news" element={<NewsTerminalPage />} />
             <Route path="/signals" element={<StockRankingsPage notify={notify} />} />
             <Route path="/signals/:signalId" element={<SignalDetailPage notify={notify} />} />
             <Route path="/compare-" element={<Navigate to={`/compare${location.search}`} replace />} />

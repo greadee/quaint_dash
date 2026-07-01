@@ -3,7 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Activity, ArrowUpRight, BarChart3, CircleDollarSign, ShieldCheck, WalletCards } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { Bar, BarChart, Cell, Line, LineChart, Pie, PieChart, PolarAngleAxis, PolarGrid, PolarRadiusAxis, Radar, RadarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { api, type HoldingSignal, type OptimizationPreview, type Portfolio, type PortfolioFundamentals, type PortfolioPerformance, type PortfolioRisk, type Position } from "../api";
+import { api, type HoldingSignal, type NewsArticle, type OptimizationPreview, type Portfolio, type PortfolioFundamentals, type PortfolioPerformance, type PortfolioRisk, type Position } from "../api";
 import { AnalyticsBlock, DataIssueList, ExposureBars } from "./routeAnalytics";
 import { formatTimestamp, money, number, percent } from "./routeFormatters";
 import { ChartTypeToggle, EmptyRow, ErrorPanel, Loading, Metric, RangeSelector, Signal, TabBar } from "./routeShared";
@@ -162,6 +162,7 @@ export function PortfolioDetailPage() {
   const fundamentals = useQuery({ queryKey: ["portfolio-fundamentals", id, 5], queryFn: () => api.portfolioFundamentals(id, 5), enabled: Number.isFinite(id) && (resolvedTab === "overview" || resolvedTab === "fundamentals") });
   const transactions = useQuery({ queryKey: ["transactions", id, 25, 0], queryFn: () => api.transactions(id, 25, 0), enabled: Number.isFinite(id) && resolvedTab === "activity" && features.isEnabled("portfolio.detail.activityTab") });
   const holdingSignals = useQuery({ queryKey: ["holding-signals", id, "1m"], queryFn: () => api.holdingSignals("1m", id), enabled: Number.isFinite(id) && resolvedTab === "holdings" && holdingGradesVisible });
+  const portfolioNews = useQuery({ queryKey: ["portfolio-news", id], queryFn: () => api.portfolioNews(id, { limit: 5, sort: "relevance" }), enabled: Number.isFinite(id) && resolvedTab === "overview" });
   useEffect(() => {
     if (resolvedTab !== tab) setParam("tab", resolvedTab);
   }, [resolvedTab, setParam, tab]);
@@ -183,6 +184,7 @@ export function PortfolioDetailPage() {
     <TabBar tabs={visibleDetailTabs} selected={resolvedTab} onSelect={(value) => setParam("tab", value)} label="Portfolio detail tabs" />
     <PageLayoutToolbar pageId="portfolio.detail" />
     <OptionalFeaturesEmpty pageId="portfolio.detail" />
+    {resolvedTab === "overview" ? <PortfolioNewsPanel portfolioId={id} items={portfolioNews.data?.items ?? []} isLoading={portfolioNews.isLoading} /> : null}
     {resolvedTab === "overview" ? <PortfolioOverviewDetail performance={performance.data} risk={risk.data} fundamentals={fundamentals.data} positions={positions.data ?? []} currency={portfolio.data.base_ccy} chartType={chartType} isLoading={performance.isLoading || risk.isLoading || fundamentals.isLoading || positions.isLoading} /> : null}
     {resolvedTab === "holdings" ? <HoldingsTable positions={positions.data ?? []} signals={holdingSignals.data?.items ?? []} methodology={holdingSignals.data?.methodology} currency={portfolio.data.base_ccy} isLoading={positions.isLoading || (holdingGradesVisible && holdingSignals.isLoading)} portfolioId={id} /> : null}
     {resolvedTab === "performance" ? <PortfolioPerformanceView performance={performance.data} isLoading={performance.isLoading} chartType={chartType} /> : null}
@@ -207,6 +209,14 @@ function PortfolioOverviewDetail({ performance, risk, fundamentals, positions, c
     {showRisk ? <LayoutWidget pageId="portfolio.detail" widgetId="portfolio.detail.overviewRisk"><section className="card"><div className="card-heading"><div><p className="eyebrow">Risk</p><h2>Risk and concentration</h2></div></div><div className="signal-grid"><Signal label="Volatility" value={percent(risk?.annualized_volatility)} /><Signal label="Sortino" value={number(risk?.sortino_ratio)} /><Signal label="Beta" value={number(risk?.beta)} /><Signal label="Max drawdown" value={percent(risk?.maximum_drawdown)} /><Signal label="Effective holdings" value={number(risk?.effective_number_of_holdings, 1)} /><Signal label="HHI" value={number(risk?.hhi, 3)} /></div></section></LayoutWidget> : null}
     {showFundamentals ? <LayoutWidget pageId="portfolio.detail" widgetId="portfolio.detail.overviewFundamentals"><section className="card"><div className="card-heading"><div><p className="eyebrow">Fundamentals</p><h2>Coverage-aware rollup</h2></div></div><div className="signal-grid"><Signal label="Expected CAGR" value={percent(fundamentals?.weighted_expected_cagr.value)} /><Signal label="P/E" value={number(fundamentals?.pe_ratio.value)} /><Signal label="P/FCF" value={number(fundamentals?.price_to_free_cash_flow.value)} /><Signal label="Coverage" value={percent(fundamentals?.weighted_expected_cagr.coverage)} /></div></section></LayoutWidget> : null}
     {showLargestHoldings ? <LayoutWidget pageId="portfolio.detail" widgetId="portfolio.detail.overviewLargestHoldings"><section className="card"><div className="card-heading"><div><p className="eyebrow">Largest holdings</p><h2>Weight drivers</h2></div></div><div className="mini-list">{positions.slice(0, 6).map((item) => <article key={item.asset_id}><div><strong>{item.symbol}</strong><span>{item.name ?? "Asset"}</span></div><b>{percent(item.weight)}</b></article>)}</div></section></LayoutWidget> : null}
+  </section>;
+}
+
+function PortfolioNewsPanel({ portfolioId, items, isLoading }: { portfolioId: number; items: NewsArticle[]; isLoading: boolean }) {
+  if (isLoading) return <section className="card"><Loading compact /></section>;
+  return <section className="card portfolio-news-widget">
+    <div className="card-heading"><div><p className="eyebrow">Holding-aware feed</p><h2>Portfolio news</h2></div><Link className="button-link" to={`/news?portfolio_id=${portfolioId}&sort=relevance`}>Open terminal</Link></div>
+    {items.length ? <div className="mini-list news-mini-list">{items.map((item) => <article key={item.article_id}><div><strong>{item.headline}</strong><span>{item.published_at ? new Date(item.published_at).toLocaleString() : "not dated"}</span></div><span>{item.assets[0]?.symbol ?? "Portfolio"}</span><b>{percent(item.relevance_score)}</b></article>)}</div> : <EmptyRow text="No mapped stories are available for this portfolio yet." />}
   </section>;
 }
 

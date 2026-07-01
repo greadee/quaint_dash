@@ -240,6 +240,111 @@ export type NewsItem = {
   symbol: string | null;
   sentiment: string | null;
 };
+export type NewsArticleAsset = {
+  asset_id: string;
+  symbol: string;
+  name: string | null;
+  relevance_score: number;
+  confidence_score: number;
+  match_method: string;
+  is_primary_entity: boolean;
+};
+export type NewsArticleCategory = {
+  category_code: string;
+  category_name: string;
+  confidence_score: number;
+  is_primary: boolean;
+};
+export type NewsStoryCluster = {
+  cluster_id: number;
+  cluster_key: string;
+  article_count: number;
+  importance_score: number;
+  first_published_at: string | null;
+  last_updated_at: string | null;
+};
+export type NewsArticle = {
+  article_id: number;
+  provider_code: string;
+  provider_name: string | null;
+  provider_article_id: string | null;
+  headline: string;
+  summary: string | null;
+  canonical_url: string | null;
+  source_name: string;
+  author: string | null;
+  language: string | null;
+  published_at: string | null;
+  updated_at: string | null;
+  importance_score: number | null;
+  relevance_score: number | null;
+  sentiment_score: number | null;
+  sentiment_label: string | null;
+  is_breaking: boolean;
+  is_press_release: boolean;
+  is_correction: boolean;
+  is_retracted: boolean;
+  is_paywalled: boolean;
+  is_read: boolean;
+  is_saved: boolean;
+  assets: NewsArticleAsset[];
+  categories: NewsArticleCategory[];
+  cluster: NewsStoryCluster | null;
+};
+export type NewsFeed = {
+  items: NewsArticle[];
+  total: number;
+  limit: number;
+  offset: number;
+  sort: string;
+  generated_at: string;
+};
+export type NewsProvider = {
+  provider_code: string;
+  provider_name: string;
+  provider_type: string;
+  is_enabled: boolean;
+  supports_latest_news: boolean;
+  supports_symbol_news: boolean;
+  supports_full_text: boolean;
+  supports_sentiment: boolean;
+  supports_categories: boolean;
+  last_attempted_at: string | null;
+  last_succeeded_at: string | null;
+  last_error_at: string | null;
+  last_error_message: string | null;
+  sync_status: string | null;
+};
+export type NewsCategory = {
+  category_code: string;
+  category_name: string;
+  default_importance_weight: number;
+  article_count: number;
+};
+export type NewsUserState = {
+  article_id: number;
+  user_id: string;
+  is_read: boolean;
+  read_at: string | null;
+  is_saved: boolean;
+  saved_at: string | null;
+};
+export type NewsFilters = {
+  q?: string;
+  provider?: string;
+  source?: string;
+  asset_id?: string;
+  portfolio_id?: number;
+  category?: string;
+  sentiment?: string;
+  breaking?: boolean;
+  press_release?: boolean;
+  start_date?: string;
+  end_date?: string;
+  sort?: "recency" | "relevance";
+  limit?: number;
+  offset?: number;
+};
 export type OverviewUpdates = {
   total_market_value: number;
   position_count: number;
@@ -1139,6 +1244,34 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   overviewUpdates: () => request<OverviewUpdates>("/overview/updates"),
+  news: (filters: NewsFilters = {}) => {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") params.set(key, String(value));
+    });
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    return request<NewsFeed>(`/news${suffix}`);
+  },
+  latestNews: (limit = 25, offset = 0) => request<NewsFeed>(`/news/latest?limit=${limit}&offset=${offset}`),
+  breakingNews: (limit = 25, offset = 0) => request<NewsFeed>(`/news/breaking?limit=${limit}&offset=${offset}`),
+  newsSearch: (params: { q: string; provider?: string; start_date?: string; end_date?: string; sort?: "recency" | "relevance"; limit?: number; offset?: number }) => {
+    const query = new URLSearchParams({
+      q: params.q,
+      sort: params.sort ?? "relevance",
+      limit: String(params.limit ?? 25),
+      offset: String(params.offset ?? 0),
+    });
+    if (params.provider) query.set("provider", params.provider);
+    if (params.start_date) query.set("start_date", params.start_date);
+    if (params.end_date) query.set("end_date", params.end_date);
+    return request<NewsFeed>(`/news/search?${query.toString()}`);
+  },
+  newsArticle: (articleId: number) => request<NewsArticle>(`/news/articles/${articleId}`),
+  markNewsRead: (articleId: number) => request<NewsUserState>(`/news/articles/${articleId}/read`, { method: "POST" }),
+  saveNewsArticle: (articleId: number) => request<NewsUserState>(`/news/articles/${articleId}/save`, { method: "POST" }),
+  unsaveNewsArticle: (articleId: number) => request<NewsUserState>(`/news/articles/${articleId}/save`, { method: "DELETE" }),
+  newsProviders: () => request<NewsProvider[]>("/news/providers"),
+  newsCategories: () => request<NewsCategory[]>("/news/categories"),
   signals: (params: Record<string, string | number | null | undefined> = {}) => {
     const query = new URLSearchParams();
     Object.entries(params).forEach(([key, value]) => {
@@ -1279,6 +1412,15 @@ export const api = {
   },
   portfolioFundamentals: (id: number, horizonYears = 5) =>
     request<PortfolioFundamentals>(`/portfolios/${id}/fundamentals?horizon_years=${horizonYears}`),
+  portfolioNews: (id: number, params: { category?: string; sort?: "recency" | "relevance"; limit?: number; offset?: number } = {}) => {
+    const query = new URLSearchParams({
+      limit: String(params.limit ?? 10),
+      offset: String(params.offset ?? 0),
+      sort: params.sort ?? "relevance",
+    });
+    if (params.category) query.set("category", params.category);
+    return request<NewsFeed>(`/portfolios/${id}/news?${query.toString()}`);
+  },
   optimizePortfolio: (id: number, objective: OptimizationPreview["objective"], constraints: OptimizationConstraints = {}) =>
     request<OptimizationPreview>(`/portfolios/${id}/optimization/preview`, {
       method: "POST",
@@ -1302,6 +1444,15 @@ export const api = {
   assetHoldings: (id: string) => request<AssetHolding[]>(`/assets/${id}/holdings`),
   assetActivity: (id: string, limit = 20, offset = 0) =>
     request<Page<AssetActivity>>(`/assets/${id}/activity?limit=${limit}&offset=${offset}`),
+  assetNews: (id: string, params: { category?: string; sort?: "recency" | "relevance"; limit?: number; offset?: number } = {}) => {
+    const query = new URLSearchParams({
+      limit: String(params.limit ?? 10),
+      offset: String(params.offset ?? 0),
+      sort: params.sort ?? "recency",
+    });
+    if (params.category) query.set("category", params.category);
+    return request<NewsFeed>(`/assets/${encodeURIComponent(id)}/news?${query.toString()}`);
+  },
   prices: (id: string, params: { limit?: number; range?: string } = {}) => {
     const query = new URLSearchParams({ limit: String(params.limit ?? 5000), range: params.range ?? "1Y" });
     return request<PricePoint[]>(`/assets/${id}/prices?${query.toString()}`);

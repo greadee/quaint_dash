@@ -8,6 +8,16 @@ import App from "./App";
 
 const apiMock = vi.hoisted(() => ({
   overviewUpdates: vi.fn(),
+  news: vi.fn(),
+  latestNews: vi.fn(),
+  breakingNews: vi.fn(),
+  newsSearch: vi.fn(),
+  newsArticle: vi.fn(),
+  markNewsRead: vi.fn(),
+  saveNewsArticle: vi.fn(),
+  unsaveNewsArticle: vi.fn(),
+  newsProviders: vi.fn(),
+  newsCategories: vi.fn(),
   signals: vi.fn(),
   signalDetail: vi.fn(),
   updateSignalUserState: vi.fn(),
@@ -20,6 +30,7 @@ const apiMock = vi.hoisted(() => ({
   portfolioPerformance: vi.fn(),
   portfolioRisk: vi.fn(),
   portfolioFundamentals: vi.fn(),
+  portfolioNews: vi.fn(),
   aggregatePortfolio: vi.fn(),
   aggregatePositions: vi.fn(),
   transactions: vi.fn(),
@@ -50,6 +61,7 @@ const apiMock = vi.hoisted(() => ({
   prices: vi.fn(),
   assetPrices: vi.fn(),
   assetActivity: vi.fn(),
+  assetNews: vi.fn(),
   assetAnalytics: vi.fn(),
   assetHoldings: vi.fn(),
   brokerStatus: vi.fn(),
@@ -283,6 +295,35 @@ const signalDetail = {
   user_state: { reviewed_at: null, muted_until: null, dismissed_until: null, note: null, alert_rule_id: null },
 };
 
+const newsArticle = {
+  article_id: 1,
+  provider_code: "mock_news",
+  provider_name: "Mock News",
+  provider_article_id: "mock-nvda-1",
+  headline: "NVIDIA raises guidance after data center revenue beats expectations",
+  summary: "NVIDIA reported stronger data center revenue and raised guidance.",
+  canonical_url: "https://example.test/nvda",
+  source_name: "Mock Markets",
+  author: null,
+  language: "en",
+  published_at: "2026-06-30T14:30:00Z",
+  updated_at: "2026-06-30T14:31:00Z",
+  importance_score: 0.88,
+  relevance_score: 0.79,
+  sentiment_score: null,
+  sentiment_label: null,
+  is_breaking: true,
+  is_press_release: false,
+  is_correction: false,
+  is_retracted: false,
+  is_paywalled: false,
+  is_read: false,
+  is_saved: false,
+  assets: [{ asset_id: "NVDA", symbol: "NVDA", name: "NVIDIA", relevance_score: 0.96, confidence_score: 0.95, match_method: "provider_symbol", is_primary_entity: true }],
+  categories: [{ category_code: "earnings", category_name: "Earnings", confidence_score: 0.9, is_primary: true }],
+  cluster: { cluster_id: 1, cluster_key: "abc", article_count: 1, importance_score: 0.88, first_published_at: "2026-06-30T14:30:00Z", last_updated_at: "2026-06-30T14:31:00Z" },
+};
+
 function resetApiMocks() {
   vi.clearAllMocks();
   window.localStorage.clear();
@@ -306,6 +347,12 @@ function resetApiMocks() {
     ],
     news: [{ title: "NVIDIA updates outlook", symbol: "NVDA", provider: "local", published_at: "2026-06-19T12:00:00Z", url: "https://example.test/news" }],
   });
+  apiMock.news.mockResolvedValue({ items: [newsArticle], total: 1, limit: 25, offset: 0, sort: "recency", generated_at: "2026-06-30T14:40:00Z" });
+  apiMock.newsProviders.mockResolvedValue([{ provider_code: "mock_news", provider_name: "Mock News", provider_type: "fixture", is_enabled: true, supports_latest_news: true, supports_symbol_news: true, supports_full_text: false, supports_sentiment: true, supports_categories: true, last_attempted_at: "2026-06-30T14:40:00Z", last_succeeded_at: "2026-06-30T14:40:00Z", last_error_at: null, last_error_message: null, sync_status: "success" }]);
+  apiMock.newsCategories.mockResolvedValue([{ category_code: "earnings", category_name: "Earnings", default_importance_weight: 0.75, article_count: 1 }]);
+  apiMock.markNewsRead.mockResolvedValue({ article_id: 1, user_id: "local", is_read: true, read_at: "2026-06-30T14:41:00Z", is_saved: false, saved_at: null });
+  apiMock.saveNewsArticle.mockResolvedValue({ article_id: 1, user_id: "local", is_read: true, read_at: "2026-06-30T14:41:00Z", is_saved: true, saved_at: "2026-06-30T14:41:00Z" });
+  apiMock.unsaveNewsArticle.mockResolvedValue({ article_id: 1, user_id: "local", is_read: true, read_at: "2026-06-30T14:41:00Z", is_saved: false, saved_at: null });
   apiMock.portfolios.mockResolvedValue([portfolio]);
   apiMock.aggregatePortfolio.mockResolvedValue(portfolio);
   apiMock.portfolio.mockResolvedValue(portfolio);
@@ -351,6 +398,7 @@ function resetApiMocks() {
     missing_inputs: [],
   });
   apiMock.portfolioFundamentals.mockResolvedValue(fundamentals);
+  apiMock.portfolioNews.mockResolvedValue({ items: [newsArticle], total: 1, limit: 5, offset: 0, sort: "relevance", generated_at: "2026-06-30T14:40:00Z" });
   apiMock.transactions.mockResolvedValue({ items: [], total: 0, limit: 25, offset: 0 });
   apiMock.aggregateTransactions.mockResolvedValue({ items: [], total: 0, limit: 8, offset: 0 });
   apiMock.assets.mockResolvedValue([
@@ -568,6 +616,7 @@ function resetApiMocks() {
   });
   apiMock.prices.mockResolvedValue([{ date: "2026-06-18", close: 118 }, { date: "2026-06-19", close: 120 }]);
   apiMock.assetActivity.mockResolvedValue({ items: [{ transaction_id: 1, provider_transaction_id: null, timestamp: "2026-06-19T12:00:00Z", transaction_type: "BUY", source: "local", portfolio_name: "Core Growth", provider_account_id: null, asset_id: "NVDA", quantity: 1, price: 120, cash_amount: null, currency: "USD", fee_amount: null, batch_id: 1 }], total: 1, limit: 10, offset: 0 });
+  apiMock.assetNews.mockResolvedValue({ items: [newsArticle], total: 1, limit: 10, offset: 0, sort: "recency", generated_at: "2026-06-30T14:40:00Z" });
   apiMock.assetAnalytics.mockResolvedValue({
     beta: 1.2,
     dcf_fair_value: 135,
@@ -589,6 +638,7 @@ describe("App shell", () => {
 
     expect(screen.getByText("Quaint Dash")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Overview/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /News/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
     expect(screen.getByText("Default holdings shown")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Comfortable" })).toBeInTheDocument();
@@ -617,6 +667,14 @@ describe("App shell", () => {
 
     expect(screen.getByRole("button", { name: "Show 8" })).toBeInTheDocument();
     expect(screen.getByText("Test Holding 6")).toBeInTheDocument();
+  });
+
+  it("renders the news terminal route", async () => {
+    renderApp("/news");
+
+    expect(await screen.findByRole("heading", { name: "News Terminal" })).toBeInTheDocument();
+    expect((await screen.findAllByText(/NVIDIA raises guidance/)).length).toBeGreaterThan(0);
+    expect(screen.getByText("Affected assets")).toBeInTheDocument();
   });
 
   it("renders aggregate portfolio coverage", async () => {
@@ -693,8 +751,8 @@ describe("App shell", () => {
     expect(await screen.findByRole("heading", { name: "NVDA price" })).toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: "News" }));
-    expect(await screen.findByRole("heading", { name: "News and activity" })).toBeInTheDocument();
-    expect(screen.getByText("BUY")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "News" })).toBeInTheDocument();
+    expect(screen.getAllByText(/NVIDIA raises guidance/).length).toBeGreaterThan(0);
   });
 
   it("renders broker setup and mapped account state", async () => {

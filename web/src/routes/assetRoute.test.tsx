@@ -10,6 +10,7 @@ const apiMock = vi.hoisted(() => ({
   prices: vi.fn(),
   assetAnalytics: vi.fn(),
   assetActivity: vi.fn(),
+  assetNews: vi.fn(),
 }));
 
 vi.mock("../api", () => ({ api: apiMock }));
@@ -59,6 +60,7 @@ describe("AssetDetailPage", () => {
     ]);
     apiMock.assetAnalytics.mockResolvedValue({});
     apiMock.assetActivity.mockResolvedValue({ items: [], total: 0, limit: 10, offset: 0 });
+    apiMock.assetNews.mockResolvedValue({ items: [], total: 0, limit: 10, offset: 0, sort: "recency", generated_at: "2026-06-30T14:40:00Z" });
 
     renderAsset();
 
