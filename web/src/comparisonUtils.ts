@@ -3,7 +3,7 @@ import type { ComparisonAsset, ComparisonHistorySeries } from "./api";
 export type ComparisonPeriod = "1D" | "1W" | "1M" | "YTD" | "1Y" | "5Y";
 export type ComparisonMode = "price-return" | "total-return" | "relative" | "drawdown" | "rolling-return" | "rolling-volatility";
 export type ComparisonCurrency = "native" | "USD" | "CAD";
-export type ComparisonSection = "performance" | "valuation" | "growth" | "quality" | "balance-sheet" | "capital-allocation" | "estimates" | "methodology";
+export type ComparisonSection = "performance" | "business-strength" | "valuation" | "growth" | "quality" | "balance-sheet" | "capital-allocation" | "estimates" | "methodology";
 export type DifferenceMode = "absolute" | "difference" | "percent-difference" | "rank" | "percentile";
 export type MetricDirection = "higher_is_better" | "lower_is_better" | "neutral" | "target_range";
 export type ComparisonState = {
@@ -48,7 +48,7 @@ export const defaultComparisonState: ComparisonState = {
 export const comparisonPeriods: ComparisonPeriod[] = ["1D", "1W", "1M", "1Y", "YTD", "5Y"];
 export const comparisonModes: ComparisonMode[] = ["total-return", "price-return", "relative", "drawdown", "rolling-return", "rolling-volatility"];
 
-const validSections: ComparisonSection[] = ["performance", "valuation", "growth", "quality", "balance-sheet", "capital-allocation", "estimates", "methodology"];
+const validSections: ComparisonSection[] = ["performance", "business-strength", "valuation", "growth", "quality", "balance-sheet", "capital-allocation", "estimates", "methodology"];
 const validDifferenceModes: DifferenceMode[] = ["absolute", "difference", "percent-difference", "rank", "percentile"];
 const validCurrencies: ComparisonCurrency[] = ["native", "USD", "CAD"];
 
@@ -106,7 +106,7 @@ export function metricRegistry(): MetricDefinition[] {
     metric("volatility", "Annualized volatility", "risk", "Annualized standard deviation of daily returns.", "percent", 1, "lower_is_better", "stdev(daily returns) * sqrt(252)", "local calculation", "selected period"),
     metric("sharpe", "Sharpe ratio", "risk", "Excess return per unit of total volatility. Risk-free rate is 0% in this local view.", "ratio", 2, "higher_is_better", "annualized return / annualized volatility", "local calculation", "selected period"),
     metric("sortino", "Sortino ratio", "risk", "Return divided by downside deviation.", "ratio", 2, "higher_is_better", "annualized return / annualized downside deviation", "local calculation", "selected period"),
-    metric("max_drawdown", "Maximum drawdown", "risk", "Worst peak-to-trough loss in the aligned series.", "percent", 1, "lower_is_better", "min(value / running peak - 1)", "local calculation", "selected period"),
+    metric("max_drawdown", "Maximum drawdown", "risk", "Worst peak-to-trough loss in the aligned adjusted-price series.", "percent", 1, "lower_is_better", "min(value / running peak - 1)", "local calculation", "selected comparison period"),
     metric("latest_price", "Latest price", "valuation", "Latest stored close or adjusted close.", "currency", 2, "neutral", "provider close", "asset_quote_daily", "latest daily bar"),
     metric("market_cap", "Market cap", "valuation", "Stored asset market capitalization.", "currency", 0, "neutral", "provider supplied", "asset metadata", "latest asset row"),
     metric("pe_ratio", "Trailing P/E", "valuation", "Latest price divided by latest positive reported EPS.", "multiple", 1, "lower_is_better", "latest price / EPS", "local calculation from stored statements", "latest income statement"),

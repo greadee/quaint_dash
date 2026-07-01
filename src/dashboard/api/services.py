@@ -299,9 +299,18 @@ _ENRICHED_ASSET_SELECT = """
         ELSE a.region
     END AS region,
     a.size,
-    COALESCE(a.mkt_cap, cdr_underlying.mkt_cap) AS mkt_cap,
-    COALESCE(a.shares_outstanding, cdr_underlying.shares_outstanding) AS shares_outstanding,
-    COALESCE(a.market_beta, cdr_underlying.market_beta) AS market_beta
+    CASE WHEN cdr_underlying.asset_id IS NOT NULL
+        THEN COALESCE(cdr_underlying.mkt_cap, a.mkt_cap)
+        ELSE a.mkt_cap
+    END AS mkt_cap,
+    CASE WHEN cdr_underlying.asset_id IS NOT NULL
+        THEN COALESCE(cdr_underlying.shares_outstanding, a.shares_outstanding)
+        ELSE a.shares_outstanding
+    END AS shares_outstanding,
+    CASE WHEN cdr_underlying.asset_id IS NOT NULL
+        THEN COALESCE(cdr_underlying.market_beta, a.market_beta)
+        ELSE a.market_beta
+    END AS market_beta
 """
 
 
@@ -4902,12 +4911,15 @@ class AssetApiService:
             FROM stock_catalog
             WHERE UPPER(asset_id) = UPPER(?)
                OR UPPER(symbol) = UPPER(?)
+               OR UPPER(asset_id) = UPPER(?)
+               OR UPPER(symbol) = UPPER(?)
             ORDER BY
                 CASE WHEN UPPER(asset_id) = UPPER(?) THEN 0 ELSE 1 END,
+                CASE WHEN UPPER(asset_id) = UPPER(?) THEN 1 ELSE 2 END,
                 asset_id
             LIMIT 1
             """,
-            [asset_id, asset_id, asset_id],
+            [asset_id, asset_id, f"{asset_id}.TO", f"{asset_id}.TO", asset_id, f"{asset_id}.TO"],
         ).fetchone()
         if row is None:
             return None
@@ -4977,6 +4989,19 @@ class _ComparisonFxAudit:
 
 class ComparisonApiService:
     CALCULATION_VERSION = "comparison.workspace.v2"
+    REQUIRED_OPERATING_COMPANY_METRICS = (
+        "market_beta",
+        "revenue",
+        "gross_margin",
+        "operating_margin",
+        "net_margin",
+        "free_cash_flow",
+        "free_cash_flow_yield",
+        "cash",
+        "total_debt",
+        "shares_outstanding",
+        "roic",
+    )
 
     def __init__(self, conn) -> None:
         self.conn = conn
@@ -5123,6 +5148,8 @@ class ComparisonApiService:
         return ComparisonAssetProfile(
             asset_id=f"benchmark:{benchmark.index_id}",
             symbol=benchmark.index_id,
+            fundamental_asset_id=None,
+            fundamental_status="not_applicable",
             name=benchmark.name,
             asset_type="benchmark",
             exchange_code=None,
@@ -5160,6 +5187,8 @@ class ComparisonApiService:
         return ComparisonAssetProfile(
             asset_id=f"portfolio:{portfolio.portfolio_id}",
             symbol=f"PF{portfolio.portfolio_id}",
+            fundamental_asset_id=None,
+            fundamental_status="not_applicable",
             name=portfolio.name,
             asset_type="portfolio",
             exchange_code=None,
@@ -5179,15 +5208,23 @@ class ComparisonApiService:
 
     def asset_profile(self, asset_id: str) -> ComparisonAssetProfile:
         asset = AssetApiService(self.conn).get_asset(asset_id)
+        repo = AnalyticsRepository(self.conn)
+        fundamental_asset_id = repo.valuation_asset_id(asset.asset_id)
+        company_market_cap, company_beta, company_shares = self._company_metadata(
+            fundamental_asset_id,
+            asset.market_cap,
+            asset.market_beta,
+            asset.shares_outstanding,
+        )
         prices = self._prices(asset.asset_id)
         latest_price = prices[0][1] if prices else asset.latest_price
-        income_statements = self._income_statements(asset.asset_id)
+        income_statements = self._income_statements(fundamental_asset_id)
         latest_statement = income_statements[0] if income_statements else {}
-        balance_statements = self._statements(asset.asset_id, "balance")
+        balance_statements = self._statements(fundamental_asset_id, "balance")
         balance_statement = (balance_statements or [{}])[0]
-        cashflow_statements = self._statements(asset.asset_id, "cashflow")
+        cashflow_statements = self._statements(fundamental_asset_id, "cashflow")
         cashflow_statement = (cashflow_statements or [{}])[0]
-        estimate = self._latest_estimate(asset.asset_id)
+        estimate = self._latest_estimate(fundamental_asset_id)
         eps = _first_number(latest_statement, "eps", "epsdiluted", "dilutedEPS", "eps_actual")
         forward_eps = _first_number(estimate, "eps_estimated")
         revenue = _first_number(latest_statement, "revenue", "totalRevenue", "revenue_actual")
@@ -5242,18 +5279,119 @@ class ComparisonApiService:
             income_statements,
             balance_statements,
         )
-        dividend_yield = self._dividend_yield(asset.asset_id, latest_price)
+        dividend_yield = self._dividend_yield(fundamental_asset_id, latest_price)
         pe_ratio = latest_price / eps if latest_price is not None and eps and eps > 0 else None
         forward_pe = latest_price / forward_eps if latest_price is not None and forward_eps and forward_eps > 0 else None
         price_to_sales = (
-            asset.market_cap / revenue
-            if asset.market_cap is not None and revenue is not None and revenue > 0
+            company_market_cap / revenue
+            if company_market_cap is not None and revenue is not None and revenue > 0
             else None
         )
-        valuation = self._valuation_context(asset.asset_id, asset.sector, asset.industry, pe_ratio)
+        valuation = self._valuation_context(fundamental_asset_id, asset.sector, asset.industry, pe_ratio)
+        fundamentals = ComparisonFundamentals(
+            revenue=revenue,
+            net_income=net_income,
+            eps=eps,
+            forward_eps=forward_eps,
+            forward_revenue=forward_revenue,
+                pe_ratio=pe_ratio,
+                forward_pe=forward_pe,
+                price_to_sales=price_to_sales,
+                free_cash_flow=free_cash_flow,
+                free_cash_flow_yield=(
+                    free_cash_flow / company_market_cap
+                    if free_cash_flow is not None and company_market_cap and company_market_cap > 0
+                    else None
+                ),
+            gross_margin=(
+                gross_profit / revenue
+                if gross_profit is not None and revenue and revenue > 0
+                else None
+            ),
+            operating_margin=(
+                operating_income / revenue
+                if operating_income is not None and revenue and revenue > 0
+                else None
+            ),
+            net_margin=(
+                net_income / revenue
+                if net_income is not None and revenue and revenue > 0
+                else None
+            ),
+            cash=cash,
+            total_debt=total_debt,
+            net_debt=(
+                total_debt - cash
+                if total_debt is not None and cash is not None
+                else None
+            ),
+            net_debt_to_ebitda=(
+                (total_debt - cash) / ebitda
+                if total_debt is not None and cash is not None and ebitda and ebitda > 0
+                else None
+            ),
+            current_ratio=(
+                current_assets / current_liabilities
+                if current_assets is not None and current_liabilities and current_liabilities > 0
+                else None
+            ),
+            debt_to_equity=(
+                total_debt / equity
+                if total_debt is not None and equity and equity > 0
+                else None
+            ),
+            shares_outstanding=shares or company_shares,
+                dividend_yield=dividend_yield,
+                buyback_yield=(
+                    abs(buybacks) / company_market_cap
+                    if buybacks is not None and company_market_cap and company_market_cap > 0
+                    else None
+                ),
+            stock_based_compensation=sbc,
+            acquisition_intensity=(
+                abs(acquisitions) / revenue
+                if acquisitions is not None and revenue and revenue > 0
+                else None
+            ),
+            reinvestment_rate=(
+                reinvestment_spend / revenue
+                if reinvestment_spend and revenue and revenue > 0
+                else None
+            ),
+            roic=(
+                nopat / invested_capital
+                if nopat is not None and invested_capital and invested_capital > 0
+                else None
+            ),
+            roic_on_reinvestment=roic_on_reinvestment,
+            customer_concentration=_ratio_like(
+                _first_number(
+                    latest_statement,
+                    "customerConcentration",
+                    "customer_concentration",
+                    "topCustomerRevenuePercent",
+                    "top_customer_revenue_percent",
+                )
+            ),
+            revenue_concentration=_ratio_like(
+                _first_number(
+                    latest_statement,
+                    "revenueConcentration",
+                    "revenue_concentration",
+                    "topSegmentRevenuePercent",
+                    "top_segment_revenue_percent",
+                )
+            ),
+            latest_period_end=latest_statement.get("_period_end_date") or balance_statement.get("_period_end_date") or cashflow_statement.get("_period_end_date"),
+            estimate_as_of=estimate.get("_as_of_ts"),
+        )
+        missing_metrics = self._missing_fundamental_metrics(asset, fundamentals)
         return ComparisonAssetProfile(
             asset_id=asset.asset_id,
             symbol=asset.symbol,
+            fundamental_asset_id=fundamental_asset_id,
+            fundamental_status="complete" if not missing_metrics else "partial",
+            missing_fundamental_metrics=missing_metrics,
             name=asset.name,
             asset_type=asset.asset_type,
             exchange_code=asset.exchange_code,
@@ -5262,113 +5400,104 @@ class ComparisonApiService:
             country=asset.country,
             currency=asset.currency,
             latest_price=latest_price,
-            market_cap=asset.market_cap,
-            market_beta=asset.market_beta,
+            market_cap=company_market_cap,
+            market_beta=company_beta,
             returns=ComparisonReturns(
                 return_1d=_period_return(prices, 1),
                 return_5d=_period_return(prices, 5),
                 return_21d=_period_return(prices, 21),
                 return_252d=_period_return(prices, 252),
             ),
-            fundamentals=ComparisonFundamentals(
-                revenue=revenue,
-                net_income=net_income,
-                eps=eps,
-                forward_eps=forward_eps,
-                forward_revenue=forward_revenue,
-                pe_ratio=pe_ratio,
-                forward_pe=forward_pe,
-                price_to_sales=price_to_sales,
-                free_cash_flow=free_cash_flow,
-                free_cash_flow_yield=(
-                    free_cash_flow / asset.market_cap
-                    if free_cash_flow is not None and asset.market_cap and asset.market_cap > 0
-                    else None
-                ),
-                gross_margin=(
-                    gross_profit / revenue
-                    if gross_profit is not None and revenue and revenue > 0
-                    else None
-                ),
-                operating_margin=(
-                    operating_income / revenue
-                    if operating_income is not None and revenue and revenue > 0
-                    else None
-                ),
-                net_margin=(
-                    net_income / revenue
-                    if net_income is not None and revenue and revenue > 0
-                    else None
-                ),
-                cash=cash,
-                total_debt=total_debt,
-                net_debt=(
-                    total_debt - cash
-                    if total_debt is not None and cash is not None
-                    else None
-                ),
-                net_debt_to_ebitda=(
-                    (total_debt - cash) / ebitda
-                    if total_debt is not None and cash is not None and ebitda and ebitda > 0
-                    else None
-                ),
-                current_ratio=(
-                    current_assets / current_liabilities
-                    if current_assets is not None and current_liabilities and current_liabilities > 0
-                    else None
-                ),
-                debt_to_equity=(
-                    total_debt / equity
-                    if total_debt is not None and equity and equity > 0
-                    else None
-                ),
-                shares_outstanding=shares or asset.shares_outstanding,
-                dividend_yield=dividend_yield,
-                buyback_yield=(
-                    abs(buybacks) / asset.market_cap
-                    if buybacks is not None and asset.market_cap and asset.market_cap > 0
-                    else None
-                ),
-                stock_based_compensation=sbc,
-                acquisition_intensity=(
-                    abs(acquisitions) / revenue
-                    if acquisitions is not None and revenue and revenue > 0
-                    else None
-                ),
-                reinvestment_rate=(
-                    reinvestment_spend / revenue
-                    if reinvestment_spend and revenue and revenue > 0
-                    else None
-                ),
-                roic=(
-                    nopat / invested_capital
-                    if nopat is not None and invested_capital and invested_capital > 0
-                    else None
-                ),
-                roic_on_reinvestment=roic_on_reinvestment,
-                customer_concentration=_ratio_like(
-                    _first_number(
-                        latest_statement,
-                        "customerConcentration",
-                        "customer_concentration",
-                        "topCustomerRevenuePercent",
-                        "top_customer_revenue_percent",
-                    )
-                ),
-                revenue_concentration=_ratio_like(
-                    _first_number(
-                        latest_statement,
-                        "revenueConcentration",
-                        "revenue_concentration",
-                        "topSegmentRevenuePercent",
-                        "top_segment_revenue_percent",
-                    )
-                ),
-                latest_period_end=latest_statement.get("_period_end_date") or balance_statement.get("_period_end_date") or cashflow_statement.get("_period_end_date"),
-                estimate_as_of=estimate.get("_as_of_ts"),
-            ),
+            fundamentals=fundamentals,
             valuation=valuation,
         )
+
+    def _missing_fundamental_metrics(
+        self,
+        asset: AssetDetail,
+        fundamentals: ComparisonFundamentals,
+    ) -> list[str]:
+        allocation = allocation_class(
+            asset_id=asset.asset_id,
+            symbol=asset.symbol,
+            name=asset.name,
+            asset_type=asset.asset_type,
+            asset_subtype=asset.asset_subtype,
+            sector=asset.sector,
+            industry=asset.industry,
+        )
+        if allocation not in {"Stock", "CDR"} and not asset.is_cdr:
+            return []
+        values = fundamentals.model_dump()
+        values["market_beta"] = self._company_metadata(
+            asset.underlying_asset_id or asset.asset_id,
+            asset.market_cap,
+            asset.market_beta,
+            asset.shares_outstanding,
+        )[1]
+        if _is_financial_company(asset):
+            for key in (
+                "gross_margin",
+                "operating_margin",
+                "free_cash_flow",
+                "free_cash_flow_yield",
+                "roic",
+            ):
+                values[key] = 0 if values.get(key) is None else values[key]
+        if values.get("roic") is None and self._roic_not_applicable(
+            asset.underlying_asset_id or asset.asset_id
+        ):
+            values["roic"] = 0
+        return [
+            key
+            for key in self.REQUIRED_OPERATING_COMPANY_METRICS
+            if values.get(key) is None
+        ]
+
+    def _company_metadata(
+        self,
+        asset_id: str,
+        fallback_market_cap: float | None,
+        fallback_beta: float | None,
+        fallback_shares: float | None,
+    ) -> tuple[float | None, float | None, float | None]:
+        row = self.conn.execute(
+            """
+            SELECT mkt_cap, market_beta, shares_outstanding
+            FROM asset
+            WHERE UPPER(asset_id) = UPPER(?)
+            """,
+            [asset_id],
+        ).fetchone()
+        if row is None:
+            return fallback_market_cap, fallback_beta, fallback_shares
+        return (
+            _float_or_none(row[0]) or fallback_market_cap,
+            _float_or_none(row[1]) or fallback_beta,
+            _float_or_none(row[2]) or fallback_shares,
+        )
+
+    def _roic_not_applicable(self, asset_id: str) -> bool:
+        row = self.conn.execute(
+            """
+            SELECT data_json
+            FROM financial_statement
+            WHERE UPPER(asset_id) = UPPER(?)
+              AND statement_type = 'balance'
+            ORDER BY period_end_date DESC NULLS LAST, year DESC, quarter DESC
+            LIMIT 1
+            """,
+            [asset_id],
+        ).fetchone()
+        if row is None:
+            return False
+        data = _json_dict(row[0])
+        total_debt = _first_number(data, "totalDebt", "debt") or 0.0
+        equity = _first_number(data, "totalStockholdersEquity", "totalEquity")
+        cash = _first_number(data, "cashAndCashEquivalents", "cashAndShortTermInvestments", "cash")
+        if equity is None or cash is None:
+            return False
+        return total_debt + equity - cash <= 0
 
     def benchmark_profile(self, index_id: str) -> BenchmarkComparisonProfile:
         row = self.conn.execute(
@@ -5798,6 +5927,7 @@ class ComparisonApiService:
             """,
             [asset_id],
         ).fetchone()
+        statement_asset_id = AnalyticsRepository(self.conn).valuation_asset_id(asset_id)
         statement = self.conn.execute(
             """
             SELECT period_end_date, source, ingested_at_utc
@@ -5806,7 +5936,7 @@ class ComparisonApiService:
             ORDER BY period_end_date DESC NULLS LAST, year DESC, quarter DESC
             LIMIT 1
             """,
-            [asset_id],
+            [statement_asset_id],
         ).fetchone()
         stale = False
         stale_reason = None
@@ -7296,6 +7426,17 @@ def _cdr_classification_override(
         "sector": _canonical_sector_label(sector or override["sector"]),
         "industry": _canonical_industry_label(industry or override["industry"]),
         "country": override["country"] if country is None or country.upper() == "CA" else country,
+    }
+
+
+def _is_financial_company(asset: AssetDetail) -> bool:
+    sector = _normalized_lookup_key(asset.sector)
+    industry = _normalized_lookup_key(asset.industry)
+    return sector == "financials" or sector == "financial services" or industry in {
+        "asset management",
+        "banks",
+        "credit services",
+        "insurance",
     }
 
 

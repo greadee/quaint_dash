@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Plus, X } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { api, type ComparisonAsset, type ComparisonHistorySeries } from "../api";
+import { api, type BusinessStrengthScorecard, type ComparisonAsset, type ComparisonHistorySeries } from "../api";
 import {
   assetMetricValue,
   calculateSeriesMetrics,
@@ -33,6 +33,8 @@ export function ComparePage() {
   const [draft, setDraft] = useState("");
   const [assetWarning, setAssetWarning] = useState("");
   const [hiddenSeries, setHiddenSeries] = useState<string[]>([]);
+  const [businessStrengthSort, setBusinessStrengthSort] = useState("overall_score");
+  const [businessStrengthMode, setBusinessStrengthMode] = useState<"template-adjusted" | "common-metric">("template-adjusted");
   const registry = useMemo(() => metricRegistry(), []);
   const primarySymbol = state.symbols[0] ?? draft.trim().toUpperCase();
   const benchmarkAssociations = useQuery({
@@ -51,6 +53,12 @@ export function ComparePage() {
       currency: state.currency,
     }),
     enabled: state.symbols.length > 0,
+    placeholderData: (previous) => previous,
+  });
+  const businessStrength = useQuery({
+    queryKey: ["business-strength-compare", state.symbols],
+    queryFn: () => api.compareBusinessStrength(state.symbols),
+    enabled: state.symbols.length >= 2 && state.section === "business-strength",
     placeholderData: (previous) => previous,
   });
   const updateState = useCallback((next: Partial<ComparisonState>, replace = false) => {
@@ -116,6 +124,7 @@ export function ComparePage() {
         <label>Currency<select value={state.currency} onChange={(event) => updateState({ currency: event.target.value as ComparisonState["currency"] })}><option value="native">Native</option><option value="USD">USD display</option><option value="CAD">CAD display</option></select></label>
         <label>Reference<select value={state.reference} onChange={(event) => updateState({ reference: event.target.value })}>{state.symbols.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
         <label>View<select value={state.differenceMode} onChange={(event) => updateState({ differenceMode: event.target.value as DifferenceMode })}><option value="absolute">Absolute</option><option value="difference">Difference</option><option value="percent-difference">Percent difference</option><option value="rank">Rank</option><option value="percentile">Percentile</option></select></label>
+        <label>Section<select value={state.section} onChange={(event) => updateState({ section: event.target.value as ComparisonState["section"] })}><option value="performance">Performance</option><option value="business-strength">Business Strength</option><option value="valuation">Valuation</option><option value="growth">Growth</option><option value="quality">Quality</option><option value="balance-sheet">Balance sheet</option><option value="capital-allocation">Capital allocation</option><option value="methodology">Methodology</option></select></label>
       </div>
       <BenchmarkPicker value={state.benchmark} onChange={(value) => updateState({ benchmark: value })} associations={benchmarkAssociations.data?.associations} />
       <div className="selected-assets" aria-label="Selected assets">
@@ -132,7 +141,7 @@ export function ComparePage() {
       </div>
     </section>
     {state.symbols.length < 2 ? <section className="card compare-empty"><EmptyRow text="Add at least two comparable assets to show aligned performance, metric differences, and reference modes. The URL updates as you build the comparison." /></section> : null}
-    {comparison.error ? <ErrorPanel error={comparison.error} /> : comparison.isLoading ? <CompareSkeleton /> : data ? <>
+    {state.section === "business-strength" ? <BusinessStrengthComparison data={businessStrength.data?.assets ?? []} commonMetricCodes={businessStrength.data?.common_metric_codes ?? []} loading={businessStrength.isLoading} error={businessStrength.error} warning={businessStrength.data?.warning ?? null} sortKey={businessStrengthSort} onSort={setBusinessStrengthSort} mode={businessStrengthMode} onMode={setBusinessStrengthMode} /> : comparison.error ? <ErrorPanel error={comparison.error} /> : comparison.isLoading ? <CompareSkeleton /> : data ? <>
       <section className="compare-asset-strip">
         {data.assets.map((asset) => <CompareAssetSummary key={asset.asset_id} asset={asset} freshness={data.freshness[asset.symbol]} reference={asset.symbol === reference?.symbol} />)}
       </section>
@@ -175,6 +184,101 @@ export function ComparePage() {
       <ComparisonMethodology data={data} registry={registry} />
     </> : null}
   </div>;
+}
+
+function BusinessStrengthComparison({
+  data,
+  commonMetricCodes,
+  loading,
+  error,
+  warning,
+  sortKey,
+  onSort,
+  mode,
+  onMode,
+}: {
+  data: BusinessStrengthScorecard[];
+  commonMetricCodes: string[];
+  loading: boolean;
+  error: unknown;
+  warning: string | null;
+  sortKey: string;
+  onSort: (value: string) => void;
+  mode: "template-adjusted" | "common-metric";
+  onMode: (value: "template-adjusted" | "common-metric") => void;
+}) {
+  if (error) return <ErrorPanel error={error as Error} />;
+  if (loading) return <CompareSkeleton />;
+  if (!data.length) return <section className="card compare-empty"><EmptyRow text="Add at least two supported operating-company assets to compare deterministic Business Strength scorecards." /></section>;
+  const categories = [...new Set(data.flatMap((asset) => asset.category_scores.map((item) => item.category_code)))];
+  const sorted = [...data].sort((left, right) => scoreForSort(right, sortKey) - scoreForSort(left, sortKey));
+  return <section className="card compare-section business-strength-compare">
+    <div className="card-heading">
+      <div><p className="eyebrow">Business Strength</p><h2>Side-by-side scorecard</h2></div>
+      <div className="card-tools">
+        <label>Sort<select value={sortKey} onChange={(event) => onSort(event.target.value)}><option value="overall_score">Overall</option><option value="confidence_score">Confidence</option><option value="easy_hold_score">Easy-hold</option>{categories.map((code) => <option key={code} value={code}>{labelForCategory(data[0], code)}</option>)}</select></label>
+        <label>Mode<select value={mode} onChange={(event) => onMode(event.target.value as "template-adjusted" | "common-metric")}><option value="template-adjusted">Template-adjusted</option><option value="common-metric">Common metrics</option></select></label>
+      </div>
+    </div>
+    {warning ? <p className="compare-warning">{warning}</p> : null}
+    <div className="comparison-matrix wide" role="region" aria-label="Business Strength comparison table">
+      <table>
+        <thead><tr><th scope="col">Score</th>{sorted.map((asset) => <th scope="col" key={asset.symbol}>{asset.symbol}<span>{asset.template_name}</span></th>)}</tr></thead>
+        <tbody>
+          <tr><th scope="row">Overall</th>{sorted.map((asset) => <td key={`${asset.symbol}-overall`}><strong>{scoreText(asset.overall_score)}</strong><span>{asset.classification}</span></td>)}</tr>
+          <tr><th scope="row">Easy-hold</th>{sorted.map((asset) => <td key={`${asset.symbol}-easy`}>{scoreText(asset.easy_hold_score)}<span>{asset.easy_hold_label}</span></td>)}</tr>
+          <tr><th scope="row">Confidence</th>{sorted.map((asset) => <td key={`${asset.symbol}-confidence`}>{asset.confidence_score.toFixed(0)}%</td>)}</tr>
+          <tr><th scope="row">Completeness</th>{sorted.map((asset) => <td key={`${asset.symbol}-complete`}>{asset.completeness_score.toFixed(0)}%</td>)}</tr>
+          {categories.map((code) => <tr key={code}><th scope="row"><details><summary>{labelForCategory(data[0], code)}</summary><p>Category scores are normalized by each asset's sector template.</p></details></th>{sorted.map((asset) => {
+            const category = asset.category_scores.find((item) => item.category_code === code);
+            return <td key={`${asset.symbol}-${code}`} className={bestWorstClass(sorted, code, asset)}><strong>{scoreText(category?.adjusted_score)}</strong><span>{category ? `${category.confidence_score.toFixed(0)}% confidence` : "not comparable"}</span></td>;
+          })}</tr>)}
+        </tbody>
+      </table>
+    </div>
+    {mode === "common-metric" ? <CommonMetricComparison assets={sorted} commonMetricCodes={commonMetricCodes} /> : <TemplateAdjustedDetails assets={sorted} />}
+  </section>;
+}
+
+function TemplateAdjustedDetails({ assets }: { assets: BusinessStrengthScorecard[] }) {
+  return <div className="business-strength-compare-details">{assets.map((asset) => <details key={asset.symbol}><summary>{asset.symbol} metric drivers</summary><div className="model-table"><table><thead><tr><th>Category</th><th>Metric</th><th>Score</th><th>Status</th><th>Explanation</th></tr></thead><tbody>{asset.category_scores.flatMap((category) => category.metrics.map((metric) => <tr key={`${category.category_code}-${metric.metric_code}`}><td>{category.label}</td><td>{metric.label}</td><td>{scoreText(metric.metric_score)}</td><td>{metric.value_status.replace(/_/g, " ")}</td><td>{metric.explanation}</td></tr>))}</tbody></table></div></details>)}</div>;
+}
+
+function CommonMetricComparison({ assets, commonMetricCodes }: { assets: BusinessStrengthScorecard[]; commonMetricCodes: string[] }) {
+  const common = commonMetricCodes.length ? commonMetricCodes : assets.length ? [...assets.map((asset) => new Set(asset.category_scores.flatMap((category) => category.metrics.map((metric) => metric.metric_code)))).reduce((left, right) => new Set([...left].filter((item) => right.has(item))))] : [];
+  if (!common.length) return <EmptyRow text="No common metric definitions are shared by every selected Business Strength template." />;
+  return <div className="model-table"><table><thead><tr><th>Common metric</th>{assets.map((asset) => <th key={asset.symbol}>{asset.symbol}</th>)}</tr></thead><tbody>{common.map((code) => <tr key={code}><th scope="row">{metricLabel(assets[0], code)}</th>{assets.map((asset) => {
+    const metric = asset.category_scores.flatMap((category) => category.metrics).find((item) => item.metric_code === code);
+    return <td key={`${asset.symbol}-${code}`}>{scoreText(metric?.metric_score)}<span>{metric?.value_status.replace(/_/g, " ")}</span></td>;
+  })}</tr>)}</tbody></table></div>;
+}
+
+function scoreForSort(asset: BusinessStrengthScorecard, key: string) {
+  if (key === "overall_score") return asset.overall_score ?? -1;
+  if (key === "confidence_score") return asset.confidence_score;
+  if (key === "easy_hold_score") return asset.easy_hold_score ?? -1;
+  return asset.category_scores.find((item) => item.category_code === key)?.adjusted_score ?? -1;
+}
+
+function labelForCategory(asset: BusinessStrengthScorecard, code: string) {
+  return asset.category_scores.find((item) => item.category_code === code)?.label ?? code.replace(/_/g, " ");
+}
+
+function metricLabel(asset: BusinessStrengthScorecard, code: string) {
+  return asset.category_scores.flatMap((category) => category.metrics).find((metric) => metric.metric_code === code)?.label ?? code.replace(/_/g, " ");
+}
+
+function bestWorstClass(assets: BusinessStrengthScorecard[], code: string, asset: BusinessStrengthScorecard) {
+  const values = assets.map((item) => item.category_scores.find((category) => category.category_code === code)?.adjusted_score ?? null).filter((value): value is number => value != null);
+  const value = asset.category_scores.find((category) => category.category_code === code)?.adjusted_score;
+  if (value == null || values.length < 2) return "";
+  if (value === Math.max(...values)) return "best-cell";
+  if (value === Math.min(...values)) return "worst-cell";
+  return "";
+}
+
+function scoreText(value: number | null | undefined) {
+  return value == null ? "insufficient" : value.toFixed(0);
 }
 
 const chartColors = ["#245c4f", "#7a4f12", "#305c89", "#7d3c53", "#54613b"];
@@ -319,7 +423,7 @@ function ComparisonMethodology({ data, registry }: { data: { coverage: { calcula
   return <section className="card compare-section" id="methodology">
     <div className="card-heading"><div><p className="eyebrow">Data sources, methodology, and freshness</p><h2>Calculation notes</h2></div><span>{data.coverage.calculation_version}</span></div>
     <div className="methodology-grid">
-      <p>Prices come from `asset_quote_daily`; adjusted close is preferred for total-return mode. Fundamentals come from latest stored `financial_statement` JSON. Benchmark context uses stored benchmark daily metrics.</p>
+      <p>Prices come from `asset_quote_daily`; adjusted close is preferred for total-return mode. Fundamentals come from latest stored company-level `financial_statement` JSON, using the resolved underlying asset for CDRs and wrappers. Benchmark context uses stored benchmark daily metrics.</p>
       <p>Currency policy: {data.coverage.currency === "native" ? "values remain in each asset's native currency." : `historical FX conversion uses stored ${data.fx_policy.source ?? "FX"} rates for ${data.fx_policy.rate_count} matched observation(s); missing pairs: ${data.fx_policy.missing_pairs.join(", ") || "none"}.`}</p>
       <p>Mode: {data.coverage.mode.replace(/-/g, " ")}. Missing, unsupported, stale, or insufficient values render as N/A and are not treated as zero.</p>
       {data.benchmark ? <p>Benchmark: {data.benchmark.index_id} - {data.benchmark.name}.</p> : <p>No benchmark selected.</p>}

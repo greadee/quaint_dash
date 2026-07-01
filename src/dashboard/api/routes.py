@@ -26,6 +26,11 @@ from dashboard.api.models import (
     BenchmarkRefreshRequest,
     BenchmarkHardenRequest,
     BenchmarkSeedRequest,
+    BusinessStrengthCompareRequest,
+    BusinessStrengthCompareResponse,
+    BusinessStrengthMethodologyResponse,
+    BusinessStrengthScorecardResponse,
+    BusinessStrengthTemplateResponse,
     BrokerAccountMappingRequest,
     BrokerAccountResponse,
     BrokerConnectionResponse,
@@ -86,6 +91,9 @@ from dashboard.api.services import (
     ComparisonApiService,
     PortfolioApiService,
 )
+from dashboard.ingestion.websocket.live_price_subscriptions import LivePriceSubscriptionResolver
+from dashboard.services.business_strength import BusinessStrengthAnalyzer, BusinessStrengthTemplateRegistry
+from dashboard.services.business_strength.models import METHODOLOGY_VERSION
 
 router = APIRouter(prefix="/api/v1")
 
@@ -253,6 +261,62 @@ def comparison_workspace(
         mode=mode,
         currency=currency.upper() if currency != "native" else currency,
     )
+
+
+@router.get("/assets/{asset_id:path}/business-strength", response_model=BusinessStrengthScorecardResponse)
+def asset_business_strength(asset_id: str, conn=Depends(get_connection)):
+    return BusinessStrengthAnalyzer(conn).latest_or_run(asset_id)
+
+
+@router.get("/assets/{asset_id:path}/business-strength/audit", response_model=BusinessStrengthScorecardResponse)
+def asset_business_strength_audit(asset_id: str, conn=Depends(get_connection)):
+    return BusinessStrengthAnalyzer(conn).latest_or_run(asset_id)
+
+
+@router.get("/assets/{asset_id:path}/business-strength/history", response_model=list[BusinessStrengthScorecardResponse])
+def asset_business_strength_history(asset_id: str, conn=Depends(get_connection)):
+    analyzer = BusinessStrengthAnalyzer(conn)
+    latest = analyzer.latest_or_run(asset_id)
+    return [latest]
+
+
+@router.post("/assets/{asset_id:path}/business-strength/recalculate", response_model=BusinessStrengthScorecardResponse)
+def recalculate_asset_business_strength(asset_id: str, request: Request, conn=Depends(get_connection)):
+    with request.app.state.write_lock:
+        return BusinessStrengthAnalyzer(conn).run(asset_id)
+
+
+@router.post("/compare/business-strength", response_model=BusinessStrengthCompareResponse)
+def compare_business_strength(payload: BusinessStrengthCompareRequest, request: Request, conn=Depends(get_connection)):
+    with request.app.state.write_lock:
+        return BusinessStrengthAnalyzer(conn).compare(payload.symbols)
+
+
+@router.get("/business-strength/templates", response_model=list[BusinessStrengthTemplateResponse])
+def business_strength_templates():
+    return [
+        BusinessStrengthTemplateResponse(
+            template_code=template.template_code,
+            name=template.name,
+            sector=template.sector,
+            industry=template.industry,
+            version=template.version,
+            category_weights=template.category_weights,
+            metrics=[metric.__dict__ for metric in template.metrics],
+        )
+        for template in BusinessStrengthTemplateRegistry().all()
+    ]
+
+
+@router.get("/business-strength/methodologies", response_model=list[BusinessStrengthMethodologyResponse])
+def business_strength_methodologies():
+    return [
+        BusinessStrengthMethodologyResponse(
+            version=METHODOLOGY_VERSION,
+            name="Deterministic Business Strength Scorecard",
+            description="Sector-aware deterministic scoring from stored structured financial and metadata inputs.",
+        )
+    ]
 
 
 @router.get("/benchmarks", response_model=list[BenchmarkIndexSummary])
@@ -801,6 +865,54 @@ async def market_freshness_stop(request: Request):
 async def market_freshness_tick(request: Request):
     result = await request.app.state.market_freshness_worker.tick()
     return ActionResult(result=result)
+
+
+@router.get("/market/streaming/status")
+def market_streaming_status(conn=Depends(get_connection)):
+    subscriptions = LivePriceSubscriptionResolver(conn).resolve(
+        include_portfolios=True,
+        include_watchlist=True,
+    )
+    current_rows = conn.execute(
+        """
+        SELECT asset_id, symbol, price, provider, market_session, updated_at
+        FROM current_asset_price
+        """
+    ).fetchall()
+    by_symbol = {str(row[1]): row for row in current_rows}
+    provider_rows = conn.execute(
+        """
+        SELECT provider, status, last_success_at, last_error_at, last_error_message, updated_at
+        FROM live_price_provider_health
+        ORDER BY provider
+        """
+    ).fetchall()
+    missing = [item.symbol for item in subscriptions if item.symbol not in by_symbol]
+    return {
+        "subscription_count": len(subscriptions),
+        "current_price_count": len(current_rows),
+        "missing_current_price_symbols": missing,
+        "subscriptions": [
+            {
+                "asset_id": item.asset_id,
+                "symbol": item.symbol,
+                "exchange_code": item.exchange_code,
+                "source_scope": item.source_scope,
+            }
+            for item in subscriptions
+        ],
+        "provider_health": [
+            {
+                "provider": row[0],
+                "status": row[1],
+                "last_success_at": row[2],
+                "last_error_at": row[3],
+                "last_error_message": row[4],
+                "updated_at": row[5],
+            }
+            for row in provider_rows
+        ],
+    }
 
 
 @router.get("/data/readiness/status", response_model=DataReadinessWorkerStatusResponse)

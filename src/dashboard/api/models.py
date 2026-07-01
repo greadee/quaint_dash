@@ -679,6 +679,9 @@ class ValuationContext(BaseModel):
 class ComparisonAssetProfile(BaseModel):
     asset_id: str
     symbol: str
+    fundamental_asset_id: str | None = None
+    fundamental_status: str = "unknown"
+    missing_fundamental_metrics: list[str] = Field(default_factory=list)
     name: str | None
     asset_type: str | None = None
     exchange_code: str | None = None
@@ -799,6 +802,100 @@ class ComparisonWorkspaceResponse(BaseModel):
     coverage: ComparisonCoverage
     fx_policy: ComparisonFxPolicy
     insights: list[str] = Field(default_factory=list)
+
+
+class BusinessStrengthMetricResponse(BaseModel):
+    category_code: str
+    metric_code: str
+    label: str
+    raw_value: float | None = None
+    normalized_value: float | None = None
+    metric_score: float | None = None
+    metric_weight: float
+    contribution: float | None = None
+    unit: str
+    direction: str
+    value_status: str
+    source: str
+    source_timestamp: datetime | None = None
+    peer_percentile: float | None = None
+    historical_percentile: float | None = None
+    confidence: float
+    explanation: str
+
+
+class BusinessStrengthCategoryResponse(BaseModel):
+    category_code: str
+    label: str
+    raw_score: float | None = None
+    adjusted_score: float | None = None
+    category_weight: float
+    confidence_score: float
+    completeness_score: float
+    explanation: str
+    metrics: list[BusinessStrengthMetricResponse] = Field(default_factory=list)
+
+
+class BusinessStrengthScorecardResponse(BaseModel):
+    analysis_run_id: int | None = None
+    asset_id: str
+    symbol: str
+    name: str | None = None
+    sector: str | None = None
+    industry: str | None = None
+    template_code: str
+    template_name: str
+    template_version: int
+    methodology_version: str
+    analysis_date: date
+    source_data_as_of: datetime | None = None
+    overall_score: float | None = None
+    score_10: float | None = None
+    classification: str
+    confidence_score: float
+    completeness_score: float
+    easy_hold_score: float | None = None
+    easy_hold_label: str
+    status: str
+    missing_critical_metrics: list[str] = Field(default_factory=list)
+    stale_metrics: list[str] = Field(default_factory=list)
+    estimated_metrics: list[str] = Field(default_factory=list)
+    category_scores: list[BusinessStrengthCategoryResponse] = Field(default_factory=list)
+    strengths: list[str] = Field(default_factory=list)
+    weaknesses: list[str] = Field(default_factory=list)
+    peer_group: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    future_research_enabled: bool = False
+
+
+class BusinessStrengthCompareRequest(BaseModel):
+    symbols: list[str] = Field(min_length=2, max_length=8)
+
+
+class BusinessStrengthCompareResponse(BaseModel):
+    methodology_version: str
+    assets: list[BusinessStrengthScorecardResponse] = Field(default_factory=list)
+    failed_symbols: list[str] = Field(default_factory=list)
+    mixed_templates: bool
+    common_metric_codes: list[str] = Field(default_factory=list)
+    warning: str | None = None
+
+
+class BusinessStrengthTemplateResponse(BaseModel):
+    template_code: str
+    name: str
+    sector: str
+    industry: str
+    version: int
+    category_weights: dict[str, float]
+    metrics: list[dict[str, Any]]
+
+
+class BusinessStrengthMethodologyResponse(BaseModel):
+    version: str
+    name: str
+    description: str
+    is_active: bool = True
 
 
 class BenchmarkSymbol(BaseModel):

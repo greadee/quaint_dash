@@ -525,6 +525,9 @@ export type ValuationContext = {
 export type ComparisonAsset = {
   asset_id: string;
   symbol: string;
+  fundamental_asset_id?: string | null;
+  fundamental_status?: string;
+  missing_fundamental_metrics?: string[];
   name: string | null;
   asset_type: string | null;
   exchange_code: string | null;
@@ -782,6 +785,79 @@ export type ComparisonWorkspaceResponse = {
   coverage: ComparisonCoverage;
   fx_policy: ComparisonFxPolicy;
   insights: string[];
+};
+
+export type BusinessStrengthMetric = {
+  category_code: string;
+  metric_code: string;
+  label: string;
+  raw_value: number | null;
+  normalized_value: number | null;
+  metric_score: number | null;
+  metric_weight: number;
+  contribution: number | null;
+  unit: string;
+  direction: string;
+  value_status: string;
+  source: string;
+  source_timestamp: string | null;
+  peer_percentile: number | null;
+  historical_percentile: number | null;
+  confidence: number;
+  explanation: string;
+};
+
+export type BusinessStrengthCategory = {
+  category_code: string;
+  label: string;
+  raw_score: number | null;
+  adjusted_score: number | null;
+  category_weight: number;
+  confidence_score: number;
+  completeness_score: number;
+  explanation: string;
+  metrics: BusinessStrengthMetric[];
+};
+
+export type BusinessStrengthScorecard = {
+  analysis_run_id: number | null;
+  asset_id: string;
+  symbol: string;
+  name: string | null;
+  sector: string | null;
+  industry: string | null;
+  template_code: string;
+  template_name: string;
+  template_version: number;
+  methodology_version: string;
+  analysis_date: string;
+  source_data_as_of: string | null;
+  overall_score: number | null;
+  score_10: number | null;
+  classification: string;
+  confidence_score: number;
+  completeness_score: number;
+  easy_hold_score: number | null;
+  easy_hold_label: string;
+  status: string;
+  missing_critical_metrics: string[];
+  stale_metrics: string[];
+  estimated_metrics: string[];
+  category_scores: BusinessStrengthCategory[];
+  strengths: string[];
+  weaknesses: string[];
+  peer_group: string[];
+  warnings: string[];
+  future_research_enabled: boolean;
+};
+
+export type BusinessStrengthCompare = {
+  methodology_version: string;
+  assets: BusinessStrengthScorecard[];
+  failed_symbols: string[];
+  mixed_templates: boolean;
+  common_metric_codes: string[];
+  warning: string | null;
 };
 export type Transaction = {
   transaction_id: number;
@@ -1236,6 +1312,11 @@ export const api = {
     const suffix = params.toString() ? `?${params.toString()}` : "";
     return request<Record<string, unknown>>(`/assets/${id}/analytics${suffix}`);
   },
+  assetBusinessStrength: (id: string) => request<BusinessStrengthScorecard>(`/assets/${encodeURIComponent(id)}/business-strength`),
+  recalculateBusinessStrength: (id: string) =>
+    request<BusinessStrengthScorecard>(`/assets/${encodeURIComponent(id)}/business-strength/recalculate`, { method: "POST" }),
+  compareBusinessStrength: (symbols: string[]) =>
+    request<BusinessStrengthCompare>("/compare/business-strength", { method: "POST", body: JSON.stringify({ symbols }) }),
   brokerConnections: () => request<BrokerConnection[]>("/brokers/connections"),
   brokerAccounts: () => request<BrokerAccount[]>("/brokers/accounts"),
   brokerStatus: () => request<BrokerStatus>("/brokers/status"),

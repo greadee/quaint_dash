@@ -329,6 +329,56 @@ def test_comparison_workspace_returns_statement_estimate_and_capital_allocation_
     assert fundamentals["revenue_concentration"] == 0.45
 
 
+def test_comparison_workspace_uses_underlying_fundamentals_for_cdr_wrapper(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        """
+        INSERT INTO asset(
+            asset_id, symbol, asset_type, asset_subtype, ccy, name, country, mkt_cap, market_beta, shares_outstanding
+        )
+        VALUES
+            ('NVDA', 'NVDA', 'stock', NULL, 'USD', 'NVIDIA Corporation', 'US', 2000, 1.7, 100),
+            ('NVDA.TO', 'NVDA.TO', 'stock', 'cdr', 'CAD', 'NVIDIA Canadian Depositary Receipt', 'CA', 50, NULL, NULL)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+        VALUES
+            ('NVDA.TO', '2026-01-01', 25, 25, 'wrapper-price'),
+            ('NVDA.TO', '2026-01-02', 20, 20, 'wrapper-price')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO financial_statement(asset_id, statement_type, year, quarter, period_end_date, data_json, source)
+        VALUES
+            ('NVDA', 'income', 2026, 1, '2026-01-02', '{"revenue": 1000, "grossProfit": 600, "operatingIncome": 300, "netIncome": 200, "eps": 2, "ebitda": 400, "weightedAverageShsOutDil": 95}', 'test'),
+            ('NVDA', 'balance', 2026, 1, '2026-01-02', '{"cashAndCashEquivalents": 150, "totalDebt": 50, "totalCurrentAssets": 300, "totalCurrentLiabilities": 100, "totalStockholdersEquity": 500}', 'test'),
+            ('NVDA', 'cashflow', 2026, 1, '2026-01-02', '{"freeCashFlow": 250}', 'test')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/comparison/workspace?symbols=NVDA.TO&period=MAX")
+
+    assert response.status_code == 200
+    payload = response.json()
+    asset = payload["assets"][0]
+    assert asset["asset_id"] == "NVDA.TO"
+    assert asset["fundamental_asset_id"] == "NVDA"
+    assert asset["market_beta"] == 1.7
+    assert asset["market_cap"] == 2000
+    assert asset["fundamentals"]["gross_margin"] == 0.6
+    assert asset["fundamentals"]["operating_margin"] == 0.3
+    assert round(asset["fundamentals"]["roic"], 6) == round((300 * 0.79) / 400, 6)
+    assert payload["historical_series"][0]["points"][0]["close"] == 25
+    assert payload["historical_series"][0]["points"][1]["close"] == 20
+
+
 def test_comparison_workspace_can_compare_benchmark_as_asset(tmp_path):
     db_path = tmp_path / "api.db"
     app = create_app(db_path)
