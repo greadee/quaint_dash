@@ -62,7 +62,7 @@ import {
   type SortDirection,
 } from "./benchmarkUtils";
 import { ChartTypeToggle } from "./routes/routeShared";
-import { OptionalFeaturesEmpty, PageFeatureMenu, usePageFeature } from "./pageFeatureStore";
+import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar, usePageFeature } from "./pageFeatureStore";
 
 type Notify = (message: string, tone?: "success" | "error") => void;
 
@@ -226,6 +226,7 @@ export function BenchmarksWorkspacePage({ notify }: { notify: Notify }) {
           </div>
         </div>
         <div className="actions benchmarks-admin-actions">
+          <PageLayoutButton pageId="benchmarks" />
           <PageFeatureMenu pageId="benchmarks" />
           <button disabled={seed.isPending} onClick={() => seed.mutate({ scope: "all" })}><Database size={16} />Seed all</button>
           <button disabled={harden.isPending} onClick={() => harden.mutate()}><ShieldCheck size={16} />Harden view</button>
@@ -267,9 +268,10 @@ export function BenchmarksWorkspacePage({ notify }: { notify: Notify }) {
       </nav>
 
       {benchmarks.error ? <BenchmarkError message={actionErrorMessage(benchmarks.error)} /> : null}
+      <PageLayoutToolbar pageId="benchmarks" />
       <OptionalFeaturesEmpty pageId="benchmarks" />
-      {showSnapshot ? <BenchmarkSnapshot snapshot={snapshot} period={period} /> : null}
-      {showComparisonChart ? <BenchmarkComparisonChart
+      {showSnapshot ? <LayoutWidget pageId="benchmarks" widgetId="benchmarks.snapshot"><BenchmarkSnapshot snapshot={snapshot} period={period} /></LayoutWidget> : null}
+      {showComparisonChart ? <LayoutWidget pageId="benchmarks" widgetId="benchmarks.comparisonChart"><BenchmarkComparisonChart
         normalized={normalized}
         chartData={chartData}
         baseline={baseline}
@@ -280,7 +282,7 @@ export function BenchmarksWorkspacePage({ notify }: { notify: Notify }) {
         period={period}
         chartType={chartType}
         onChartTypeChange={(value) => updateParam("chart", value)}
-      /> : null}
+      /></LayoutWidget> : null}
       <BenchmarkExplorer
         rows={rows}
         isLoading={benchmarks.isLoading}
@@ -291,8 +293,8 @@ export function BenchmarksWorkspacePage({ notify }: { notify: Notify }) {
         onSort={changeSort}
         onToggle={toggleSelected}
       />
-      {showLeadership ? <BenchmarkLeadership rows={rows} /> : null}
-      {showStatus ? <BenchmarkStatusPanel rows={rows} /> : null}
+      {showLeadership ? <LayoutWidget pageId="benchmarks" widgetId="benchmarks.leadership"><BenchmarkLeadership rows={rows} /></LayoutWidget> : null}
+      {showStatus ? <LayoutWidget pageId="benchmarks" widgetId="benchmarks.status"><BenchmarkStatusPanel rows={rows} /></LayoutWidget> : null}
     </div>
   );
 }
@@ -583,28 +585,29 @@ export function BenchmarkDetailPage({ notify }: { notify: Notify }) {
       {detail.error ? <BenchmarkError message={actionErrorMessage(detail.error)} /> : detail.isLoading ? <BenchmarkSkeleton rows={10} /> : detail.data ? (
         <>
           <BenchmarkDetailHeader detail={detail.data} />
-          <div className="actions"><PageFeatureMenu pageId="benchmark.detail" /></div>
+          <div className="actions"><PageLayoutButton pageId="benchmark.detail" /><PageFeatureMenu pageId="benchmark.detail" /></div>
+          <PageLayoutToolbar pageId="benchmark.detail" />
           <OptionalFeaturesEmpty pageId="benchmark.detail" />
           <section className="benchmark-detail-grid">
             <BenchmarkDetailChart detail={detail.data} prices={prices.data ?? []} normalized={normalized} />
-            {showRisk ? <BenchmarkRiskPanel metric={latestMetric} detail={detail.data} metrics={metrics.data ?? []} /> : null}
+            {showRisk ? <LayoutWidget pageId="benchmark.detail" widgetId="benchmark.detail.risk"><BenchmarkRiskPanel metric={latestMetric} detail={detail.data} metrics={metrics.data ?? []} /></LayoutWidget> : null}
           </section>
           <section className="benchmark-detail-grid">
-            {showIdentity ? <BenchmarkIdentityPanel detail={detail.data} /> : null}
-            {showQuality ? <BenchmarkQualityPanel detail={detail.data} /> : null}
+            {showIdentity ? <LayoutWidget pageId="benchmark.detail" widgetId="benchmark.detail.identity"><BenchmarkIdentityPanel detail={detail.data} /></LayoutWidget> : null}
+            {showQuality ? <LayoutWidget pageId="benchmark.detail" widgetId="benchmark.detail.quality"><BenchmarkQualityPanel detail={detail.data} /></LayoutWidget> : null}
           </section>
           <section className="benchmark-detail-grid">
-            {showExposure ? <BenchmarkExposurePanel exposures={exposures.data ?? []} isLoading={exposures.isLoading} /> : null}
-            {showConstituents ? <BenchmarkConstituentPanel constituents={constituents.data?.items ?? []} isLoading={constituents.isLoading} /> : null}
+            {showExposure ? <LayoutWidget pageId="benchmark.detail" widgetId="benchmark.detail.exposure"><BenchmarkExposurePanel exposures={exposures.data ?? []} isLoading={exposures.isLoading} /></LayoutWidget> : null}
+            {showConstituents ? <LayoutWidget pageId="benchmark.detail" widgetId="benchmark.detail.constituents"><BenchmarkConstituentPanel constituents={constituents.data?.items ?? []} isLoading={constituents.isLoading} /></LayoutWidget> : null}
           </section>
-          {showActions ? <section className="card benchmark-actions-card">
+          {showActions ? <LayoutWidget pageId="benchmark.detail" widgetId="benchmark.detail.actions"><section className="card benchmark-actions-card">
             <div className="card-heading"><div><p className="eyebrow">Manual refresh</p><h2>Data actions</h2></div></div>
             <div className="benchmark-card-actions">
               <button disabled={refresh.isPending} onClick={() => refresh.mutate({ jobType: "daily_price" })}><RefreshCw size={16} />Prices</button>
               <button disabled={refresh.isPending} onClick={() => refresh.mutate({ jobType: "metrics" })}><Activity size={16} />Metrics</button>
               <button disabled={refresh.isPending} onClick={() => refresh.mutate({ jobType: "composition" })}><Database size={16} />Composition</button>
             </div>
-          </section> : null}
+          </section></LayoutWidget> : null}
         </>
       ) : null}
     </div>

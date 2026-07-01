@@ -6,7 +6,7 @@ import { api } from "../api";
 import { money, percent } from "./routeFormatters";
 import { EmptyRow, Loading, Metric } from "./routeShared";
 import type { MoverDefault } from "./routeTypes";
-import { FeatureGate, OptionalFeaturesEmpty, PageFeatureMenu } from "../pageFeatureStore";
+import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar } from "../pageFeatureStore";
 
 const MARKET_REFRESH_REFETCH_MS = 60_000;
 
@@ -31,8 +31,9 @@ export function OverviewPage({ moverDefault }: { moverDefault: MoverDefault }) {
   return <div className="page">
     <div className="page-title">
       <div><p className="eyebrow">Today at a glance</p><h1>Overview</h1><p className="page-subtitle">A compact status screen for account coverage, tracked value, recent movement, and anything that needs attention.</p></div>
-      <div className="actions"><PageFeatureMenu pageId="overview" /><Link className="button-link" to="/signals"><Activity size={17}/>Review signals</Link><Link className="button-link primary" to="/portfolios"><WalletCards size={17}/>Open portfolios</Link></div>
+      <div className="actions"><PageLayoutButton pageId="overview" /><PageFeatureMenu pageId="overview" /><Link className="button-link" to="/signals"><Activity size={17}/>Review signals</Link><Link className="button-link primary" to="/portfolios"><WalletCards size={17}/>Open portfolios</Link></div>
     </div>
+    <PageLayoutToolbar pageId="overview" />
     <section className="metric-grid">
       <Metric icon={<CircleDollarSign />} label="Total market value" value={money(updates.data?.total_market_value)} />
       <Metric icon={<Activity />} label="Active holdings" value={String(updates.data?.position_count ?? 0)} />
@@ -52,14 +53,14 @@ export function OverviewPage({ moverDefault }: { moverDefault: MoverDefault }) {
           {topMover ? <Link className="portal-link" to={`/asset/${topMover.asset_id}`}>Open asset detail</Link> : <Link className="portal-link" to="/operations">Refresh market data</Link>}
         </div>
       </section>
-      <FeatureGate pageId="overview" featureId="overview.quickActions"><section className="card overview-primary">
+      <LayoutWidget pageId="overview" widgetId="overview.quickActions"><section className="card overview-primary">
         <div className="card-heading"><div><p className="eyebrow">Next action</p><h2>{failedJobs ? "Fix failed data jobs" : mappedAccounts ? "Review portfolio exposure" : "Connect a broker account"}</h2></div><span>{failedJobs ? `${failedJobs} failed` : `${mappedAccounts} mapped`}</span></div>
         <div className="overview-hero-value">
           <strong>{failedJobs ? "Data attention" : mappedAccounts ? "Portfolio review" : "Broker setup"}</strong>
           <p>{failedJobs ? "Operations has the failed job list and retry controls." : mappedAccounts ? "Portfolios contains holdings, exposure, analytics, and account mapping views." : "Broker setup stays in the broker workspace so account connection steps are not mixed into overview."}</p>
           <Link className="portal-link" to={failedJobs ? "/operations" : mappedAccounts ? "/portfolios" : "/brokers"}>{failedJobs ? "Open operations" : mappedAccounts ? "Open portfolio workspace" : "Start broker setup"}</Link>
         </div>
-      </section></FeatureGate>
+      </section></LayoutWidget>
     </section>
     <OptionalFeaturesEmpty pageId="overview" />
     <section className="update-grid">
@@ -73,10 +74,10 @@ export function OverviewPage({ moverDefault }: { moverDefault: MoverDefault }) {
         </div>
         {updates.isLoading ? <Loading compact /> : movers.length ? <div className="mover-list">{visibleMovers.map((item) => <Link to={`/asset/${item.asset_id}`} className="mover-row" key={item.asset_id}><div className="mover-asset"><strong>{item.symbol}</strong><span>{item.name ?? "Held asset"}</span></div><b className={(item.change_percent ?? 0) >= 0 ? "positive" : "negative"}>{percent(item.change_percent)}</b><span>{money(item.market_value)}</span></Link>)}</div> : <EmptyRow text="No price movers yet. Add price history for held assets to light this up." />}
       </section>
-      <FeatureGate pageId="overview" featureId="overview.marketNews"><section className="card">
+      <LayoutWidget pageId="overview" widgetId="overview.marketNews"><section className="card">
         <div className="card-heading"><div><p className="eyebrow">Market notes</p><h2>News affecting holdings</h2></div><span>{updates.data?.news_count ?? 0} items</span></div>
         {updates.isLoading ? <Loading compact /> : updates.data?.news.length ? <div className="news-list">{updates.data.news.map((item, index) => <a href={item.url ?? undefined} target="_blank" rel="noreferrer" className="news-row" key={`${item.title}-${index}`}><div><strong>{item.title}</strong><span>{[item.symbol, item.provider, item.published_at ? new Date(item.published_at).toLocaleDateString() : null].filter(Boolean).join(" - ")}</span></div></a>)}</div> : <EmptyRow text="No local news found yet. Run sentiment/news ingestion to populate this panel." />}
-      </section></FeatureGate>
+      </section></LayoutWidget>
     </section>
   </div>;
 }

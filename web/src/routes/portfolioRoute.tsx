@@ -7,7 +7,7 @@ import { api, type HoldingSignal, type OptimizationPreview, type Portfolio, type
 import { AnalyticsBlock, DataIssueList, ExposureBars } from "./routeAnalytics";
 import { formatTimestamp, money, number, percent } from "./routeFormatters";
 import { ChartTypeToggle, EmptyRow, ErrorPanel, Loading, Metric, RangeSelector, Signal, TabBar } from "./routeShared";
-import { OptionalFeaturesEmpty, PageFeatureMenu, usePageFeature, usePageFeatureControls } from "../pageFeatureStore";
+import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar, usePageFeature, usePageFeatureControls } from "../pageFeatureStore";
 
 type PortfolioTopTab = "aggregate" | "portfolios" | "fundamentals";
 type PortfolioDetailTab = "overview" | "holdings" | "performance" | "risk" | "optimization" | "fundamentals" | "activity";
@@ -57,8 +57,9 @@ export function PortfolioWorkspacePage() {
   return <div className="page">
     <div className="page-title">
       <div><p className="eyebrow">Portfolio management</p><h1>Portfolios</h1><p className="page-subtitle">Backend-sourced portfolio totals, holdings, fundamentals, risk, and optimization previews.</p></div>
-      <div className="actions"><PageFeatureMenu pageId="portfolio.workspace" /></div>
+      <div className="actions"><PageLayoutButton pageId="portfolio.workspace" /><PageFeatureMenu pageId="portfolio.workspace" /></div>
     </div>
+    <PageLayoutToolbar pageId="portfolio.workspace" />
     <TabBar tabs={visibleTopTabs} selected={resolvedSelected} onSelect={setTab} label="Portfolio workspace tabs" />
     <GainViewToggle value={gainView} onChange={setGainView} />
     <OptionalFeaturesEmpty pageId="portfolio.workspace" />
@@ -84,8 +85,8 @@ function AggregateWorkspacePanel({ aggregate, positions, isLoading, gainView }: 
       <Metric icon={<ShieldCheck />} label="Data source" value={aggregate.source ?? "duckdb"} detail={formatTimestamp(aggregate.as_of)} />
     </section>
     <section className="portfolio-layout-grid">
-      {showAllocation ? <AllocationPanel positions={positions} currency={aggregate.base_ccy} dimension={exposureDimension} view={allocationView} onDimensionChange={setExposureDimension} onViewChange={setAllocationView} /> : null}
-      {showDataQuality ? <section className="card">
+      {showAllocation ? <LayoutWidget pageId="portfolio.workspace" widgetId="portfolio.workspace.allocation"><AllocationPanel positions={positions} currency={aggregate.base_ccy} dimension={exposureDimension} view={allocationView} onDimensionChange={setExposureDimension} onViewChange={setAllocationView} /></LayoutWidget> : null}
+      {showDataQuality ? <LayoutWidget pageId="portfolio.workspace" widgetId="portfolio.workspace.dataQuality"><section className="card">
         <div className="card-heading"><div><p className="eyebrow">Data quality</p><h2>Coverage</h2></div></div>
         <div className="signal-grid">
           <Signal label="Display currency" value={aggregate.display_currency ?? aggregate.base_ccy} />
@@ -93,7 +94,7 @@ function AggregateWorkspacePanel({ aggregate, positions, isLoading, gainView }: 
           <Signal label="Stale prices" value={String(positions.filter((item) => item.stale_price).length)} />
           <Signal label="Unavailable values" value={String(positions.filter((item) => item.market_value == null).length)} />
         </div>
-      </section> : null}
+      </section></LayoutWidget> : null}
     </section>
   </>;
 }
@@ -170,7 +171,7 @@ export function PortfolioDetailPage() {
   return <div className="page">
     <div className="page-title">
       <div><p className="eyebrow"><Link to="/portfolios?tab=portfolios">Portfolios</Link> / {portfolio.data.base_ccy}</p><h1>{portfolio.data.name}</h1><p className="page-subtitle">Actual performance, risk, fundamentals, holdings, and optimizer preview from the Python backend.</p></div>
-      <div className="overview-actions"><PageFeatureMenu pageId="portfolio.detail" /><RangeSelector value={range} onChange={(value) => setParam("range", value)} /><ChartTypeToggle value={chartType} onChange={(value) => setParam("chart", value)} /><input aria-label="Benchmark" value={benchmark} onChange={(event) => setParam("benchmark", event.target.value.toUpperCase())} placeholder="SP500" /></div>
+      <div className="overview-actions"><PageLayoutButton pageId="portfolio.detail" /><PageFeatureMenu pageId="portfolio.detail" /><RangeSelector value={range} onChange={(value) => setParam("range", value)} /><ChartTypeToggle value={chartType} onChange={(value) => setParam("chart", value)} /><input aria-label="Benchmark" value={benchmark} onChange={(event) => setParam("benchmark", event.target.value.toUpperCase())} placeholder="SP500" /></div>
     </div>
     <section className="metric-grid">
       <Metric icon={<CircleDollarSign />} label="Market value" value={money(portfolio.data.market_value, portfolio.data.base_ccy)} />
@@ -180,6 +181,7 @@ export function PortfolioDetailPage() {
       <Metric icon={<WalletCards />} label="Holdings" value={String(portfolio.data.position_count)} />
     </section>
     <TabBar tabs={visibleDetailTabs} selected={resolvedTab} onSelect={(value) => setParam("tab", value)} label="Portfolio detail tabs" />
+    <PageLayoutToolbar pageId="portfolio.detail" />
     <OptionalFeaturesEmpty pageId="portfolio.detail" />
     {resolvedTab === "overview" ? <PortfolioOverviewDetail performance={performance.data} risk={risk.data} fundamentals={fundamentals.data} positions={positions.data ?? []} currency={portfolio.data.base_ccy} chartType={chartType} isLoading={performance.isLoading || risk.isLoading || fundamentals.isLoading || positions.isLoading} /> : null}
     {resolvedTab === "holdings" ? <HoldingsTable positions={positions.data ?? []} signals={holdingSignals.data?.items ?? []} methodology={holdingSignals.data?.methodology} currency={portfolio.data.base_ccy} isLoading={positions.isLoading || (holdingGradesVisible && holdingSignals.isLoading)} portfolioId={id} /> : null}
@@ -201,10 +203,10 @@ function PortfolioOverviewDetail({ performance, risk, fundamentals, positions, c
   if (isLoading) return <Loading />;
   return <section className="portfolio-layout-grid">
     <PortfolioPerformanceView performance={performance} isLoading={false} chartType={chartType} compact />
-    {showAllocation ? <AllocationPanel positions={positions} currency={currency} dimension={exposureDimension} view={allocationView} onDimensionChange={setExposureDimension} onViewChange={setAllocationView} /> : null}
-    {showRisk ? <section className="card"><div className="card-heading"><div><p className="eyebrow">Risk</p><h2>Risk and concentration</h2></div></div><div className="signal-grid"><Signal label="Volatility" value={percent(risk?.annualized_volatility)} /><Signal label="Sortino" value={number(risk?.sortino_ratio)} /><Signal label="Beta" value={number(risk?.beta)} /><Signal label="Max drawdown" value={percent(risk?.maximum_drawdown)} /><Signal label="Effective holdings" value={number(risk?.effective_number_of_holdings, 1)} /><Signal label="HHI" value={number(risk?.hhi, 3)} /></div></section> : null}
-    {showFundamentals ? <section className="card"><div className="card-heading"><div><p className="eyebrow">Fundamentals</p><h2>Coverage-aware rollup</h2></div></div><div className="signal-grid"><Signal label="Expected CAGR" value={percent(fundamentals?.weighted_expected_cagr.value)} /><Signal label="P/E" value={number(fundamentals?.pe_ratio.value)} /><Signal label="P/FCF" value={number(fundamentals?.price_to_free_cash_flow.value)} /><Signal label="Coverage" value={percent(fundamentals?.weighted_expected_cagr.coverage)} /></div></section> : null}
-    {showLargestHoldings ? <section className="card"><div className="card-heading"><div><p className="eyebrow">Largest holdings</p><h2>Weight drivers</h2></div></div><div className="mini-list">{positions.slice(0, 6).map((item) => <article key={item.asset_id}><div><strong>{item.symbol}</strong><span>{item.name ?? "Asset"}</span></div><b>{percent(item.weight)}</b></article>)}</div></section> : null}
+    {showAllocation ? <LayoutWidget pageId="portfolio.detail" widgetId="portfolio.detail.overviewAllocation"><AllocationPanel positions={positions} currency={currency} dimension={exposureDimension} view={allocationView} onDimensionChange={setExposureDimension} onViewChange={setAllocationView} /></LayoutWidget> : null}
+    {showRisk ? <LayoutWidget pageId="portfolio.detail" widgetId="portfolio.detail.overviewRisk"><section className="card"><div className="card-heading"><div><p className="eyebrow">Risk</p><h2>Risk and concentration</h2></div></div><div className="signal-grid"><Signal label="Volatility" value={percent(risk?.annualized_volatility)} /><Signal label="Sortino" value={number(risk?.sortino_ratio)} /><Signal label="Beta" value={number(risk?.beta)} /><Signal label="Max drawdown" value={percent(risk?.maximum_drawdown)} /><Signal label="Effective holdings" value={number(risk?.effective_number_of_holdings, 1)} /><Signal label="HHI" value={number(risk?.hhi, 3)} /></div></section></LayoutWidget> : null}
+    {showFundamentals ? <LayoutWidget pageId="portfolio.detail" widgetId="portfolio.detail.overviewFundamentals"><section className="card"><div className="card-heading"><div><p className="eyebrow">Fundamentals</p><h2>Coverage-aware rollup</h2></div></div><div className="signal-grid"><Signal label="Expected CAGR" value={percent(fundamentals?.weighted_expected_cagr.value)} /><Signal label="P/E" value={number(fundamentals?.pe_ratio.value)} /><Signal label="P/FCF" value={number(fundamentals?.price_to_free_cash_flow.value)} /><Signal label="Coverage" value={percent(fundamentals?.weighted_expected_cagr.coverage)} /></div></section></LayoutWidget> : null}
+    {showLargestHoldings ? <LayoutWidget pageId="portfolio.detail" widgetId="portfolio.detail.overviewLargestHoldings"><section className="card"><div className="card-heading"><div><p className="eyebrow">Largest holdings</p><h2>Weight drivers</h2></div></div><div className="mini-list">{positions.slice(0, 6).map((item) => <article key={item.asset_id}><div><strong>{item.symbol}</strong><span>{item.name ?? "Asset"}</span></div><b>{percent(item.weight)}</b></article>)}</div></section></LayoutWidget> : null}
   </section>;
 }
 
@@ -214,7 +216,7 @@ function HoldingsTable({ positions, signals, methodology, currency, isLoading, p
   const signalByAsset = new Map(signals.map((item) => [item.asset_id, item]));
   const showHoldingGrades = usePageFeature("portfolio.detail", "portfolio.detail.holdingGrades");
   const filtered = positions.filter((item) => `${item.symbol} ${item.name ?? ""}`.toLowerCase().includes(query.toLowerCase())).sort((left, right) => sort === "symbol" ? left.symbol.localeCompare(right.symbol) : sort === "gain" ? (right.unrealized_gain ?? -Infinity) - (left.unrealized_gain ?? -Infinity) : (right.weight ?? -Infinity) - (left.weight ?? -Infinity));
-  return <section className="card holdings-card"><div className="card-heading"><div><p className="eyebrow">Holdings</p><h2>Positions</h2></div><div className="card-tools"><label>Search<input value={query} onChange={(event) => setQuery(event.target.value)} /></label><label>Sort<select value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}><option value="weight">Weight</option><option value="symbol">Ticker</option><option value="gain">Gain</option></select></label></div></div>{isLoading ? <Loading compact /> : filtered.length ? <><div className="table-wrap"><table><thead><tr><th>Ticker</th><th>Class</th><th>Quantity</th><th>Price</th><th>Value</th><th>Weight</th><th>Book</th><th>Gain</th><th>Status</th></tr></thead><tbody>{filtered.map((item) => <tr key={item.asset_id}><td><Link className="asset-link" to={`/assets/${item.asset_id}?from=/portfolios/${portfolioId}%3Ftab%3Dholdings`}><strong>{item.symbol}</strong><span>{item.name ?? item.asset_type ?? "Asset"}</span></Link></td><td>{item.allocation_class ?? "Other"}</td><td>{number(item.quantity, 4)}</td><td>{money(item.latest_price, item.currency)}</td><td>{money(item.market_value, currency)}</td><td>{percent(item.weight)}</td><td>{money(item.book_cost, currency)}</td><td className={(item.unrealized_gain ?? 0) >= 0 ? "positive" : "negative"}>{money(item.unrealized_gain, currency)}</td><td>{item.stale_price ? item.stale_reason ?? "stale" : item.data_status ?? "available"}</td></tr>)}</tbody></table></div>{showHoldingGrades ? <HoldingKiviatGrid positions={filtered} signalByAsset={signalByAsset} methodology={methodology} /> : null}</> : <EmptyRow text="No holdings match this search." />}</section>;
+  return <section className="card holdings-card"><div className="card-heading"><div><p className="eyebrow">Holdings</p><h2>Positions</h2></div><div className="card-tools"><label>Search<input value={query} onChange={(event) => setQuery(event.target.value)} /></label><label>Sort<select value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}><option value="weight">Weight</option><option value="symbol">Ticker</option><option value="gain">Gain</option></select></label></div></div>{isLoading ? <Loading compact /> : filtered.length ? <><div className="table-wrap"><table><thead><tr><th>Ticker</th><th>Class</th><th>Quantity</th><th>Price</th><th>Value</th><th>Weight</th><th>Book</th><th>Gain</th><th>Status</th></tr></thead><tbody>{filtered.map((item) => <tr key={item.asset_id}><td><Link className="asset-link" to={`/assets/${item.asset_id}?from=/portfolios/${portfolioId}%3Ftab%3Dholdings`}><strong>{item.symbol}</strong><span>{item.name ?? item.asset_type ?? "Asset"}</span></Link></td><td>{item.allocation_class ?? "Other"}</td><td>{number(item.quantity, 4)}</td><td>{money(item.latest_price, item.currency)}</td><td>{money(item.market_value, currency)}</td><td>{percent(item.weight)}</td><td>{money(item.book_cost, currency)}</td><td className={(item.unrealized_gain ?? 0) >= 0 ? "positive" : "negative"}>{money(item.unrealized_gain, currency)}</td><td>{item.stale_price ? item.stale_reason ?? "stale" : item.data_status ?? "available"}</td></tr>)}</tbody></table></div>{showHoldingGrades ? <LayoutWidget pageId="portfolio.detail" widgetId="portfolio.detail.holdingGrades"><HoldingKiviatGrid positions={filtered} signalByAsset={signalByAsset} methodology={methodology} /></LayoutWidget> : null}</> : <EmptyRow text="No holdings match this search." />}</section>;
 }
 
 function HoldingKiviatGrid({ positions, signalByAsset, methodology }: { positions: Position[]; signalByAsset: Map<string, HoldingSignal>; methodology?: string }) {

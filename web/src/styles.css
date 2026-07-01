@@ -1581,8 +1581,168 @@ header {
   color: var(--mono-600);
   font-size: 13px;
 }
+.layout-edit-trigger {
+  gap: 7px;
+  white-space: nowrap;
+}
+.layout-toolbar {
+  position: sticky;
+  top: 10px;
+  z-index: 35;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+  margin: 0 0 14px;
+  padding: 10px;
+  border: 1px solid var(--mono-300);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--mono-50) 92%, white);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .08);
+}
+.layout-toolbar strong {
+  margin-right: 4px;
+}
+.layout-toolbar > span {
+  color: var(--mono-600);
+  font-size: 12px;
+  font-weight: 800;
+}
+.layout-toolbar button {
+  min-height: 36px;
+}
+.widget-library {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 10px;
+  width: min(380px, calc(100vw - 24px));
+  max-height: 58vh;
+  overflow: auto;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--mono-200);
+  border-radius: 8px;
+  background: var(--mono-50);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, .18);
+}
+.widget-library button {
+  justify-content: space-between;
+  min-height: 48px;
+  background: #fff;
+}
+.widget-library button span {
+  display: grid;
+  gap: 2px;
+  text-align: left;
+}
+.widget-library em {
+  color: var(--mono-600);
+  font-size: 12px;
+  font-style: normal;
+}
+.layout-widget {
+  min-width: 0;
+}
+.layout-widget.size-wide,
+.layout-widget.size-full {
+  grid-column: 1 / -1;
+}
+.layout-widget.editing {
+  position: relative;
+  border: 1px dashed var(--mono-400);
+  border-radius: 10px;
+  padding: 44px 8px 8px;
+  background: repeating-linear-gradient(135deg, rgba(0,0,0,.025), rgba(0,0,0,.025) 8px, transparent 8px, transparent 16px);
+}
+.layout-widget.editing::after {
+  content: "";
+  position: absolute;
+  inset: 42px 8px 8px;
+  pointer-events: none;
+  border: 1px solid rgba(36, 92, 79, .18);
+  border-radius: 8px;
+}
+.layout-widget.editing .layout-widget-content.inert {
+  pointer-events: none;
+  user-select: none;
+}
+.layout-widget-controls {
+  position: absolute;
+  inset: 6px 6px auto;
+  min-height: 34px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 4px;
+  border: 1px solid var(--mono-200);
+  border-radius: 8px;
+  background: rgba(255,255,255,.96);
+  box-shadow: 0 8px 18px rgba(0,0,0,.08);
+}
+.layout-widget-controls > span {
+  font-size: 12px;
+  font-weight: 900;
+  color: var(--mono-800);
+}
+.layout-widget-controls button,
+.layout-widget-controls select {
+  min-height: 30px;
+  font-size: 11px;
+}
+.layout-widget-controls label {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  color: var(--mono-600);
+  font-size: 11px;
+  font-weight: 800;
+}
+.drag-handle {
+  cursor: grab;
+  width: 34px;
+  justify-content: center;
+  touch-action: none;
+}
+.drag-handle:active {
+  cursor: grabbing;
+}
+.layout-widget[draggable="true"],
+.layout-widget.editing:focus-within {
+  outline: 2px solid rgba(36, 92, 79, .24);
+  outline-offset: 2px;
+}
+.layout-widget.editing .card,
+.layout-widget.editing details,
+.layout-widget.editing .signal-summary-strip,
+.layout-widget.editing .signal-priority-grid,
+.layout-widget.editing .benchmark-snapshot-grid,
+.layout-widget.editing .benchmark-two-column,
+.layout-widget.editing .compare-asset-strip,
+.layout-widget.editing .business-strength-lists,
+.layout-widget.editing .broker-summary-grid {
+  margin: 0;
+}
 @media (max-width: 900px) {
   .business-strength-hero, .business-strength-lists, .business-strength-category-grid { grid-template-columns: 1fr; }
+  .layout-widget,
+  .layout-widget.size-small,
+  .layout-widget.size-medium,
+  .layout-widget.size-large,
+  .layout-widget.size-wide,
+  .layout-widget.size-full {
+    grid-column: 1 / -1;
+  }
+  .layout-toolbar {
+    position: static;
+  }
+  .widget-library {
+    position: fixed;
+    inset: auto 10px 10px;
+    width: auto;
+    max-height: 70vh;
+  }
 }
 @media (max-width: 560px) {
   .broker-summary-grid,
@@ -1624,5 +1784,31 @@ header {
     inset: auto 10px 10px;
     width: auto;
     max-height: 82vh;
+  }
+  .layout-toolbar {
+    align-items: stretch;
+  }
+  .layout-toolbar button {
+    flex: 1 1 140px;
+    justify-content: center;
+    min-height: 44px;
+  }
+  .layout-widget.editing {
+    padding-top: 88px;
+  }
+  .layout-widget-controls {
+    align-items: stretch;
+  }
+  .layout-widget-controls button,
+  .layout-widget-controls select,
+  .drag-handle {
+    min-height: 44px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .layout-widget,
+  .layout-toolbar,
+  .widget-library {
+    transition: none;
   }
 }

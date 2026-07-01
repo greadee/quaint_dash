@@ -1,15 +1,20 @@
-import { SlidersHorizontal } from "lucide-react";
+import { Check, GripVertical, Plus, RotateCcw, SlidersHorizontal, X } from "lucide-react";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   PAGE_FEATURE_STORAGE_KEY,
   PAGE_FEATURE_STORAGE_VERSION,
   getConfigurableFeatures,
   getFeatureDefinition,
+  getLayoutWidgets,
   getPageDefinition,
   isFeatureEnabled,
+  normalizePageLayout,
   resolvePageFeaturePreferences,
   sanitizePageFeatureStore,
+  widgetSupportedSizes,
+  type PageLayoutPreference,
   type PageFeaturePreferenceStore,
+  type WidgetSize,
 } from "./pageFeatures";
 
 type PageFeatureContextValue = {
@@ -20,9 +25,21 @@ type PageFeatureContextValue = {
   disableAllFeatures: (pageId: string) => void;
   resetPageFeatures: (pageId: string) => void;
   getPageFeaturePreferences: (pageId: string) => Record<string, boolean>;
+  editPageId: string | null;
+  beginLayoutEdit: (pageId: string) => void;
+  saveLayoutEdit: (pageId: string) => void;
+  cancelLayoutEdit: () => void;
+  resetLayoutDraft: (pageId: string) => void;
+  moveWidget: (pageId: string, widgetId: string, direction: -1 | 1) => void;
+  moveWidgetBefore: (pageId: string, widgetId: string, beforeWidgetId: string) => void;
+  removeWidget: (pageId: string, widgetId: string) => void;
+  addWidget: (pageId: string, widgetId: string) => void;
+  resizeWidget: (pageId: string, widgetId: string, size: WidgetSize) => void;
+  getPageLayout: (pageId: string) => PageLayoutPreference;
+  isLayoutEditing: (pageId: string) => boolean;
 };
 
-const defaultStore: PageFeaturePreferenceStore = { version: PAGE_FEATURE_STORAGE_VERSION, pages: {} };
+const defaultStore: PageFeaturePreferenceStore = { version: PAGE_FEATURE_STORAGE_VERSION, pages: {}, layouts: {} };
 const PageFeatureContext = createContext<PageFeatureContextValue | null>(null);
 
 const defaultContext: PageFeatureContextValue = {
@@ -33,6 +50,18 @@ const defaultContext: PageFeatureContextValue = {
   disableAllFeatures: () => undefined,
   resetPageFeatures: () => undefined,
   getPageFeaturePreferences: (pageId) => resolvePageFeaturePreferences(pageId, defaultStore),
+  editPageId: null,
+  beginLayoutEdit: () => undefined,
+  saveLayoutEdit: () => undefined,
+  cancelLayoutEdit: () => undefined,
+  resetLayoutDraft: () => undefined,
+  moveWidget: () => undefined,
+  moveWidgetBefore: () => undefined,
+  removeWidget: () => undefined,
+  addWidget: () => undefined,
+  resizeWidget: () => undefined,
+  getPageLayout: (pageId) => normalizePageLayout(pageId),
+  isLayoutEditing: () => false,
 };
 
 function loadStore(): PageFeaturePreferenceStore {
@@ -69,11 +98,14 @@ function withPagePreferences(
       ...store.pages,
       [pageId]: nextPage,
     },
+    layouts: store.layouts ?? {},
   };
 }
 
 export function PageFeatureProvider({ children }: { children: ReactNode }) {
   const [store, setStore] = useState<PageFeaturePreferenceStore>(loadStore);
+  const [editPageId, setEditPageId] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, PageLayoutPreference>>({});
   const hydrated = useRef(false);
 
   useEffect(() => {
@@ -87,24 +119,108 @@ export function PageFeatureProvider({ children }: { children: ReactNode }) {
   const setFeatureEnabled = useCallback((pageId: string, featureId: string, enabled: boolean) => {
     const definition = getFeatureDefinition(pageId, featureId);
     if (!definition?.configurable) return;
-    setStore((current) => withPagePreferences(current, pageId, (page) => ({ ...page, [featureId]: enabled })));
+    setStore((current) => {
+      const layout = normalizePageLayout(pageId, current.layouts?.[pageId]);
+      const layouts = {
+        ...(current.layouts ?? {}),
+        [pageId]: { ...layout, items: layout.items.map((item) => item.widgetId === featureId ? { ...item, visible: enabled } : item), updatedAt: new Date().toISOString() },
+      };
+      return { ...withPagePreferences(current, pageId, (page) => ({ ...page, [featureId]: enabled })), layouts };
+    });
   }, []);
 
   const enableAllFeatures = useCallback((pageId: string) => {
-    setStore((current) => withPagePreferences(current, pageId, () => Object.fromEntries(getConfigurableFeatures(pageId).map((feature) => [feature.id, true]))));
+    setStore((current) => {
+      const layout = normalizePageLayout(pageId, current.layouts?.[pageId]);
+      const layouts = { ...(current.layouts ?? {}), [pageId]: { ...layout, items: layout.items.map((item) => ({ ...item, visible: true })), updatedAt: new Date().toISOString() } };
+      return { ...withPagePreferences(current, pageId, () => Object.fromEntries(getConfigurableFeatures(pageId).map((feature) => [feature.id, true]))), layouts };
+    });
   }, []);
 
   const disableAllFeatures = useCallback((pageId: string) => {
-    setStore((current) => withPagePreferences(current, pageId, () => Object.fromEntries(getConfigurableFeatures(pageId).map((feature) => [feature.id, false]))));
+    setStore((current) => {
+      const layout = normalizePageLayout(pageId, current.layouts?.[pageId]);
+      const layouts = { ...(current.layouts ?? {}), [pageId]: { ...layout, items: layout.items.map((item) => ({ ...item, visible: false })), updatedAt: new Date().toISOString() } };
+      return { ...withPagePreferences(current, pageId, () => Object.fromEntries(getConfigurableFeatures(pageId).map((feature) => [feature.id, false]))), layouts };
+    });
   }, []);
 
   const resetPageFeatures = useCallback((pageId: string) => {
     setStore((current) => {
       const pages = { ...current.pages };
       delete pages[pageId];
-      return { version: PAGE_FEATURE_STORAGE_VERSION, pages };
+      const layouts = { ...(current.layouts ?? {}) };
+      delete layouts[pageId];
+      return { version: PAGE_FEATURE_STORAGE_VERSION, pages, layouts };
     });
   }, []);
+
+  const updateDraft = useCallback((pageId: string, updater: (layout: PageLayoutPreference) => PageLayoutPreference) => {
+    setDrafts((current) => ({ ...current, [pageId]: normalizePageLayout(pageId, updater(current[pageId] ?? normalizePageLayout(pageId, store.layouts?.[pageId]))) }));
+  }, [store.layouts]);
+
+  const beginLayoutEdit = useCallback((pageId: string) => {
+    setDrafts((current) => ({ ...current, [pageId]: normalizePageLayout(pageId, store.layouts?.[pageId]) }));
+    setEditPageId(pageId);
+  }, [store.layouts]);
+
+  const saveLayoutEdit = useCallback((pageId: string) => {
+    const draft = normalizePageLayout(pageId, drafts[pageId]);
+    setStore((current) => {
+      const pages = { ...current.pages, [pageId]: Object.fromEntries(draft.items.map((item) => [item.widgetId, item.visible])) };
+      return {
+        version: PAGE_FEATURE_STORAGE_VERSION,
+        pages,
+        layouts: { ...(current.layouts ?? {}), [pageId]: { ...draft, updatedAt: new Date().toISOString() } },
+      };
+    });
+    setEditPageId(null);
+  }, [drafts]);
+
+  const cancelLayoutEdit = useCallback(() => {
+    setEditPageId(null);
+  }, []);
+
+  const resetLayoutDraft = useCallback((pageId: string) => {
+    setDrafts((current) => ({ ...current, [pageId]: normalizePageLayout(pageId, null) }));
+  }, []);
+
+  const moveWidgetBefore = useCallback((pageId: string, widgetId: string, beforeWidgetId: string) => {
+    updateDraft(pageId, (layout) => {
+      const moving = layout.items.find((item) => item.widgetId === widgetId);
+      if (!moving || widgetId === beforeWidgetId) return layout;
+      const rest = layout.items.filter((item) => item.widgetId !== widgetId);
+      const index = Math.max(0, rest.findIndex((item) => item.widgetId === beforeWidgetId));
+      return { ...layout, items: [...rest.slice(0, index), moving, ...rest.slice(index)] };
+    });
+  }, [updateDraft]);
+
+  const moveWidget = useCallback((pageId: string, widgetId: string, direction: -1 | 1) => {
+    updateDraft(pageId, (layout) => {
+      const index = layout.items.findIndex((item) => item.widgetId === widgetId);
+      const nextIndex = index + direction;
+      if (index < 0 || nextIndex < 0 || nextIndex >= layout.items.length) return layout;
+      const items = [...layout.items];
+      [items[index], items[nextIndex]] = [items[nextIndex], items[index]];
+      return { ...layout, items };
+    });
+  }, [updateDraft]);
+
+  const removeWidget = useCallback((pageId: string, widgetId: string) => {
+    updateDraft(pageId, (layout) => ({ ...layout, items: layout.items.map((item) => item.widgetId === widgetId ? { ...item, visible: false } : item) }));
+  }, [updateDraft]);
+
+  const addWidget = useCallback((pageId: string, widgetId: string) => {
+    updateDraft(pageId, (layout) => ({ ...layout, items: layout.items.map((item) => item.widgetId === widgetId ? { ...item, visible: true } : item) }));
+  }, [updateDraft]);
+
+  const resizeWidget = useCallback((pageId: string, widgetId: string, size: WidgetSize) => {
+    const definition = getFeatureDefinition(pageId, widgetId);
+    if (!definition || !widgetSupportedSizes(definition).includes(size)) return;
+    updateDraft(pageId, (layout) => ({ ...layout, items: layout.items.map((item) => item.widgetId === widgetId ? { ...item, size } : item) }));
+  }, [updateDraft]);
+
+  const getPageLayout = useCallback((pageId: string) => editPageId === pageId ? normalizePageLayout(pageId, drafts[pageId]) : normalizePageLayout(pageId, store.layouts?.[pageId]), [drafts, editPageId, store.layouts]);
 
   const value = useMemo<PageFeatureContextValue>(() => ({
     store,
@@ -114,7 +230,19 @@ export function PageFeatureProvider({ children }: { children: ReactNode }) {
     disableAllFeatures,
     resetPageFeatures,
     getPageFeaturePreferences: (pageId) => resolvePageFeaturePreferences(pageId, store),
-  }), [disableAllFeatures, enableAllFeatures, resetPageFeatures, setFeatureEnabled, store]);
+    editPageId,
+    beginLayoutEdit,
+    saveLayoutEdit,
+    cancelLayoutEdit,
+    resetLayoutDraft,
+    moveWidget,
+    moveWidgetBefore,
+    removeWidget,
+    addWidget,
+    resizeWidget,
+    getPageLayout,
+    isLayoutEditing: (pageId) => editPageId === pageId,
+  }), [addWidget, beginLayoutEdit, cancelLayoutEdit, disableAllFeatures, editPageId, enableAllFeatures, getPageLayout, moveWidget, moveWidgetBefore, removeWidget, resetLayoutDraft, resetPageFeatures, resizeWidget, saveLayoutEdit, setFeatureEnabled, store]);
 
   return <PageFeatureContext.Provider value={value}>{children}</PageFeatureContext.Provider>;
 }
@@ -122,7 +250,12 @@ export function PageFeatureProvider({ children }: { children: ReactNode }) {
 export function usePageFeatureControls(pageId: string) {
   const context = useContext(PageFeatureContext) ?? defaultContext;
   const features = getConfigurableFeatures(pageId);
-  const preferences = context.getPageFeaturePreferences(pageId);
+  const layout = context.getPageLayout(pageId);
+  const layoutPreferences = Object.fromEntries(layout.items.map((item) => [item.widgetId, item.visible]));
+  const preferences = Object.fromEntries(features.map((feature) => [
+    feature.id,
+    context.isLayoutEditing(pageId) && feature.id in layoutPreferences ? layoutPreferences[feature.id] : context.isEnabled(pageId, feature.id),
+  ]));
   const enabledCount = features.filter((feature) => preferences[feature.id]).length;
   return {
     page: getPageDefinition(pageId),
@@ -141,6 +274,27 @@ export function usePageFeatureControls(pageId: string) {
   };
 }
 
+export function usePageLayoutControls(pageId: string) {
+  const context = useContext(PageFeatureContext) ?? defaultContext;
+  const layout = context.getPageLayout(pageId);
+  const widgets = getLayoutWidgets(pageId);
+  return {
+    page: getPageDefinition(pageId),
+    widgets,
+    layout,
+    editing: context.isLayoutEditing(pageId),
+    begin: () => context.beginLayoutEdit(pageId),
+    done: () => context.saveLayoutEdit(pageId),
+    cancel: () => context.cancelLayoutEdit(),
+    reset: () => context.resetLayoutDraft(pageId),
+    move: (widgetId: string, direction: -1 | 1) => context.moveWidget(pageId, widgetId, direction),
+    moveBefore: (widgetId: string, beforeWidgetId: string) => context.moveWidgetBefore(pageId, widgetId, beforeWidgetId),
+    remove: (widgetId: string) => context.removeWidget(pageId, widgetId),
+    add: (widgetId: string) => context.addWidget(pageId, widgetId),
+    resize: (widgetId: string, size: WidgetSize) => context.resizeWidget(pageId, widgetId, size),
+  };
+}
+
 export function usePageFeature(pageId: string, featureId: string) {
   return usePageFeatureControls(pageId).isEnabled(featureId);
 }
@@ -153,6 +307,87 @@ export function OptionalFeaturesEmpty({ pageId }: { pageId: string }) {
   const controls = usePageFeatureControls(pageId);
   if (controls.totalCount === 0 || !controls.noneEnabled) return null;
   return <div className="optional-empty" role="status">Optional widgets are hidden. Use Customize page to add them back.</div>;
+}
+
+export function PageLayoutButton({ pageId }: { pageId: string }) {
+  const controls = usePageLayoutControls(pageId);
+  if (!controls.widgets.length) return null;
+  if (controls.editing) return null;
+  return <button type="button" className="layout-edit-trigger" onClick={controls.begin}><GripVertical size={16} />Customize layout</button>;
+}
+
+export function PageLayoutToolbar({ pageId }: { pageId: string }) {
+  const controls = usePageLayoutControls(pageId);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  if (!controls.editing) return null;
+  const visibleIds = new Set(controls.layout.items.filter((item) => item.visible).map((item) => item.widgetId));
+  const hidden = controls.widgets.filter((widget) => !visibleIds.has(widget.id));
+  return <div className="layout-toolbar" role="region" aria-label={`${controls.page?.label ?? pageId} layout editor`}>
+    <strong>Layout editing</strong>
+    <span>{controls.layout.items.filter((item) => item.visible).length}/{controls.widgets.length} widgets visible</span>
+    <button type="button" onClick={() => setLibraryOpen((value) => !value)}><Plus size={15} />Add widgets</button>
+    <button type="button" onClick={controls.reset}><RotateCcw size={15} />Reset layout</button>
+    <button type="button" onClick={controls.cancel}><X size={15} />Cancel</button>
+    <button type="button" className="primary" onClick={controls.done}><Check size={15} />Done</button>
+    {libraryOpen ? <div className="widget-library" role="dialog" aria-label="Add widgets">
+      <div className="feature-menu-heading"><div><strong>Add widgets</strong><p>Removed widgets stay available here for this page.</p></div></div>
+      {hidden.length ? hidden.map((widget) => <button type="button" key={widget.id} onClick={() => controls.add(widget.id)}><span><strong>{widget.label}</strong><em>{widget.category ?? "Widget"}</em></span><Plus size={15} /></button>) : <p className="muted-copy">Every optional widget is already on the page.</p>}
+    </div> : null}
+  </div>;
+}
+
+export function LayoutWidget({ pageId, widgetId, children }: { pageId: string; widgetId: string; children: ReactNode }) {
+  const controls = usePageLayoutControls(pageId);
+  const definition = getFeatureDefinition(pageId, widgetId);
+  const item = controls.layout.items.find((candidate) => candidate.widgetId === widgetId);
+  const visible = item?.visible ?? definition?.defaultEnabled ?? true;
+  if (!definition || !visible) return null;
+  const supportedSizes = widgetSupportedSizes(definition);
+  const editing = controls.editing;
+  const style = item ? {
+    order: item.y * 100 + item.x,
+  } : undefined;
+  return <div
+    className={`layout-widget ${editing ? "editing" : ""} size-${item?.size ?? "medium"}`}
+    style={style}
+    data-widget-id={widgetId}
+    onDragOver={(event) => {
+      if (editing) event.preventDefault();
+    }}
+    onDrop={(event) => {
+      const source = event.dataTransfer.getData("text/plain");
+      if (source && source !== widgetId) controls.moveBefore(source, widgetId);
+    }}
+  >
+    {editing ? <div className="layout-widget-controls">
+      <button
+        type="button"
+        className="drag-handle"
+        draggable
+        aria-label={`Move ${definition.label}`}
+        onDragStart={(event) => {
+          event.dataTransfer.setData("text/plain", widgetId);
+          event.dataTransfer.effectAllowed = "move";
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+            event.preventDefault();
+            controls.move(widgetId, -1);
+          }
+          if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+            event.preventDefault();
+            controls.move(widgetId, 1);
+          }
+        }}
+      ><GripVertical size={16} /></button>
+      <span>{definition.label}</span>
+      <button type="button" aria-label={`Move ${definition.label} earlier`} onClick={() => controls.move(widgetId, -1)}>Up</button>
+      <button type="button" aria-label={`Move ${definition.label} later`} onClick={() => controls.move(widgetId, 1)}>Down</button>
+      {definition.resizable && supportedSizes.length > 1 ? <label>Size<select value={item?.size ?? definition.defaultSize ?? supportedSizes[0]} onChange={(event) => controls.resize(widgetId, event.target.value as WidgetSize)}>{supportedSizes.map((size) => <option key={size} value={size}>{size}</option>)}</select></label> : null}
+      {definition.removable ? <button type="button" aria-label={`Remove ${definition.label} from page`} onClick={() => controls.remove(widgetId)}><X size={14} />Remove</button> : null}
+    </div> : null}
+    <div className={editing ? "layout-widget-content inert" : "layout-widget-content"}>{children}</div>
+  </div>;
 }
 
 export function PageFeatureMenu({ pageId }: { pageId: string }) {

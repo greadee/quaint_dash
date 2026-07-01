@@ -24,7 +24,7 @@ import { money, percent } from "./routeFormatters";
 import { ChartTypeToggle, EmptyRow, ErrorPanel, HelpDisclosure, MetricLine } from "./routeShared";
 import type { HelpItem } from "./routeTypes";
 import { BenchmarkPicker, TickerPicker } from "./routePickers";
-import { OptionalFeaturesEmpty, PageFeatureMenu, usePageFeature } from "../pageFeatureStore";
+import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar, usePageFeature } from "../pageFeatureStore";
 
 export function ComparePage() {
   const [params, setParams] = useSearchParams();
@@ -122,8 +122,9 @@ export function ComparePage() {
   return <div className="page">
     <div className="page-title">
       <div><p className="eyebrow">Comparison workspace</p><h1>Compare</h1><p className="page-subtitle">Compare two to five stocks, ETFs, benchmarks, or portfolios with URL-shareable state, aligned history, risk, valuation, and methodology from stored application data.</p></div>
-      <div className="actions"><PageFeatureMenu pageId="compare" /></div>
+      <div className="actions"><PageLayoutButton pageId="compare" /><PageFeatureMenu pageId="compare" /></div>
     </div>
+    <PageLayoutToolbar pageId="compare" />
     <OptionalFeaturesEmpty pageId="compare" />
     <section className="card compare-workspace-toolbar" aria-label="Comparison controls">
       <form onSubmit={(event) => { event.preventDefault(); addSymbol(draft); }}>
@@ -154,9 +155,9 @@ export function ComparePage() {
     </section>
     {state.symbols.length < 2 ? <section className="card compare-empty"><EmptyRow text="Add at least two comparable assets to show aligned performance, metric differences, and reference modes. The URL updates as you build the comparison." /></section> : null}
     {state.section === "business-strength" ? <BusinessStrengthComparison data={businessStrength.data?.assets ?? []} commonMetricCodes={businessStrength.data?.common_metric_codes ?? []} loading={businessStrength.isLoading} error={businessStrength.error} warning={businessStrength.data?.warning ?? null} sortKey={businessStrengthSort} onSort={setBusinessStrengthSort} mode={businessStrengthMode} onMode={setBusinessStrengthMode} /> : comparison.error ? <ErrorPanel error={comparison.error} /> : comparison.isLoading ? <CompareSkeleton /> : data ? <>
-      {showAssetStrip ? <section className="compare-asset-strip">
+      {showAssetStrip ? <LayoutWidget pageId="compare" widgetId="compare.assetStrip"><section className="compare-asset-strip">
         {data.assets.map((asset) => <CompareAssetSummary key={asset.asset_id} asset={asset} freshness={data.freshness[asset.symbol]} reference={asset.symbol === reference?.symbol} />)}
-      </section> : null}
+      </section></LayoutWidget> : null}
       <section className="card compare-chart-card">
         <div className="card-heading">
           <div><p className="eyebrow">Historical prices</p><h2>Actual price comparison</h2></div>
@@ -184,16 +185,16 @@ export function ComparePage() {
         <div className="compare-series-toggles">
           {data.historical_series.map((series) => <button key={series.symbol} className={hiddenSeries.includes(series.symbol) ? "" : "selected"} onClick={() => setHiddenSeries((current) => current.includes(series.symbol) ? current.filter((item) => item !== series.symbol) : [...current, series.symbol])}>{series.symbol}</button>)}
         </div>
-        {showChartTable ? <ComparisonChartTable series={data.historical_series} /> : null}
+        {showChartTable ? <LayoutWidget pageId="compare" widgetId="compare.chartTable"><ComparisonChartTable series={data.historical_series} /></LayoutWidget> : null}
       </section>
       <ComparisonMetricSection title="Key performance and risk metrics" section="performance" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} />
-      {showValuation ? <ComparisonMetricSection title="Valuation" section="valuation" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} /> : null}
-      {showGrowth ? <ComparisonMetricSection title="Growth" section="growth" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} /> : null}
-      {showQuality ? <ComparisonMetricSection title="Quality and profitability" section="quality" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} /> : null}
-      {showBalanceSheet ? <ComparisonMetricSection title="Balance sheet and risk" section="balance-sheet" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} /> : null}
-      {showCapitalAllocation ? <ComparisonMetricSection title="Capital allocation" section="capital-allocation" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} /> : null}
-      {showForwardScenarios ? <ComparisonForwardScenarios assets={data.assets} seriesMetrics={metricsBySymbol} /> : null}
-      {showMethodology ? <ComparisonMethodology data={data} registry={registry} /> : null}
+      {showValuation ? <LayoutWidget pageId="compare" widgetId="compare.valuation"><ComparisonMetricSection title="Valuation" section="valuation" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} /></LayoutWidget> : null}
+      {showGrowth ? <LayoutWidget pageId="compare" widgetId="compare.growth"><ComparisonMetricSection title="Growth" section="growth" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} /></LayoutWidget> : null}
+      {showQuality ? <LayoutWidget pageId="compare" widgetId="compare.quality"><ComparisonMetricSection title="Quality and profitability" section="quality" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} /></LayoutWidget> : null}
+      {showBalanceSheet ? <LayoutWidget pageId="compare" widgetId="compare.balanceSheet"><ComparisonMetricSection title="Balance sheet and risk" section="balance-sheet" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} /></LayoutWidget> : null}
+      {showCapitalAllocation ? <LayoutWidget pageId="compare" widgetId="compare.capitalAllocation"><ComparisonMetricSection title="Capital allocation" section="capital-allocation" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} /></LayoutWidget> : null}
+      {showForwardScenarios ? <LayoutWidget pageId="compare" widgetId="compare.forwardScenarios"><ComparisonForwardScenarios assets={data.assets} seriesMetrics={metricsBySymbol} /></LayoutWidget> : null}
+      {showMethodology ? <LayoutWidget pageId="compare" widgetId="compare.methodology"><ComparisonMethodology data={data} registry={registry} /></LayoutWidget> : null}
     </> : null}
   </div>;
 }

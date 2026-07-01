@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   PAGE_FEATURE_STORAGE_VERSION,
+  buildDefaultPageLayout,
+  getLayoutWidgets,
   getDefaultPagePreferences,
   isFeatureEnabled,
+  normalizePageLayout,
   pageFeatureRegistry,
   resolvePageFeaturePreferences,
   sanitizePageFeatureStore,
@@ -30,6 +33,20 @@ describe("page feature registry", () => {
     expect(ids).not.toContain("page.title");
     expect(ids).not.toContain("compare.controls");
     expect(ids).not.toContain("portfolio.detail.holdingsTable");
+  });
+
+  it("defines valid default layouts for layout-capable widgets", () => {
+    for (const page of pageFeatureRegistry) {
+      const widgets = getLayoutWidgets(page.id);
+      const layout = buildDefaultPageLayout(page.id);
+      expect(layout.items.map((item) => item.widgetId)).toEqual(widgets.map((widget) => widget.id));
+      for (const item of layout.items) {
+        expect(item.x).toBeGreaterThanOrEqual(0);
+        expect(item.y).toBeGreaterThanOrEqual(0);
+        expect(item.width).toBeGreaterThan(0);
+        expect(item.height).toBeGreaterThan(0);
+      }
+    }
   });
 });
 
@@ -65,6 +82,7 @@ describe("page feature preference resolution", () => {
     expect(sanitizePageFeatureStore({ version: 0, pages: { compare: { "compare.valuation": false } } })).toEqual({
       version: PAGE_FEATURE_STORAGE_VERSION,
       pages: {},
+      layouts: {},
     });
   });
 
@@ -76,5 +94,45 @@ describe("page feature preference resolution", () => {
     const preferences = resolvePageFeaturePreferences("compare", store);
     expect(preferences["compare.valuation"]).toBe(false);
     expect(preferences["compare.growth"]).toBe(getDefaultPagePreferences("compare")["compare.growth"]);
+  });
+
+  it("normalizes invalid saved layouts without losing new widget defaults", () => {
+    const layout = normalizePageLayout("compare", {
+      pageId: "compare",
+      layoutVersion: 99,
+      items: [
+        { widgetId: "compare.valuation", visible: false, size: "small", x: -10, y: -1, width: 99, height: 99 },
+        { widgetId: "compare.valuation", visible: true, size: "full", x: 1, y: 1, width: 12, height: 4 },
+        { widgetId: "compare.unknown", visible: true, size: "full", x: 0, y: 0, width: 12, height: 4 },
+      ],
+    });
+
+    expect(layout.layoutVersion).toBe(1);
+    expect(layout.items.filter((item) => item.widgetId === "compare.valuation")).toHaveLength(1);
+    expect(layout.items.find((item) => item.widgetId === "compare.valuation")?.visible).toBe(false);
+    expect(layout.items.find((item) => item.widgetId === "compare.valuation")?.size).toBe("full");
+    expect(layout.items.some((item) => item.widgetId === "compare.growth")).toBe(true);
+  });
+
+  it("sanitizes versioned persisted layouts independently by page", () => {
+    const sanitized = sanitizePageFeatureStore({
+      version: PAGE_FEATURE_STORAGE_VERSION,
+      pages: { compare: { "compare.valuation": false } },
+      layouts: {
+        compare: {
+          pageId: "compare",
+          layoutVersion: 1,
+          items: [{ widgetId: "compare.valuation", visible: false, size: "full", x: 0, y: 0, width: 12, height: 4 }],
+        },
+        unknown: {
+          pageId: "unknown",
+          layoutVersion: 1,
+          items: [],
+        },
+      },
+    });
+
+    expect(sanitized.layouts?.compare.items.find((item) => item.widgetId === "compare.valuation")?.visible).toBe(false);
+    expect(sanitized.layouts?.unknown).toBeUndefined();
   });
 });
