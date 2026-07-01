@@ -365,6 +365,103 @@ class NewsItemResponse(BaseModel):
     sentiment: str | None
 
 
+class NewsArticleAssetResponse(BaseModel):
+    asset_id: str
+    symbol: str
+    name: str | None = None
+    relevance_score: float
+    confidence_score: float
+    match_method: str
+    is_primary_entity: bool
+
+
+class NewsArticleCategoryResponse(BaseModel):
+    category_code: str
+    category_name: str
+    confidence_score: float
+    is_primary: bool
+
+
+class NewsProviderResponse(BaseModel):
+    provider_code: str
+    provider_name: str
+    provider_type: str
+    is_enabled: bool
+    supports_latest_news: bool
+    supports_symbol_news: bool
+    supports_full_text: bool
+    supports_sentiment: bool
+    supports_categories: bool
+    last_attempted_at: datetime | None = None
+    last_succeeded_at: datetime | None = None
+    last_error_at: datetime | None = None
+    last_error_message: str | None = None
+    sync_status: str | None = None
+
+
+class NewsCategorySummaryResponse(BaseModel):
+    category_code: str
+    category_name: str
+    default_importance_weight: float
+    article_count: int = 0
+
+
+class NewsStoryClusterSummary(BaseModel):
+    cluster_id: int
+    cluster_key: str
+    article_count: int
+    importance_score: float
+    first_published_at: datetime | None = None
+    last_updated_at: datetime | None = None
+
+
+class NewsArticleResponse(BaseModel):
+    article_id: int
+    provider_code: str
+    provider_name: str | None = None
+    provider_article_id: str | None = None
+    headline: str
+    summary: str | None = None
+    canonical_url: str | None = None
+    source_name: str
+    author: str | None = None
+    language: str | None = None
+    published_at: datetime | None = None
+    updated_at: datetime | None = None
+    importance_score: float | None = None
+    relevance_score: float | None = None
+    sentiment_score: float | None = None
+    sentiment_label: str | None = None
+    is_breaking: bool = False
+    is_press_release: bool = False
+    is_correction: bool = False
+    is_retracted: bool = False
+    is_paywalled: bool = False
+    is_read: bool = False
+    is_saved: bool = False
+    assets: list[NewsArticleAssetResponse] = Field(default_factory=list)
+    categories: list[NewsArticleCategoryResponse] = Field(default_factory=list)
+    cluster: NewsStoryClusterSummary | None = None
+
+
+class NewsFeedResponse(BaseModel):
+    items: list[NewsArticleResponse]
+    total: int
+    limit: int
+    offset: int
+    sort: str
+    generated_at: datetime
+
+
+class NewsUserStateResponse(BaseModel):
+    article_id: int
+    user_id: str = "local"
+    is_read: bool = False
+    read_at: datetime | None = None
+    is_saved: bool = False
+    saved_at: datetime | None = None
+
+
 class OverviewUpdatesResponse(BaseModel):
     total_market_value: float
     position_count: int

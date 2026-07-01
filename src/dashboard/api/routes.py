@@ -59,6 +59,11 @@ from dashboard.api.models import (
     IngestionScheduleRequest,
     MarketFreshnessStatusResponse,
     HoldingSignalsResponse,
+    NewsArticleResponse,
+    NewsCategorySummaryResponse,
+    NewsFeedResponse,
+    NewsProviderResponse,
+    NewsUserStateResponse,
     OverviewUpdatesResponse,
     Page,
     PortfolioCreate,
@@ -92,6 +97,7 @@ from dashboard.api.services import (
     PortfolioApiService,
 )
 from dashboard.ingestion.websocket.live_price_subscriptions import LivePriceSubscriptionResolver
+from dashboard.news.api_service import NewsApiService
 from dashboard.services.business_strength import BusinessStrengthAnalyzer, BusinessStrengthTemplateRegistry
 from dashboard.services.business_strength.models import METHODOLOGY_VERSION
 
@@ -106,6 +112,118 @@ def list_portfolios(conn=Depends(get_connection)):
 @router.get("/overview/updates", response_model=OverviewUpdatesResponse)
 def overview_updates(conn=Depends(get_connection)):
     return PortfolioApiService(conn).overview_updates()
+
+
+@router.get("/news", response_model=NewsFeedResponse)
+def news_feed(
+    q: str | None = Query(default=None, min_length=1, max_length=160),
+    provider: str | None = Query(default=None, max_length=80),
+    source: str | None = Query(default=None, max_length=120),
+    asset_id: str | None = Query(default=None, max_length=64),
+    portfolio_id: int | None = Query(default=None, ge=0),
+    category: str | None = Query(default=None, max_length=80),
+    sentiment: str | None = Query(
+        default=None,
+        pattern="^(very_negative|negative|neutral|positive|very_positive)$",
+    ),
+    breaking: bool | None = None,
+    press_release: bool | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    sort: str = Query(default="recency", pattern="^(recency|relevance)$"),
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    conn=Depends(get_connection),
+):
+    return NewsApiService(conn).feed(
+        q=q,
+        provider=provider,
+        source=source,
+        asset_id=asset_id,
+        portfolio_id=portfolio_id,
+        category=category,
+        sentiment=sentiment,
+        breaking=breaking,
+        press_release=press_release,
+        start_date=start_date,
+        end_date=end_date,
+        sort=sort,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/news/latest", response_model=NewsFeedResponse)
+def news_latest(
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    conn=Depends(get_connection),
+):
+    return NewsApiService(conn).latest(limit=limit, offset=offset)
+
+
+@router.get("/news/breaking", response_model=NewsFeedResponse)
+def news_breaking(
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    conn=Depends(get_connection),
+):
+    return NewsApiService(conn).breaking(limit=limit, offset=offset)
+
+
+@router.get("/news/search", response_model=NewsFeedResponse)
+def news_search(
+    q: str = Query(min_length=1, max_length=160),
+    provider: str | None = Query(default=None, max_length=80),
+    start_date: date | None = None,
+    end_date: date | None = None,
+    sort: str = Query(default="relevance", pattern="^(recency|relevance)$"),
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    conn=Depends(get_connection),
+):
+    return NewsApiService(conn).search(
+        q=q,
+        provider=provider,
+        start_date=start_date,
+        end_date=end_date,
+        sort=sort,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/news/articles/{article_id}", response_model=NewsArticleResponse)
+def news_article(article_id: int, conn=Depends(get_connection)):
+    return NewsApiService(conn).article(article_id)
+
+
+@router.post("/news/articles/{article_id}/read", response_model=NewsUserStateResponse)
+def news_mark_read(article_id: int, request: Request, conn=Depends(get_connection)):
+    with request.app.state.write_lock:
+        return NewsApiService(conn).set_read_state(article_id, is_read=True)
+
+
+@router.post("/news/articles/{article_id}/save", response_model=NewsUserStateResponse)
+def news_save(article_id: int, request: Request, conn=Depends(get_connection)):
+    with request.app.state.write_lock:
+        return NewsApiService(conn).set_saved_state(article_id, is_saved=True)
+
+
+@router.delete("/news/articles/{article_id}/save", response_model=NewsUserStateResponse)
+def news_unsave(article_id: int, request: Request, conn=Depends(get_connection)):
+    with request.app.state.write_lock:
+        return NewsApiService(conn).set_saved_state(article_id, is_saved=False)
+
+
+@router.get("/news/providers", response_model=list[NewsProviderResponse])
+def news_providers(conn=Depends(get_connection)):
+    return NewsApiService(conn).providers()
+
+
+@router.get("/news/categories", response_model=list[NewsCategorySummaryResponse])
+def news_categories(conn=Depends(get_connection)):
+    return NewsApiService(conn).categories()
 
 
 @router.get("/signals", response_model=SignalsSummaryResponse)
@@ -598,6 +716,24 @@ def portfolio_fundamentals(
     return PortfolioApiService(conn).fundamentals(portfolio_id, horizon_years)
 
 
+@router.get("/portfolios/{portfolio_id}/news", response_model=NewsFeedResponse)
+def portfolio_news(
+    portfolio_id: int,
+    category: str | None = Query(default=None, max_length=80),
+    sort: str = Query(default="relevance", pattern="^(recency|relevance)$"),
+    limit: int = Query(default=10, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    conn=Depends(get_connection),
+):
+    return NewsApiService(conn).portfolio_feed(
+        portfolio_id,
+        category=category,
+        sort=sort,
+        limit=limit,
+        offset=offset,
+    )
+
+
 @router.post(
     "/portfolios/{portfolio_id}/optimization/preview",
     response_model=OptimizationPreviewResponse,
@@ -642,6 +778,24 @@ def asset_activity(
     conn=Depends(get_connection),
 ):
     return PortfolioApiService(conn).list_asset_activity(asset_id, limit, offset)
+
+
+@router.get("/assets/{asset_id}/news", response_model=NewsFeedResponse)
+def asset_news(
+    asset_id: str,
+    category: str | None = Query(default=None, max_length=80),
+    sort: str = Query(default="recency", pattern="^(recency|relevance)$"),
+    limit: int = Query(default=10, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    conn=Depends(get_connection),
+):
+    return NewsApiService(conn).asset_feed(
+        asset_id,
+        category=category,
+        sort=sort,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/assets", response_model=list[AssetSearchResult])
