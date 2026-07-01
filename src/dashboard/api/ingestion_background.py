@@ -155,14 +155,17 @@ class IngestionBackgroundWorker:
                     years=self.config.years,
                     prices_only=self.config.prices_only,
                 )
-                PortfolioApiService(db.conn).stock_rankings(
-                    factor="aggregate",
-                    universe="tracked",
-                    direction="buy",
-                    timeframe="monthly",
-                    limit=self.config.max_assets_per_schedule,
-                    offset=0,
-                )
+                try:
+                    PortfolioApiService(db.conn).stock_rankings(
+                        factor="aggregate",
+                        universe="tracked",
+                        direction="buy",
+                        timeframe="monthly",
+                        limit=self.config.max_assets_per_schedule,
+                        offset=0,
+                    )
+                except Exception as exc:
+                    LOGGER.debug("Ingestion background ranking warm-up skipped: %s", exc)
                 return count
             finally:
                 db.conn.close()
@@ -226,13 +229,17 @@ def _now() -> datetime:
 
 
 def _pending_job_count(conn) -> int:
-    row = conn.execute(
-        """
-        SELECT COUNT(*)
-        FROM ingestion_job
-        WHERE status IN ('pending', 'running')
-        """
-    ).fetchone()
+    try:
+        row = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM ingestion_job
+            WHERE status IN ('pending', 'running')
+            """
+        ).fetchone()
+    except Exception as exc:
+        LOGGER.debug("Ingestion background pending-count skipped: %s", exc)
+        return 0
     return int(row[0])
 
 
