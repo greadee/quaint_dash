@@ -50,6 +50,21 @@ def test_risk_return_metrics_calculate_core_ratios():
     assert metrics.worst_daily_return == pytest.approx((105.0 / 110.0) - 1.0)
 
 
+def test_risk_return_metrics_sorts_prices_before_drawdown():
+    prices = [
+        PricePoint(date(2025, 1, 3), 80.0),
+        PricePoint(date(2025, 1, 1), 100.0),
+        PricePoint(date(2025, 1, 2), 120.0),
+        PricePoint(date(2025, 1, 4), 90.0),
+    ]
+
+    metrics = risk_return_metrics(prices)
+
+    assert metrics.start_date == date(2025, 1, 1)
+    assert metrics.end_date == date(2025, 1, 4)
+    assert metrics.max_drawdown == pytest.approx((80.0 / 120.0) - 1.0)
+
+
 def test_allocation_class_splits_stocks_cdrs_etfs_and_money_market():
     assert allocation_class(symbol="AAPL", asset_type="stock") == "Stock"
     assert allocation_class(symbol="SPY", asset_type="etf") == "ETF"

@@ -38,6 +38,12 @@ async def _main() -> None:
         db.conn.close()
         return
 
+    db = DB(Path(args.db))
+    try:
+        init_db(db)
+    finally:
+        db.conn.close()
+
     worker = DataReadinessWorker(
         Path(args.db),
         Lock(),

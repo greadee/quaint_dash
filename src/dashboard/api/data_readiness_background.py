@@ -14,7 +14,7 @@ from threading import Lock
 from dashboard.analytics.calculations import allocation_class
 from dashboard.analytics import AnalyticsRepository
 from dashboard.api.services import CommandApiService, PortfolioApiService
-from dashboard.db.db_conn import DB, init_db
+from dashboard.db.db_conn import DB
 from dashboard.ingestion.ticker_universe import TickerUniverseRepository
 
 LOGGER = logging.getLogger(__name__)
@@ -145,7 +145,6 @@ class DataReadinessWorker:
         with self.write_lock:
             db = DB(self.db_path)
             try:
-                init_db(db)
                 TickerUniverseRepository(db.conn).sync_portfolio_tickers_from_positions()
                 targets = _valuation_targets(db.conn)[: self.config.max_assets_per_tick]
                 scheduled = _schedule_missing_inputs(db.conn, targets, self.config)
@@ -280,7 +279,7 @@ def _schedule_missing_inputs(
             continue
         seen_assets.add(asset_id)
         missing = _missing_inputs(conn, asset_id, config)
-        if any(item.endswith("statements") or item == "shares_outstanding" for item in missing):
+        if any(item.endswith("statements") or item in {"shares_outstanding", "fundamental_metrics"} for item in missing):
             _hydrate_yfinance_summary(conn, asset_id)
             missing = _missing_inputs(conn, asset_id, config)
         if any(item.startswith("price") for item in missing) and not _has_open_job(conn, asset_id, "market", "price_daily"):
@@ -295,7 +294,7 @@ def _schedule_missing_inputs(
                 end_date=date.today(),
             )
             total += 1
-        if any(item.endswith("statements") or item == "shares_outstanding" for item in missing) and not _has_open_job(
+        if any(item.endswith("statements") or item in {"shares_outstanding", "fundamental_metrics"} for item in missing) and not _has_open_job(
             conn,
             asset_id,
             "corporate",
@@ -333,31 +332,48 @@ def _hydrate_yfinance_summary(conn, asset_id: str) -> bool:
         "floatShares",
     )
     market_cap = _first_float(info, "marketCap")
-    if shares is not None or market_cap is not None:
+    beta = _first_float(info, "beta")
+    if shares is not None or market_cap is not None or beta is not None:
         conn.execute(
             """
             UPDATE asset
             SET
                 shares_outstanding = COALESCE(?, shares_outstanding),
                 mkt_cap = COALESCE(?, mkt_cap),
+                market_beta = COALESCE(?, market_beta),
                 updated_at = now()
             WHERE asset_id = ?
             """,
-            [shares, market_cap, asset_id],
+            [shares, market_cap, beta, asset_id],
         )
 
     today = date.today()
     year = today.year
     quarter = ((today.month - 1) // 3) + 1
+    revenue = _first_float(info, "totalRevenue", "revenue")
+    gross_margin = _first_float(info, "grossMargins")
+    operating_margin = _first_float(info, "operatingMargins")
+    book_value = _first_float(info, "bookValue")
+    profit_margin = _first_signed_float(info, "profitMargins")
+    net_income = _first_signed_float(info, "netIncomeToCommon", "netIncome")
     income = {
-        "revenue": _first_float(info, "totalRevenue", "revenue"),
-        "netIncome": _first_float(info, "netIncomeToCommon", "netIncome"),
+        "revenue": revenue,
+        "grossProfit": revenue * gross_margin if revenue is not None and gross_margin is not None else None,
+        "operatingIncome": revenue * operating_margin if revenue is not None and operating_margin is not None else None,
+        "netIncome": net_income
+        if net_income is not None
+        else (
+            revenue * profit_margin
+            if revenue is not None and profit_margin is not None
+            else None
+        ),
         "eps": _first_float(info, "trailingEps", "epsTrailingTwelveMonths"),
+        "ebitda": _first_float(info, "ebitda"),
         "weightedAverageShsOutDil": shares,
     }
     balance = {
-        "totalDebt": _first_float(info, "totalDebt"),
-        "totalStockholdersEquity": _first_float(info, "bookValue") * shares if _first_float(info, "bookValue") is not None and shares else None,
+        "totalDebt": _first_float(info, "totalDebt") or 0.0,
+        "totalStockholdersEquity": book_value * shares if book_value is not None and shares else None,
         "totalAssets": _first_float(info, "totalAssets"),
         "cashAndCashEquivalents": _first_float(info, "totalCash"),
     }
@@ -373,6 +389,7 @@ def _hydrate_yfinance_summary(conn, asset_id: str) -> bool:
     ):
         if not any(value is not None for value in payload.values()):
             continue
+        payload = _merge_statement_payload(conn, asset_id, statement_type, year, quarter, payload)
         conn.execute(
             """
             INSERT INTO financial_statement(
@@ -407,6 +424,39 @@ def _hydrate_yfinance_summary(conn, asset_id: str) -> bool:
     return wrote
 
 
+def _merge_statement_payload(
+    conn,
+    asset_id: str,
+    statement_type: str,
+    year: int,
+    quarter: int,
+    payload: dict[str, float | None],
+) -> dict[str, float | None]:
+    row = conn.execute(
+        """
+        SELECT data_json
+        FROM financial_statement
+        WHERE asset_id = ?
+          AND statement_type = ?
+          AND year = ?
+          AND quarter = ?
+        """,
+        [asset_id, statement_type, year, quarter],
+    ).fetchone()
+    existing: dict[str, float | None] = {}
+    if row and row[0] is not None:
+        try:
+            parsed = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+        except (TypeError, ValueError):
+            parsed = {}
+        if isinstance(parsed, dict):
+            existing = parsed
+    return {
+        **existing,
+        **{key: value for key, value in payload.items() if value is not None},
+    }
+
+
 def _first_float(values: dict, *keys: str) -> float | None:
     for key in keys:
         value = values.get(key)
@@ -418,6 +468,18 @@ def _first_float(values: dict, *keys: str) -> float | None:
             continue
         if parsed > 0:
             return parsed
+    return None
+
+
+def _first_signed_float(values: dict, *keys: str) -> float | None:
+    for key in keys:
+        value = values.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
     return None
 
 
@@ -483,7 +545,76 @@ def _missing_inputs(conn, asset_id: str, config: DataReadinessConfig) -> list[st
         ).fetchone()
         if int(row[0] or 0) <= 0:
             missing.append(f"{statement_type}_statements")
+    if "income_statements" not in missing and "balance_statements" not in missing:
+        metric_missing = _required_metric_fields_missing(conn, asset_id)
+        if metric_missing:
+            missing.append("fundamental_metrics")
     return missing
+
+
+def _required_metric_fields_missing(conn, asset_id: str) -> list[str]:
+    income = _latest_statement_json(conn, asset_id, "income")
+    balance = _latest_statement_json(conn, asset_id, "balance")
+    cashflow = _latest_statement_json(conn, asset_id, "cashflow")
+    revenue = _json_number(income, "revenue", "totalRevenue")
+    gross_profit = _json_number(income, "grossProfit", "gross_profit")
+    operating_income = _json_number(income, "operatingIncome", "operating_income")
+    net_income = _json_number(income, "netIncome", "net_income", "netIncomeToCommon")
+    total_debt = _json_number(balance, "totalDebt", "debt")
+    equity = _json_number(balance, "totalStockholdersEquity", "totalEquity")
+    cash = _json_number(balance, "cashAndCashEquivalents", "cashAndShortTermInvestments", "cash")
+    free_cash_flow = _json_number(cashflow, "freeCashFlow", "free_cash_flow")
+    missing = []
+    if revenue is None or revenue <= 0:
+        missing.append("revenue")
+    if gross_profit is None:
+        missing.append("grossProfit")
+    if operating_income is None:
+        missing.append("operatingIncome")
+    if net_income is None:
+        missing.append("netIncome")
+    if total_debt is None:
+        missing.append("totalDebt")
+    if equity is None:
+        missing.append("totalStockholdersEquity")
+    if cash is None:
+        missing.append("cashAndCashEquivalents")
+    if free_cash_flow is None:
+        missing.append("freeCashFlow")
+    return missing
+
+
+def _latest_statement_json(conn, asset_id: str, statement_type: str) -> dict:
+    row = conn.execute(
+        """
+        SELECT data_json
+        FROM financial_statement
+        WHERE asset_id = ?
+          AND statement_type = ?
+        ORDER BY period_end_date DESC NULLS LAST, year DESC, quarter DESC
+        LIMIT 1
+        """,
+        [asset_id, statement_type],
+    ).fetchone()
+    if row is None or row[0] is None:
+        return {}
+    try:
+        parsed = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _json_number(data: dict, *keys: str) -> float | None:
+    for key in keys:
+        value = data.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _statement_shares_outstanding(conn, asset_id: str) -> float | None:

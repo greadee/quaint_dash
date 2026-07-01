@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
 
-from dashboard.db.db_conn import DB, init_db
+from dashboard.db.db_conn import DB
 from dashboard.ingestion.price_history.provider_yahoo import YahooPriceProvider
 from dashboard.ingestion.ticker_universe import TickerSubscription
 from dashboard.ingestion.websocket.live_price_models import LivePriceTick
@@ -165,7 +165,6 @@ class MarketFreshnessWorker:
         with self.write_lock:
             db = DB(self.db_path)
             try:
-                init_db(db)
                 repo = LivePriceRepository(db.conn)
                 for tick in refreshed:
                     repo.save_tick(tick)
@@ -177,7 +176,6 @@ class MarketFreshnessWorker:
     def _resolve_subscriptions(self) -> list[TickerSubscription]:
         db = DB(self.db_path)
         try:
-            init_db(db)
             return LivePriceSubscriptionResolver(db.conn).resolve(
                 include_portfolios=True,
                 include_watchlist=self.config.include_watchlist,

@@ -11,7 +11,7 @@ from pathlib import Path
 from threading import Lock
 
 from dashboard.api.services import CommandApiService, PortfolioApiService
-from dashboard.db.db_conn import DB, init_db
+from dashboard.db.db_conn import DB
 
 LOGGER = logging.getLogger(__name__)
 
@@ -150,7 +150,6 @@ class IngestionBackgroundWorker:
         with self.write_lock:
             db = DB(self.db_path)
             try:
-                init_db(db)
                 count = CommandApiService(db.conn).schedule_due_routine_ingestion_jobs(
                     max_assets=self.config.max_assets_per_schedule,
                     years=self.config.years,
@@ -172,7 +171,6 @@ class IngestionBackgroundWorker:
         with self.write_lock:
             db = DB(self.db_path)
             try:
-                init_db(db)
                 service = CommandApiService(db.conn)
                 total = 0
                 for _ in range(self.config.max_run_batches_per_tick):

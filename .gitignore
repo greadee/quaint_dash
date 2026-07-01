@@ -2,6 +2,7 @@
 tmp/
 data/test
 *.db
+*.db.wal
 venv/
 .env
 .venv/

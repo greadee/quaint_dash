@@ -186,6 +186,74 @@ For always-on local use, keep `dashboard-web` running in a terminal, Windows Ter
 Task Scheduler task, or service wrapper. The React dev server can be started later; it will proxy
 to the backend when it comes online.
 
+## Full Data Health Workflow
+
+Use the full data health workflow after web-facing ingestion, valuation, projection, signal,
+or portfolio changes, and whenever the Operations page reports failed jobs or missing data.
+It coordinates the live API workers, drains runnable jobs, checks portfolio readiness, and scans
+the rendered app for unresolved missing-data text.
+
+With the API on `http://127.0.0.1:8000` and Vite on `http://localhost:5173`, run:
+
+```cmd
+.\.venv\Scripts\python.exe tools\run_full_data_health_workflow.py --cycles 4 --run-batches 10 --external-audit --json
+cd web
+npm.cmd exec -- node ..\tools\scan_web_app_data_health.mjs
+```
+
+The Python workflow starts and ticks the ingestion background worker, data-readiness worker, and
+market-freshness worker. It retries failed jobs, schedules due full ingestion work, runs bounded
+job batches, checks readiness endpoints, runs optimization previews, and optionally compares a
+bounded price sample against Yahoo Finance chart responses. It does not delete ingestion history
+or sync-state evidence unless `--clear-history` is passed explicitly.
+
+The browser scanner walks Overview, Operations, Signals, Brokers, Settings, aggregate portfolio
+tabs, and every portfolio detail tab. It fails if routes return errors, API requests fail, console
+errors appear, or visible missing-data markers such as `Unavailable` or `Loading dashboard data`
+remain after refresh.
+
+Passing the workflow means:
+
+- `GET /api/v1/health` reports database connected.
+- `/api/v1/ingestion/readiness` and ranking readiness are fully ready.
+- No pending, running, or failed ingestion jobs remain in the scanned job window.
+- Portfolio overview, positions, performance, risk, fundamentals, and optimization preview
+  payloads avoid nulls for critical valuation, projection, risk, and simulation metrics.
+- The refreshed web app renders without missing-data markers, stuck loading states, console
+  errors, or failed API requests.
+
+External price checks are proof samples, not a guarantee that every historical data point is
+globally authoritative. They are used to catch obvious drift or provider mistakes and should name
+the source and tolerance in the workflow output.
+
+## Portfolio Metric Hydration Audit
+
+Use the portfolio metric hydration audit when a ticker shows missing fundamentals in Compare,
+Ticker View, portfolio fundamentals, or ranking/holding factor surfaces:
+
+```cmd
+.\.venv\Scripts\python.exe tools\audit_portfolio_metric_hydration.py --json
+```
+
+The audit enumerates every held portfolio ticker through the same API service layer used by the
+web app. It preserves the held tradable security for price history, returns, transaction history,
+and valuation, then resolves a separate `fundamental_asset_id` for company-level metrics. For CDRs
+and similar wrappers, the wrapper keeps its own market price series while fundamentals, beta,
+shares, market capitalization, margins, free cash flow, and ROIC come from the underlying company
+when the local resolver identifies one.
+
+To enqueue the existing ingestion pipelines for incomplete company-level assets, run:
+
+```cmd
+.\.venv\Scripts\python.exe tools\audit_portfolio_metric_hydration.py --schedule-missing --run-batches 10 --json
+```
+
+The command exits nonzero while any held operating-company ticker remains `partial`, `stale`, or
+`failed`. It reports input ticker, canonical ticker, underlying-security ticker, exchange, currency,
+security type, provider/source, latest successful ingestion time, expected metrics, present
+metrics, missing metrics, invalid metrics, stale metrics, affected UI surfaces, and final status.
+This is the fast preflight for the broader full data health workflow above.
+
 ## Current Boundaries
 
 - The application is single-user and binds to localhost by default.

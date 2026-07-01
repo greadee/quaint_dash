@@ -1261,27 +1261,31 @@ class IngestionCommands:
                 DATASET_SENTIMENT_DAILY,
                 PRIORITY_DAILY_AGGREGATE,
                 "ticker_sentiment_daily",
+                "date",
             ),
             (
                 JOB_TYPE_FACTOR_SNAPSHOT_REFRESH,
                 DATASET_FACTOR_SNAPSHOT,
                 PRIORITY_FACTOR_REFRESH,
                 "ticker_factor_snapshot",
+                "snapshot_date",
             ),
             (
                 JOB_TYPE_QUANT_RATING_REFRESH,
                 DATASET_QUANT_RATING,
                 PRIORITY_QUANT_REFRESH,
                 "ticker_quant_rating_snapshot",
+                "snapshot_date",
             ),
         ]
 
-        for job_type, dataset, priority, table_name in specs:
+        for job_type, dataset, priority, table_name, date_column in specs:
             rows = self._due_sentiment_snapshot_assets(
                 asset_ids=asset_ids,
                 dataset=dataset,
                 job_type=job_type,
                 table_name=table_name,
+                date_column=date_column,
                 snapshot_date=snapshot_date,
                 max_assets=max_assets,
             )
@@ -1303,6 +1307,7 @@ class IngestionCommands:
         dataset: str,
         job_type: str,
         table_name: str,
+        date_column: str,
         snapshot_date: date,
         max_assets: int,
     ) -> list[str]:
@@ -1325,7 +1330,7 @@ class IngestionCommands:
                   SELECT 1
                   FROM {table_name} s
                   WHERE s.asset_id = a.asset_id
-                    AND s.snapshot_date = ?
+                    AND s.{date_column} = ?
               )
             ORDER BY a.asset_id
             LIMIT ?

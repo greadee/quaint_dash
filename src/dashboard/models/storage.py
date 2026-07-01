@@ -16,6 +16,7 @@ from dashboard.ingestion.ticker_universe import TickerUniverseRepository
 from dashboard.models.commands import (
     AnalyticsCommands,
     BrokerCommands,
+    BusinessStrengthCommands,
     IngestionCommands,
     StreamingCommands,
 )
@@ -29,7 +30,7 @@ from dashboard.ingestion.indices.index_service_factory import create_index_sched
 from dashboard.ingestion.indices.index_service_factory import create_index_ingestion_service
 
 
-class DashboardManager(AnalyticsCommands, BrokerCommands, IngestionCommands, StreamingCommands):
+class DashboardManager(AnalyticsCommands, BrokerCommands, BusinessStrengthCommands, IngestionCommands, StreamingCommands):
     """
     Creates and opens portfolios (multiple)
     """

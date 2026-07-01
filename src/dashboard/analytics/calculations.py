@@ -19,7 +19,7 @@ def risk_return_metrics(
     prices: list[PricePoint],
     risk_free_rate: float = 0.0,
 ) -> RiskReturnMetrics:
-    clean = [p for p in prices if p.close > 0]
+    clean = sorted((p for p in prices if p.close > 0), key=lambda p: p.date)
     returns = simple_returns([p.close for p in clean])
     start_date = clean[0].date if clean else None
     end_date = clean[-1].date if clean else None
@@ -538,6 +538,8 @@ def allocation_class(
         return "Fixed income"
     if asset_subtype_key == "cdr" or "canadian depositary receipt" in text or "canadian depository receipt" in text:
         return "CDR"
+    if any(term in text for term in (" etf", "exchange traded fund", "split corp class a etf")):
+        return "ETF"
     if asset_type_key in {"etf", "fund", "mutual_fund", "mutual fund"}:
         return "ETF"
     if asset_type_key in {"stock", "equity", "adr"}:

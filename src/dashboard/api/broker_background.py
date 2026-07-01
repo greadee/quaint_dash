@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 from threading import Lock
 
-from dashboard.db.db_conn import DB, init_db
+from dashboard.db.db_conn import DB
 from dashboard.models.storage import DashboardManager
 
 LOGGER = logging.getLogger(__name__)
@@ -74,7 +74,6 @@ class BrokerBackgroundWorker:
     def _sync_due(self) -> None:
         db = DB(self.db_path)
         try:
-            init_db(db)
             manager = DashboardManager(db)
             with self.write_lock:
                 result = manager.broker_snaptrade_sync_due(
