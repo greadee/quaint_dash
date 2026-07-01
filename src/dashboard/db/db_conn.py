@@ -37,4 +37,6 @@ def init_db(db: DB):
     db.conn.execute(benchmark_schema.read_text(encoding="utf-8"))
     business_strength_schema = schema_path.parent / "migrations" / "business_strength.sql"
     db.conn.execute(business_strength_schema.read_text(encoding="utf-8"))
+    financial_news_schema = schema_path.parent / "migrations" / "financial_news.sql"
+    db.conn.execute(financial_news_schema.read_text(encoding="utf-8"))
     seed_stock_catalog(db.conn)
