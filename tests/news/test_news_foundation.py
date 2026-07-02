@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from dashboard.db.db_conn import DB, init_db
 from dashboard.news.entity_resolution import EntityResolver
@@ -8,6 +8,8 @@ from dashboard.news.ingestion import NewsIngestionService
 from dashboard.news.models import ProviderNewsArticle
 from dashboard.news.normalization import NewsValidationError, normalize_provider_article
 from dashboard.news.providers.mock_provider import MockNewsProvider
+
+UTC = timezone.utc
 
 
 def _db(tmp_path):

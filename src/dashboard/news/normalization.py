@@ -5,13 +5,14 @@ from __future__ import annotations
 import hashlib
 import html
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from dashboard.news.models import NormalizedNewsArticle, ProviderNewsArticle
 
 _TRACKING_PREFIXES = ("utm_",)
 _TRACKING_KEYS = {"fbclid", "gclid", "mc_cid", "mc_eid"}
+UTC = timezone.utc
 
 
 class NewsValidationError(ValueError):

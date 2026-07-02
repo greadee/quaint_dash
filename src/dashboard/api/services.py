@@ -1,7 +1,7 @@
 """Application-facing read and write services for the HTTP API."""
 
 from dataclasses import asdict, dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 import json
 import os
 import re
@@ -121,6 +121,8 @@ from dashboard.ingestion.indices.index_service_factory import (
 )
 from dashboard.ingestion.ticker_universe import TickerUniverseRepository
 from dashboard.models.commands import BrokerCommands, IngestionCommands
+
+UTC = timezone.utc
 
 
 _HOLDINGS_SQL = """

@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from dashboard.news.models import (
     ProviderCapabilities,
     ProviderHealthStatus,
     ProviderNewsArticle,
 )
+
+UTC = timezone.utc
 
 
 def default_mock_articles() -> list[ProviderNewsArticle]:

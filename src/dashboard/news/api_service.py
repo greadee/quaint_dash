@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
 
 from dashboard.api.models import (
@@ -18,6 +18,8 @@ from dashboard.api.models import (
     NewsStoryClusterSummary,
     NewsUserStateResponse,
 )
+
+UTC = timezone.utc
 
 
 class NewsApiService:

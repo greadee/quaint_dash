@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from dashboard.news.clustering import cluster_key
@@ -13,6 +13,8 @@ from dashboard.news.models import (
     NormalizedNewsArticle,
     ProviderCapabilities,
 )
+
+UTC = timezone.utc
 
 
 class NewsRepository:

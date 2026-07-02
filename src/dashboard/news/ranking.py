@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from math import exp
 
 from dashboard.news.models import AssetNewsMatch, NormalizedNewsArticle
+
+UTC = timezone.utc
 
 CATEGORY_WEIGHTS = {
     "bankruptcy": 0.95,
