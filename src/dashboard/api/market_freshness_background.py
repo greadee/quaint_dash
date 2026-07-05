@@ -11,6 +11,8 @@ from pathlib import Path
 from threading import Lock
 
 from dashboard.db.db_conn import DB
+from dashboard.ingestion.price_history.db.ingestion_repo import PriceHistoryIngestionRepository
+from dashboard.ingestion.price_history.models import PriceDailyRow
 from dashboard.ingestion.price_history.provider_yahoo import YahooPriceProvider
 from dashboard.ingestion.ticker_universe import TickerSubscription
 from dashboard.ingestion.websocket.live_price_models import LivePriceTick
@@ -30,9 +32,8 @@ class MarketFreshnessConfig:
 
     @classmethod
     def from_env(cls) -> "MarketFreshnessConfig":
-        default_enabled = not _running_under_pytest()
         return cls(
-            enabled=_truthy_env("MARKET_FRESHNESS_ENABLED", default=default_enabled),
+            enabled=_truthy_env("MARKET_FRESHNESS_ENABLED", default=False),
             poll_interval_seconds=_int_env("MARKET_FRESHNESS_POLL_INTERVAL_SECONDS", 900),
             include_watchlist=_truthy_env("MARKET_FRESHNESS_INCLUDE_WATCHLIST", default=False),
             lookback_days=_int_env("MARKET_FRESHNESS_LOOKBACK_DAYS", 7),
@@ -69,7 +70,6 @@ class MarketFreshnessWorker:
 
     def enable(self) -> None:
         self._enabled = True
-        self.start()
 
     async def disable(self) -> None:
         self._enabled = False
@@ -135,8 +135,23 @@ class MarketFreshnessWorker:
         today = date.today()
         start = today - timedelta(days=max(self.config.lookback_days, 1))
         refreshed: list[LivePriceTick] = []
+        daily_rows: list[PriceDailyRow] = []
         for item in subscriptions[: self.config.max_symbols_per_tick]:
             rows = provider.fetch_price_daily(item.symbol, start, today)
+            daily_rows.extend(
+                PriceDailyRow(
+                    asset_id=item.asset_id,
+                    price_date=row.price_date,
+                    open_price=row.open_price,
+                    high_price=row.high_price,
+                    low_price=row.low_price,
+                    close_price=row.close_price,
+                    adj_close_price=row.adj_close_price,
+                    volume=row.volume,
+                    source=row.source,
+                )
+                for row in rows
+            )
             latest = next((row for row in reversed(rows) if row.close_price is not None or row.adj_close_price is not None), None)
             if latest is None:
                 continue
@@ -165,6 +180,8 @@ class MarketFreshnessWorker:
         with self.write_lock:
             db = DB(self.db_path)
             try:
+                if daily_rows:
+                    PriceHistoryIngestionRepository(db.conn).upsert_price_rows(daily_rows)
                 repo = LivePriceRepository(db.conn)
                 for tick in refreshed:
                     repo.save_tick(tick)
@@ -174,14 +191,15 @@ class MarketFreshnessWorker:
         return len(refreshed)
 
     def _resolve_subscriptions(self) -> list[TickerSubscription]:
-        db = DB(self.db_path)
-        try:
-            return LivePriceSubscriptionResolver(db.conn).resolve(
-                include_portfolios=True,
-                include_watchlist=self.config.include_watchlist,
-            )
-        finally:
-            db.conn.close()
+        with self.write_lock:
+            db = DB(self.db_path)
+            try:
+                return LivePriceSubscriptionResolver(db.conn).resolve(
+                    include_portfolios=True,
+                    include_watchlist=self.config.include_watchlist,
+                )
+            finally:
+                db.conn.close()
 
     def status(self) -> dict:
         return {

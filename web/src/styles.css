@@ -4,6 +4,7 @@ body { margin: 0; min-width: 320px; }
 button, input, select { font: inherit; }
 button, select { border: 1px solid #d9ddd6; border-radius: 10px; background: #fff; padding: 10px 14px; cursor: pointer; }
 button { display: inline-flex; align-items: center; gap: 7px; }
+button:not(:disabled):active { transform: translateY(1px); }
 .button-link { border: 1px solid #d9ddd6; border-radius: 10px; background: #fff; padding: 10px 14px; cursor: pointer; color: #182231; text-decoration: none; display: inline-flex; align-items: center; gap: 7px; font-size: 13px; }
 .primary { background: #1e6b56; color: white; border-color: #1e6b56; }
 .danger { color: #a34440; border-color: #edc8c4; background: #fff7f6; }

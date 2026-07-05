@@ -282,6 +282,85 @@ class BrokerSyncRepository:
         ]
 
     def upsert_account(self, account: BrokerAccount) -> None:
+        existing = self.conn.execute(
+            """
+            SELECT 1
+            FROM broker_account
+            WHERE provider = ?
+              AND provider_account_id = ?
+            """,
+            [account.provider, account.provider_account_id],
+        ).fetchone()
+        payload = self._raw_json(account.raw_payload)
+        if existing:
+            overrides = self.conn.execute(
+                """
+                SELECT total_return_percent, note, created_at, updated_at
+                FROM broker_account_return_override
+                WHERE provider = ?
+                  AND provider_account_id = ?
+                """,
+                [account.provider, account.provider_account_id],
+            ).fetchall()
+            if overrides:
+                self.conn.execute(
+                    """
+                    DELETE FROM broker_account_return_override
+                    WHERE provider = ?
+                      AND provider_account_id = ?
+                    """,
+                    [account.provider, account.provider_account_id],
+                )
+            self.conn.execute(
+                """
+                UPDATE broker_account
+                SET provider_connection_id = ?,
+                    account_name = ?,
+                    account_type = ?,
+                    currency = ?,
+                    balance = ?,
+                    portfolio_id = COALESCE(?, portfolio_id),
+                    raw_json = ?,
+                    updated_at = now()
+                WHERE provider = ?
+                  AND provider_account_id = ?
+                """,
+                [
+                    account.provider_connection_id,
+                    account.account_name,
+                    account.account_type,
+                    account.currency,
+                    account.balance,
+                    account.portfolio_id,
+                    payload,
+                    account.provider,
+                    account.provider_account_id,
+                ],
+            )
+            for total_return_percent, note, created_at, updated_at in overrides:
+                self.conn.execute(
+                    """
+                    INSERT INTO broker_account_return_override (
+                        provider,
+                        provider_account_id,
+                        total_return_percent,
+                        note,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        account.provider,
+                        account.provider_account_id,
+                        total_return_percent,
+                        note,
+                        created_at,
+                        updated_at,
+                    ],
+                )
+            return
+
         self.conn.execute(
             """
             INSERT INTO broker_account (
@@ -297,15 +376,6 @@ class BrokerSyncRepository:
                 updated_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, now())
-            ON CONFLICT(provider, provider_account_id) DO UPDATE SET
-                provider_connection_id = excluded.provider_connection_id,
-                account_name = excluded.account_name,
-                account_type = excluded.account_type,
-                currency = excluded.currency,
-                balance = excluded.balance,
-                portfolio_id = COALESCE(excluded.portfolio_id, broker_account.portfolio_id),
-                raw_json = excluded.raw_json,
-                updated_at = now()
             """,
             [
                 account.provider,
@@ -316,7 +386,7 @@ class BrokerSyncRepository:
                 account.currency,
                 account.balance,
                 account.portfolio_id,
-                self._raw_json(account.raw_payload),
+                payload,
             ],
         )
 
@@ -486,7 +556,9 @@ class BrokerSyncRepository:
         connection_id: int | None = None,
         user_key: str | None = None,
     ) -> int:
-        row = self.conn.execute("SELECT nextval('seq_broker_sync_run_id')").fetchone()
+        row = self.conn.execute(
+            "SELECT COALESCE(MAX(sync_run_id), 0) + 1 FROM broker_sync_run"
+        ).fetchone()
         sync_run_id = int(row[0])
         self.conn.execute(
             """

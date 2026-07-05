@@ -137,6 +137,23 @@ def test_broker_repository_persists_user_connection_account_and_sync_run(tmp_pat
     assert row == ("done", "default", 1, 2, 3)
 
 
+def test_broker_sync_run_ids_follow_existing_rows_when_sequence_lags(tmp_path):
+    db = DB(str(tmp_path / "broker_sync_run_sequence.db"))
+    init_db(db)
+    repo = BrokerSyncRepository(db.conn)
+    db.conn.execute(
+        """
+        INSERT INTO broker_sync_run(sync_run_id, provider, user_key, status)
+        VALUES (70, 'snaptrade', 'default', 'done')
+        """
+    )
+
+    sync_run_id = repo.create_sync_run("snaptrade", user_key="default")
+
+    assert sync_run_id == 71
+    assert db.conn.execute("SELECT COUNT(*) FROM broker_sync_run").fetchone()[0] == 2
+
+
 def test_broker_repository_can_disable_raw_payload_storage(tmp_path):
     db = DB(str(tmp_path / "broker_raw_payload_toggle.db"))
     init_db(db)
@@ -178,6 +195,60 @@ def test_fake_broker_provider_outputs_can_be_persisted(tmp_path):
     assert db.conn.execute("SELECT COUNT(*) FROM broker_account").fetchone()[0] == 1
     assert db.conn.execute("SELECT COUNT(*) FROM broker_position_snapshot").fetchone()[0] == 1
     assert db.conn.execute("SELECT COUNT(*) FROM broker_transaction").fetchone()[0] == 1
+
+
+def test_broker_account_upsert_preserves_rows_referenced_by_return_override(tmp_path):
+    db = DB(str(tmp_path / "broker_account_override.db"))
+    init_db(db)
+    repo = BrokerSyncRepository(db.conn)
+    account = BrokerAccount(
+        provider="snaptrade",
+        provider_account_id="acct-1",
+        provider_connection_id="conn-1",
+        account_name="TFSA",
+        account_type="registered",
+        currency="CAD",
+        balance=1000.0,
+    )
+
+    repo.upsert_account(account)
+    db.conn.execute(
+        """
+        INSERT INTO broker_account_return_override(provider, provider_account_id, total_return_percent, note)
+        VALUES ('snaptrade', 'acct-1', 0.42, 'manual')
+        """
+    )
+    repo.upsert_account(
+        BrokerAccount(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_connection_id="conn-1",
+            account_name="TFSA refreshed",
+            account_type="registered",
+            currency="CAD",
+            balance=1200.0,
+        )
+    )
+
+    row = db.conn.execute(
+        """
+        SELECT account_name, balance
+        FROM broker_account
+        WHERE provider = 'snaptrade'
+          AND provider_account_id = 'acct-1'
+        """
+    ).fetchone()
+    override = db.conn.execute(
+        """
+        SELECT total_return_percent
+        FROM broker_account_return_override
+        WHERE provider = 'snaptrade'
+          AND provider_account_id = 'acct-1'
+        """
+    ).fetchone()
+
+    assert row == ("TFSA refreshed", 1200.0)
+    assert override == (0.42,)
 
 
 def test_snaptrade_signature_uses_canonical_payload_shape():

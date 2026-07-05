@@ -123,6 +123,11 @@ export function BrokersPage({ notify }: { notify: (message: string, tone?: AppNo
 
   const connect = useMutation({
     mutationFn: (payload?: BrokerPortalPayload) => api.brokerPortal(payload ?? { user_key: brokerUserKey }),
+    onMutate: (payload) => {
+      const next = payload?.reconnect ? "Opening reconnect portal..." : "Opening broker connection portal...";
+      setAnnouncement(next);
+      notify(next);
+    },
     onSuccess: (result) => {
       setPortalUrl(result.url);
       setAnnouncement("Provider-hosted connection portal opened. Return here after linking to refresh broker data.");
@@ -138,6 +143,11 @@ export function BrokersPage({ notify }: { notify: (message: string, tone?: AppNo
   });
   const refresh = useMutation({
     mutationFn: () => api.brokerSync(brokerUserKey),
+    onMutate: () => {
+      const next = "Refreshing broker data...";
+      setAnnouncement(next);
+      notify(next);
+    },
     onSuccess: (result) => {
       const next = `Refresh broker data finished: ${formatActionResult(result.result)}`;
       setAnnouncement(next);
@@ -155,6 +165,11 @@ export function BrokersPage({ notify }: { notify: (message: string, tone?: AppNo
   const refreshDue = useMutation({
     mutationFn: (payload?: { max_users?: number | null; min_age_hours?: number; force?: boolean }) =>
       api.brokerSyncDue(payload ?? { min_age_hours: statusQuery.data?.freshness_window_hours ?? 1 }),
+    onMutate: (payload) => {
+      const next = payload?.force ? "Force-refreshing broker connections..." : "Refreshing due broker connections...";
+      setAnnouncement(next);
+      notify(next);
+    },
     onSuccess: (result) => {
       const next = `Due broker refresh finished: ${formatActionResult(result.result)}`;
       setAnnouncement(next);
@@ -170,6 +185,11 @@ export function BrokersPage({ notify }: { notify: (message: string, tone?: AppNo
   });
   const mapper = useMutation({
     mutationFn: ({ accountId, portfolioId }: { accountId: string; portfolioId: number }) => api.mapBrokerAccount(accountId, portfolioId),
+    onMutate: () => {
+      const next = "Saving broker account assignment...";
+      setAnnouncement(next);
+      notify(next);
+    },
     onSuccess: () => {
       setAnnouncement("Brokerage account assignment saved. Local projected holdings were recalculated.");
       notify("Brokerage account assigned.");
@@ -184,6 +204,11 @@ export function BrokersPage({ notify }: { notify: (message: string, tone?: AppNo
   });
   const createPortfolio = useMutation({
     mutationFn: ({ account, name }: { account: BrokerAccount; name: string }) => api.createPortfolio(name, account.currency ?? "CAD"),
+    onMutate: () => {
+      const next = "Creating portfolio for broker account...";
+      setAnnouncement(next);
+      notify(next);
+    },
     onSuccess: (portfolio, variables) => {
       mapper.mutate({ accountId: variables.account.provider_account_id, portfolioId: portfolio.portfolio_id });
     },
@@ -195,6 +220,11 @@ export function BrokersPage({ notify }: { notify: (message: string, tone?: AppNo
   });
   const importer = useMutation({
     mutationFn: () => api.importBrokerTransactions(null),
+    onMutate: () => {
+      const next = "Importing broker transactions...";
+      setAnnouncement(next);
+      notify(next);
+    },
     onSuccess: (result) => {
       const next = `Import transactions finished: ${formatActionResult(result.result)}`;
       setAnnouncement(next);
@@ -210,6 +240,11 @@ export function BrokersPage({ notify }: { notify: (message: string, tone?: AppNo
   });
   const storage = useMutation({
     mutationFn: (enabled: boolean) => api.setBrokerRawPayloadStorage(enabled),
+    onMutate: () => {
+      const next = "Updating broker privacy setting...";
+      setAnnouncement(next);
+      notify(next);
+    },
     onSuccess: () => {
       setAnnouncement("Detailed provider response storage setting updated for future refreshes.");
       notify("Broker privacy setting updated.");
@@ -223,6 +258,11 @@ export function BrokersPage({ notify }: { notify: (message: string, tone?: AppNo
   });
   const smokeTest = useMutation({
     mutationFn: api.brokerSmokeTest,
+    onMutate: () => {
+      const next = "Testing broker configuration...";
+      setAnnouncement(next);
+      notify(next);
+    },
     onSuccess: (result) => {
       const next = `Configuration test finished: ${formatActionResult(result.result)}`;
       setAnnouncement(next);
@@ -307,6 +347,7 @@ export function BrokersPage({ notify }: { notify: (message: string, tone?: AppNo
           <PageLayoutToolbar pageId="brokers" />
           <OptionalFeaturesEmpty pageId="brokers" />
           {showSummaryCards ? <LayoutWidget pageId="brokers" widgetId="brokers.summaryCards"><BrokerSummaryCards summary={summary} onFilter={(filter) => {
+            notify("Broker view filter applied.");
             if (filter === "accounts") {
               setTab("accounts");
               setAccountFilter("all");

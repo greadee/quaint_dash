@@ -6304,17 +6304,32 @@ class CommandApiService(BrokerCommands, IngestionCommands):
             row[0]: row
             for row in self.conn.execute(
                 """
+                WITH sync_summary AS (
+                    SELECT
+                        connection_id,
+                        MAX(started_at) AS last_attempted_at,
+                        MAX(completed_at) FILTER (WHERE status IN ('done', 'success')) AS last_successful_at
+                    FROM broker_sync_run
+                    GROUP BY connection_id
+                )
                 SELECT
                     c.provider_connection_id,
-                    MAX(r.started_at),
-                    MAX(r.completed_at) FILTER (WHERE r.status IN ('done', 'success')),
-                    STRING_AGG(r.error_message, ' | ' ORDER BY r.started_at DESC) FILTER (
-                        WHERE r.error_message IS NOT NULL AND r.error_message <> ''
+                    s.last_attempted_at,
+                    s.last_successful_at,
+                    (
+                        SELECT STRING_AGG(r.error_message, ' | ' ORDER BY r.started_at DESC)
+                        FROM broker_sync_run r
+                        WHERE r.connection_id = c.connection_id
+                          AND r.error_message IS NOT NULL
+                          AND r.error_message <> ''
+                          AND (
+                              s.last_successful_at IS NULL
+                              OR r.started_at > s.last_successful_at
+                          )
                     )
                 FROM broker_connection c
-                LEFT JOIN broker_sync_run r ON r.connection_id = c.connection_id
+                LEFT JOIN sync_summary s ON s.connection_id = c.connection_id
                 WHERE c.provider = ?
-                GROUP BY c.provider_connection_id
                 """,
                 [SNAPTRADE_PROVIDER],
             ).fetchall()

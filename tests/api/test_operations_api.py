@@ -10,7 +10,15 @@ from dashboard.api.ingestion_background import IngestionBackgroundConfig, Ingest
 from dashboard.api.market_freshness_background import MarketFreshnessConfig, MarketFreshnessWorker
 from dashboard.api.app import create_app
 from dashboard.api.services import CommandApiService
-from dashboard.brokers.models import BrokerAccount, BrokerConnection, BrokerPosition, BrokerSyncResult, BrokerTransaction, BrokerUser
+from dashboard.brokers.models import (
+    BrokerAccount,
+    BrokerConnection,
+    BrokerConnectionPortal,
+    BrokerPosition,
+    BrokerSyncResult,
+    BrokerTransaction,
+    BrokerUser,
+)
 from dashboard.brokers.repository import BrokerSyncRepository
 from dashboard.brokers.secrets import LocalSecretCipher
 from dashboard.brokers.sync import BrokerSyncSummary
@@ -245,6 +253,36 @@ def test_broker_sync_uses_active_profile_when_user_key_is_omitted(tmp_path, monk
     assert calls == ["connor-local"]
 
 
+def test_broker_portal_endpoint_returns_redirect_url(tmp_path, monkeypatch):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    repo = BrokerSyncRepository(db.conn)
+    repo.upsert_broker_user(
+        BrokerUser("snaptrade", "connor-local", "user-1", "secret"),
+        LocalSecretCipher("broker-secret"),
+    )
+    db.conn.close()
+
+    def fake_portal(self, user_key, broker=None, custom_redirect=None, immediate_redirect=False, register_if_missing=False, reconnect=None):
+        assert user_key == "connor-local"
+        assert reconnect == "conn-1"
+        return BrokerConnectionPortal(
+            provider="snaptrade",
+            provider_user_id="user-1",
+            redirect_uri="https://app.snaptrade.com/portal",
+            session_id="session-1",
+        )
+
+    monkeypatch.setattr(CommandApiService, "broker_snaptrade_portal", fake_portal)
+
+    with TestClient(app) as client:
+        response = client.post("/api/v1/brokers/snaptrade/portal", json={"reconnect": "conn-1"})
+
+    assert response.status_code == 200
+    assert response.json() == {"url": "https://app.snaptrade.com/portal"}
+
+
 def test_broker_import_preview_surfaces_ready_unmapped_and_unsupported_activity(tmp_path):
     db_path = tmp_path / "api.db"
     app = create_app(db_path)
@@ -333,6 +371,40 @@ def test_broker_sync_history_redacts_errors_and_labels_failures(tmp_path):
     assert item["accounts_processed"] == 1
     assert "abc123" not in response.text
     assert "provider.example" not in response.text
+
+
+def test_broker_connections_hide_errors_older_than_latest_success(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    repo = BrokerSyncRepository(db.conn)
+    connection_id = repo.upsert_connection(BrokerConnection("snaptrade", "conn-1", "Demo Brokerage", "active"))
+    failed_run_id = repo.create_sync_run("snaptrade", connection_id=connection_id, user_key="default")
+    repo.finish_sync_run(
+        failed_run_id,
+        BrokerSyncResult(
+            provider="snaptrade",
+            connection_id=connection_id,
+            status="failed",
+            error_message="stale provider error",
+        ),
+    )
+    successful_run_id = repo.create_sync_run("snaptrade", connection_id=connection_id, user_key="default")
+    repo.finish_sync_run(
+        successful_run_id,
+        BrokerSyncResult(
+            provider="snaptrade",
+            connection_id=connection_id,
+            status="success",
+        ),
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/brokers/connections")
+
+    assert response.status_code == 200
+    assert response.json()[0]["last_error"] is None
 
 
 def test_broker_reconciliation_reports_unresolved_and_mismatched_positions(tmp_path):
@@ -758,7 +830,7 @@ def test_market_freshness_status_defaults_disabled(tmp_path):
     }
 
 
-def test_market_freshness_tick_writes_current_prices(tmp_path, monkeypatch):
+def test_market_freshness_tick_writes_current_and_daily_prices(tmp_path, monkeypatch):
     db_path = tmp_path / "api.db"
     db = DB(db_path)
     init_db(db)
@@ -807,16 +879,24 @@ def test_market_freshness_tick_writes_current_prices(tmp_path, monkeypatch):
     assert asyncio.run(worker.tick_poll()) == 1
 
     db = DB(db_path)
-    row = db.conn.execute(
+    current_row = db.conn.execute(
         """
         SELECT asset_id, symbol, price, provider
         FROM current_asset_price
         WHERE asset_id = 'AAPL'
         """
     ).fetchone()
+    daily_row = db.conn.execute(
+        """
+        SELECT asset_id, date, close, adj_close, volume, ing_source
+        FROM asset_quote_daily
+        WHERE asset_id = 'AAPL'
+        """
+    ).fetchone()
     db.conn.close()
 
-    assert row == ("AAPL", "AAPL", 121.0, "yfinance")
+    assert current_row == ("AAPL", "AAPL", 121.0, "yfinance")
+    assert daily_row == ("AAPL", date(2026, 6, 23), 121.0, 121.0, 1000, "fake")
 
 
 def test_data_readiness_status_defaults_disabled(tmp_path):

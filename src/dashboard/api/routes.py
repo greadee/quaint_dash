@@ -927,15 +927,16 @@ def save_existing_broker_user(
 
 
 @router.post("/brokers/snaptrade/portal", response_model=BrokerPortalResponse)
-def broker_portal(payload: BrokerPortalRequest, conn=Depends(get_connection)):
-    service = CommandApiService(conn)
-    url = service.broker_snaptrade_portal(
-        service.broker_user_key_or_default(payload.user_key),
-        broker=payload.broker,
-        reconnect=payload.reconnect,
-        register_if_missing=True,
-    )
-    return BrokerPortalResponse(url=url)
+def broker_portal(payload: BrokerPortalRequest, request: Request, conn=Depends(get_connection)):
+    with request.app.state.write_lock:
+        service = CommandApiService(conn)
+        portal = service.broker_snaptrade_portal(
+            service.broker_user_key_or_default(payload.user_key),
+            broker=payload.broker,
+            reconnect=payload.reconnect,
+            register_if_missing=True,
+        )
+    return BrokerPortalResponse(url=portal.redirect_uri)
 
 
 @router.post("/brokers/snaptrade/sync", response_model=ActionResult)
