@@ -7,6 +7,7 @@ const webBase = process.argv.find((arg) => arg.startsWith("--web-base="))?.split
 const apiBase = process.argv.find((arg) => arg.startsWith("--api-base="))?.split("=")[1] ?? "http://127.0.0.1:8000/api/v1";
 const waitMs = Number(process.argv.find((arg) => arg.startsWith("--wait-ms="))?.split("=")[1] ?? "2500");
 const settleMs = Number(process.argv.find((arg) => arg.startsWith("--settle-ms="))?.split("=")[1] ?? "10000");
+const navTimeoutMs = Number(process.argv.find((arg) => arg.startsWith("--nav-timeout-ms="))?.split("=")[1] ?? "30000");
 
 const failureMarkers = [
   "Unavailable",
@@ -41,6 +42,7 @@ async function main() {
     "/portfolios?tab=aggregate",
     "/portfolios?tab=portfolios",
     "/portfolios?tab=fundamentals",
+    "/retail-sentiment",
     "/signals",
     "/benchmarks",
     "/brokers",
@@ -79,7 +81,24 @@ async function main() {
   for (const route of routes) {
     consoleErrors.length = 0;
     failedRequests.length = 0;
-    const response = await page.goto(routePath(route), { waitUntil: "domcontentloaded" });
+    let response;
+    try {
+      response = await page.goto(routePath(route), { waitUntil: "domcontentloaded", timeout: navTimeoutMs });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      routeResults.push({
+        route,
+        status: null,
+        title: await page.title().catch(() => ""),
+        markers: [],
+        consoleErrors: [...consoleErrors],
+        failedRequests: [...failedRequests],
+        textStart: "",
+        navigationError: message,
+      });
+      findings.push({ severity: "critical", route, message: "route navigation timed out", detail: { error: message } });
+      continue;
+    }
     await page.waitForTimeout(waitMs);
     const deadline = Date.now() + settleMs;
     while (Date.now() < deadline) {
