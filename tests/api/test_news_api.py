@@ -88,6 +88,50 @@ def test_asset_and_portfolio_news_feeds_rank_context(tmp_path):
     assert portfolio_feed.json()["items"][0]["assets"][0]["asset_id"] == "NVDA"
 
 
+def test_cdr_asset_and_portfolio_news_feeds_use_underlying_symbol(tmp_path):
+    db_path = tmp_path / "api-news-cdr-context.db"
+    app = create_app(db_path)
+    _seed_news_db(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        """
+        INSERT INTO portfolio(portfolio_id, portfolio_name, base_ccy)
+        VALUES (2, 'CDR', 'CAD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, exchange_code, asset_type, asset_subtype, ccy, name, sector, track)
+        VALUES
+            ('NVDA.TO', 'NVDA.TO', 'XTSE', 'stock', 'cdr', 'CAD', 'NVIDIA Canadian Depositary Receipt', 'Technology', TRUE),
+            ('MSFT.TO', 'MSFT.TO', 'XTSE', 'stock', 'cdr', 'CAD', 'Microsoft Canadian Depositary Receipt', 'Technology', TRUE)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO position(portfolio_id, asset_id, qty, book_cost, created_at, updated_at)
+        VALUES
+            (2, 'NVDA.TO', 10, 5000, now(), now()),
+            (2, 'MSFT.TO', 2, 100, now(), now())
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        asset_feed = client.get("/api/v1/assets/NVDA.TO/news")
+        portfolio_feed = client.get("/api/v1/portfolios/2/news?sort=relevance")
+        terminal_feed = client.get("/api/v1/news?asset_id=NVDA.TO")
+
+    assert asset_feed.status_code == 200
+    assert asset_feed.json()["total"] == 1
+    assert asset_feed.json()["items"][0]["assets"][0]["asset_id"] == "NVDA"
+    assert portfolio_feed.status_code == 200
+    assert portfolio_feed.json()["total"] == 2
+    assert portfolio_feed.json()["items"][0]["assets"][0]["asset_id"] == "NVDA"
+    assert terminal_feed.status_code == 200
+    assert terminal_feed.json()["total"] == 1
+
+
 def test_news_read_and_saved_state_persists(tmp_path):
     db_path = tmp_path / "api-news-state.db"
     app = create_app(db_path)

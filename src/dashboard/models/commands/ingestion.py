@@ -362,6 +362,10 @@ class IngestionCommands:
     def sentiment_refresh(self, target: str, source: str = "all") -> int:
         from dashboard.ingestion_sentiment.scheduler import SentimentIngestionScheduler
         from dashboard.ingestion_sentiment.service import SentimentIngestionService
+        from dashboard.ingestion_sentiment.providers.provider_registry import (
+            default_news_providers,
+            default_social_providers,
+        )
 
         target = target.upper().strip()
         source = source.lower().strip()
@@ -379,7 +383,11 @@ class IngestionCommands:
                 )
             return total
 
-        return SentimentIngestionService(self.conn).refresh_ticker(target, source=source)
+        return SentimentIngestionService(
+            self.conn,
+            news_providers=default_news_providers(),
+            social_providers=default_social_providers(),
+        ).refresh_ticker(target, source=source)
 
     def run_sentiment_jobs(self, max_jobs: int = 1) -> int:
         from dashboard.ingestion_sentiment.scheduler import SentimentIngestionScheduler

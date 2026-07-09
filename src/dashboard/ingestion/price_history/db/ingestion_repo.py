@@ -34,7 +34,7 @@ class PriceHistoryIngestionRepository:
         self.ticker_universe = TickerUniverseRepository(conn)
 
     def next_job_id(self) -> int:
-        return int(self.conn.execute(qry.NEXT_JOB_ID).fetchone()[0])
+        return int(self.conn.execute(qry.NEXT_SAFE_JOB_ID).fetchone()[0])
 
     def create_job(
         self,

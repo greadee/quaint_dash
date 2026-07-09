@@ -2,7 +2,10 @@
 SQL helpers for Domain B corporate calendar ingestion.
 """
 
-NEXT_JOB_ID = "SELECT nextval('seq_ingestion_job_id')"
+NEXT_JOB_ID = """
+SELECT GREATEST(nextval('seq_ingestion_job_id'), COALESCE(MAX(job_id), 0) + 1)
+FROM ingestion_job
+"""
 
 INSERT_JOB = """
 INSERT INTO ingestion_job (

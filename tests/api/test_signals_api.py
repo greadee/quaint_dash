@@ -54,10 +54,46 @@ def test_signals_summary_exposes_distinct_strength_confidence_and_priority(tmp_p
     assert item["direction"] == "negative"
     assert item["strength"] >= 0
     assert item["confidence"] >= 0.7
+    assert item["confidence"] < 1
     assert item["portfolio_priority"] >= 0
     assert item["supporting_evidence"]
     assert item["affected_portfolios"][0]["portfolio_name"] == "Core"
     assert item["historical_efficacy"]["sample_size"] == 0
+
+
+def test_signals_summary_excludes_etfs_and_etf_like_assets(tmp_path):
+    db_path = tmp_path / "signals.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    _seed_signal_assets(db)
+    for asset_id, symbol, asset_type, asset_subtype, name in [
+        ("VTI", "VTI", "etf", None, "Vanguard Total Stock Market ETF"),
+        ("MISETF", "MISETF", "stock", "index_etf", "Misclassified Growth ETF"),
+    ]:
+        db.conn.execute(
+            """
+            INSERT INTO asset(asset_id, symbol, asset_type, asset_subtype, ccy, name, track)
+            VALUES (?, ?, ?, ?, 'USD', ?, TRUE)
+            """,
+            [asset_id, symbol, asset_type, asset_subtype, name],
+        )
+        for index in range(70):
+            db.conn.execute(
+                """
+                INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+                VALUES (?, DATE '2026-01-01' + CAST(? AS INTEGER), ?, ?, 'test')
+                """,
+                [asset_id, index, 100 + index, 100 + index],
+            )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/signals?limit=100")
+
+    assert response.status_code == 200
+    tickers = {item["ticker"] for item in response.json()["items"]}
+    assert "VTI" not in tickers
+    assert "MISETF" not in tickers
 
 
 def test_signal_detail_user_state_alert_and_idempotent_persistence(tmp_path):

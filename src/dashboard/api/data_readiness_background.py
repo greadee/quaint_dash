@@ -32,9 +32,8 @@ class DataReadinessConfig:
 
     @classmethod
     def from_env(cls) -> "DataReadinessConfig":
-        default_enabled = not _running_under_pytest()
         return cls(
-            enabled=_truthy_env("DATA_READINESS_WORKER_ENABLED", default=default_enabled),
+            enabled=_truthy_env("DATA_READINESS_WORKER_ENABLED", default=False),
             poll_interval_seconds=_int_env("DATA_READINESS_POLL_INTERVAL_SECONDS", 300),
             max_assets_per_tick=_int_env("DATA_READINESS_MAX_ASSETS_PER_TICK", 50),
             max_jobs_per_batch=_int_env("DATA_READINESS_MAX_JOBS_PER_BATCH", 10),
@@ -86,7 +85,6 @@ class DataReadinessWorker:
 
     def enable(self) -> None:
         self._enabled = True
-        self.start()
 
     async def disable(self) -> None:
         self._enabled = False
@@ -699,9 +697,18 @@ def _create_job(
     start_date: date | None,
     end_date: date | None,
 ) -> None:
+    job_id = int(
+        conn.execute(
+            """
+            SELECT GREATEST(nextval('seq_ingestion_job_id'), COALESCE(MAX(job_id), 0) + 1)
+            FROM ingestion_job
+            """
+        ).fetchone()[0]
+    )
     conn.execute(
         """
         INSERT INTO ingestion_job(
+            job_id,
             asset_id,
             domain,
             job_type,
@@ -713,9 +720,9 @@ def _create_job(
             created_at,
             updated_at
         )
-        VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, now(), now())
+        VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, now(), now())
         """,
-        [asset_id, domain, job_type, dataset, priority, start_date, end_date],
+        [job_id, asset_id, domain, job_type, dataset, priority, start_date, end_date],
     )
 
 

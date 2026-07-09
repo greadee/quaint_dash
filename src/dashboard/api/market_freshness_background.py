@@ -28,7 +28,7 @@ class MarketFreshnessConfig:
     poll_interval_seconds: int = 900
     include_watchlist: bool = False
     lookback_days: int = 7
-    max_symbols_per_tick: int = 50
+    max_symbols_per_tick: int = 10
 
     @classmethod
     def from_env(cls) -> "MarketFreshnessConfig":
@@ -37,7 +37,7 @@ class MarketFreshnessConfig:
             poll_interval_seconds=_int_env("MARKET_FRESHNESS_POLL_INTERVAL_SECONDS", 900),
             include_watchlist=_truthy_env("MARKET_FRESHNESS_INCLUDE_WATCHLIST", default=False),
             lookback_days=_int_env("MARKET_FRESHNESS_LOOKBACK_DAYS", 7),
-            max_symbols_per_tick=_int_env("MARKET_FRESHNESS_MAX_SYMBOLS_PER_TICK", 50),
+            max_symbols_per_tick=_int_env("MARKET_FRESHNESS_MAX_SYMBOLS_PER_TICK", 10),
         )
 
 
@@ -130,13 +130,16 @@ class MarketFreshnessWorker:
         self.last_subscription_count = len(subscriptions)
         if not subscriptions:
             return 0
+        stale_subscriptions = self._filter_stale_subscriptions(subscriptions)
+        if not stale_subscriptions:
+            return 0
 
         provider = YahooPriceProvider()
         today = date.today()
         start = today - timedelta(days=max(self.config.lookback_days, 1))
         refreshed: list[LivePriceTick] = []
         daily_rows: list[PriceDailyRow] = []
-        for item in subscriptions[: self.config.max_symbols_per_tick]:
+        for item in stale_subscriptions[: self.config.max_symbols_per_tick]:
             rows = provider.fetch_price_daily(item.symbol, start, today)
             daily_rows.extend(
                 PriceDailyRow(
@@ -189,6 +192,28 @@ class MarketFreshnessWorker:
             finally:
                 db.conn.close()
         return len(refreshed)
+
+    def _filter_stale_subscriptions(self, subscriptions: list[TickerSubscription]) -> list[TickerSubscription]:
+        asset_ids = [item.asset_id for item in subscriptions if item.asset_id]
+        if not asset_ids:
+            return subscriptions
+        placeholders = ", ".join("?" for _ in asset_ids)
+        with self.write_lock:
+            db = DB(self.db_path)
+            try:
+                fresh_rows = db.conn.execute(
+                    f"""
+                    SELECT asset_id
+                    FROM current_asset_price
+                    WHERE asset_id IN ({placeholders})
+                      AND CAST(updated_at AS DATE) >= ?
+                    """,
+                    [*asset_ids, date.today()],
+                ).fetchall()
+            finally:
+                db.conn.close()
+        fresh_asset_ids = {str(row[0]) for row in fresh_rows}
+        return [item for item in subscriptions if not item.asset_id or item.asset_id not in fresh_asset_ids]
 
     def _resolve_subscriptions(self) -> list[TickerSubscription]:
         with self.write_lock:

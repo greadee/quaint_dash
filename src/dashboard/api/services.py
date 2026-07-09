@@ -3845,7 +3845,9 @@ class PortfolioApiService:
                 h.asset_id IS NOT NULL AS is_held,
                 wa.asset_id IS NOT NULL AS is_watchlisted,
                 pa.asset_id IS NOT NULL AS is_portfolio_tracked,
-                lp.date AS latest_price_date
+                lp.date AS latest_price_date,
+                a.asset_type,
+                a.asset_subtype
             FROM asset a
             LEFT JOIN holdings h ON h.asset_id = a.asset_id
             LEFT JOIN latest_prices lp ON lp.asset_id = a.asset_id
@@ -3879,6 +3881,12 @@ class PortfolioApiService:
                 "catalog_only": False,
             }
             for row in rows
+            if not _is_etf_like_asset(
+                symbol=row[1],
+                name=row[2],
+                asset_type=row[12],
+                asset_subtype=row[13],
+            )
         ]
 
         if universe == "all":
@@ -3892,6 +3900,8 @@ class PortfolioApiService:
             ).fetchall()
             for asset_id, symbol, name, exchange_code, currency in catalog_rows:
                 if asset_id in asset_ids:
+                    continue
+                if _is_etf_like_asset(symbol=symbol, name=name, asset_type=None, asset_subtype=None):
                     continue
                 items.append(
                     {
@@ -4169,6 +4179,7 @@ class PortfolioApiService:
             data_status = "complete"
         score = result["score"] if result["score"] is not None else 0.0
         latest_data_date = result.get("latest_data_date") or row.get("latest_price_date")
+        confidence = _stock_ranking_confidence(components, latest_data_date)
         return StockRankingItem(
             asset_id=row["asset_id"],
             symbol=row["symbol"],
@@ -4183,7 +4194,7 @@ class PortfolioApiService:
             score=round(score, 2),
             score_strength=round(abs(score), 2),
             action=_holding_signal_action(score),
-            confidence=round(available_count / len(components), 2) if components else 0.0,
+            confidence=confidence,
             data_status=data_status,
             latest_data_date=latest_data_date,
             missing_inputs=missing,
@@ -7104,7 +7115,12 @@ class CommandApiService(BrokerCommands, IngestionCommands):
         return row[0] if row and row[0] else None
 
     def retry_failed_ingestion_jobs(self, domain: str | None, max_jobs: int) -> int:
-        where = ["status = 'failed'"]
+        where = [
+            "status = 'failed'",
+            "NOT (LOWER(COALESCE(error_message, '')) LIKE '%http error 402%')",
+            "NOT (LOWER(COALESCE(error_message, '')) LIKE '%plan does not include%')",
+            "NOT (LOWER(COALESCE(error_message, '')) LIKE '%call budget exhausted%')",
+        ]
         params: list[object] = []
         if domain:
             where.append("domain = ?")
@@ -7121,6 +7137,15 @@ class CommandApiService(BrokerCommands, IngestionCommands):
                 SELECT job_id
                 FROM ingestion_job
                 WHERE {" AND ".join(where)}
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM ingestion_job newer
+                      WHERE newer.asset_id = ingestion_job.asset_id
+                        AND newer.domain = ingestion_job.domain
+                        AND newer.dataset = ingestion_job.dataset
+                        AND newer.status = 'done'
+                        AND newer.job_id > ingestion_job.job_id
+                  )
                 ORDER BY updated_at ASC, job_id ASC
                 LIMIT ?
             )
@@ -7166,6 +7191,52 @@ def _signal_status(data_status: str, strength: float, confidence: float, data_as
     if strength >= 0.35:
         return "confirmed"
     return "weakening"
+
+
+def _stock_ranking_confidence(
+    components: list[StockRankingComponent],
+    latest_data_date: date | None,
+) -> float:
+    if not components:
+        return 0.0
+    available_count = sum(1 for component in components if component.available)
+    coverage = available_count / len(components)
+    breadth = min(1.0, available_count / 2)
+    if latest_data_date is None:
+        freshness = 0.0
+    else:
+        age_days = max(0, (date.today() - latest_data_date).days)
+        if age_days <= 7:
+            freshness = 1.0
+        elif age_days <= 31:
+            freshness = 0.9
+        elif age_days <= 90:
+            freshness = 0.8
+        else:
+            freshness = 0.7
+    confidence = (coverage * 0.55) + (breadth * 0.15) + (freshness * 0.30)
+    return round(min(0.98, confidence), 2)
+
+
+def _is_etf_like_asset(
+    *,
+    symbol: str | None,
+    name: str | None,
+    asset_type: str | None,
+    asset_subtype: str | None,
+) -> bool:
+    values = [
+        asset_type or "",
+        asset_subtype or "",
+        name or "",
+        symbol or "",
+    ]
+    haystack = " ".join(values).lower()
+    return (
+        "etf" in haystack
+        or "exchange traded fund" in haystack
+        or "exchange-traded fund" in haystack
+    )
 
 
 def _signal_evidence_from_components(

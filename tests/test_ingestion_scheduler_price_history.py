@@ -146,6 +146,95 @@ def insert_asset(manager: DashboardManager, asset_id: str, ccy: str = "CAD"):
     )
 
 
+def test_market_job_ids_stay_above_existing_rows(manager):
+    insert_asset(manager, "BN.TO")
+    manager.conn.execute(
+        """
+        INSERT INTO ingestion_job(
+            job_id, asset_id, domain, job_type, dataset, status, priority,
+            requested_start_date, requested_end_date, attempt_count, error_message,
+            created_at, updated_at
+        )
+        VALUES (100, 'BN.TO', 'market', 'refresh', 'price_daily', 'done', 100, NULL, NULL, 0, NULL, now(), now())
+        """
+    )
+
+    repo = PriceHistoryIngestionRepository(manager.conn)
+
+    assert repo.next_job_id() == 101
+
+
+def test_market_claim_skips_obsolete_pending_jobs_with_newer_done_job(manager):
+    insert_asset(manager, "BN.TO")
+    manager.conn.execute(
+        """
+        INSERT INTO ingestion_job(
+            job_id, asset_id, domain, job_type, dataset, status, priority,
+            requested_start_date, requested_end_date, attempt_count, error_message,
+            created_at, updated_at
+        )
+        VALUES
+            (10, 'BN.TO', 'market', 'refresh', 'dividends', 'pending', 90, DATE '2026-01-01', DATE '2026-01-02', 1, NULL, TIMESTAMP '2026-01-01 00:00:00', now()),
+            (11, 'BN.TO', 'market', 'refresh', 'dividends', 'done', 90, DATE '2026-01-01', DATE '2026-01-02', 1, NULL, TIMESTAMP '2026-01-02 00:00:00', now()),
+            (12, 'BN.TO', 'market', 'refresh', 'splits', 'pending', 80, DATE '2026-01-01', DATE '2026-01-02', 0, NULL, TIMESTAMP '2026-01-03 00:00:00', now())
+        """
+    )
+
+    repo = PriceHistoryIngestionRepository(manager.conn)
+    job = repo.claim_next_pending_job()
+
+    assert job is not None
+    assert job.job_id == 12
+    rows = manager.conn.execute(
+        """
+        SELECT job_id, status
+        FROM ingestion_job
+        WHERE job_id IN (10, 12)
+        ORDER BY job_id
+        """
+    ).fetchall()
+    assert rows == [(10, "pending"), (12, "running")]
+
+
+def test_market_claim_skips_pending_jobs_already_satisfied_by_sync_state(manager):
+    insert_asset(manager, "BN.TO")
+    manager.conn.execute(
+        """
+        INSERT INTO ingestion_job(
+            job_id, asset_id, domain, job_type, dataset, status, priority,
+            requested_start_date, requested_end_date, attempt_count, error_message,
+            created_at, updated_at
+        )
+        VALUES
+            (10, 'BN.TO', 'market', 'refresh', 'dividends', 'pending', 90, DATE '2026-01-01', DATE '2026-01-02', 1, NULL, TIMESTAMP '2026-01-01 00:00:00', TIMESTAMP '2026-01-01 00:00:00'),
+            (11, 'BN.TO', 'market', 'refresh', 'splits', 'pending', 80, DATE '2026-01-01', DATE '2026-01-02', 0, NULL, TIMESTAMP '2026-01-03 00:00:00', TIMESTAMP '2026-01-03 00:00:00')
+        """
+    )
+    manager.conn.execute(
+        """
+        INSERT INTO asset_sync_state(
+            asset_id, domain, dataset, backfill_status, last_successful_at, last_successful_date
+        )
+        VALUES ('BN.TO', 'market', 'dividends', 'done', TIMESTAMP '2026-01-02 00:00:00', DATE '2026-01-02')
+        """
+    )
+
+    repo = PriceHistoryIngestionRepository(manager.conn)
+    job = repo.claim_next_pending_job()
+
+    assert job is not None
+    assert job.job_id == 11
+    rows = manager.conn.execute(
+        """
+        SELECT job_id, status
+        FROM ingestion_job
+        WHERE job_id IN (10, 11)
+        ORDER BY job_id
+        """
+    ).fetchall()
+    assert rows == [(10, "pending"), (11, "running")]
+
+
 def test_metadata_scheduler_refreshes_pending_assets(manager, monkeypatch):
     """
     refresh_due_asset_metadata should select pending metadata rows and pass them

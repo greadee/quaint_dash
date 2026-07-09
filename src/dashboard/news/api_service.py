@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from typing import Any
 
+from dashboard.analytics.repository import AnalyticsRepository
 from dashboard.api.models import (
     NewsArticleAssetResponse,
     NewsArticleCategoryResponse,
@@ -45,6 +46,8 @@ class NewsApiService:
         offset: int = 0,
         user_id: str = "local",
     ) -> NewsFeedResponse:
+        if asset_id is not None:
+            asset_id = self._asset_filter_ids(asset_id)
         where, params = self._filters(
             q=q,
             provider=provider,
@@ -665,18 +668,45 @@ class NewsApiService:
             where.append("LOWER(a.source_name) = LOWER(?)")
             params.append(filters["source"])
         if filters.get("asset_id"):
+            asset_ids = self._coerce_asset_ids(filters["asset_id"])
+            placeholders = ", ".join("?" for _ in asset_ids)
             where.append(
-                "EXISTS (SELECT 1 FROM news_article_asset aa WHERE aa.article_id = a.article_id AND UPPER(aa.asset_id) = UPPER(?))"
+                f"EXISTS (SELECT 1 FROM news_article_asset aa WHERE aa.article_id = a.article_id AND UPPER(aa.asset_id) IN ({placeholders}))"
             )
-            params.append(filters["asset_id"])
+            params.extend(asset_ids)
         if filters.get("portfolio_id") is not None:
             where.append(
                 "EXISTS ("
-                " SELECT 1 FROM news_article_asset aa JOIN position pos ON pos.asset_id = aa.asset_id"
+                " SELECT 1"
+                " FROM news_article_asset aa"
+                " JOIN position pos ON UPPER(pos.asset_id) = UPPER(aa.asset_id)"
                 " WHERE aa.article_id = a.article_id AND pos.portfolio_id = ? AND COALESCE(pos.qty, 0) <> 0"
+                " UNION ALL"
+                " SELECT 1"
+                " FROM news_article_asset aa"
+                " JOIN position pos ON UPPER("
+                "   CASE"
+                "     WHEN POSITION('.' IN pos.asset_id) > 0 THEN"
+                "       CASE SPLIT_PART(pos.asset_id, '.', 1)"
+                "         WHEN 'NOWS' THEN 'NOW'"
+                "         WHEN 'VISA' THEN 'V'"
+                "         ELSE SPLIT_PART(pos.asset_id, '.', 1)"
+                "       END"
+                "     ELSE pos.asset_id"
+                "   END"
+                " ) = UPPER(aa.asset_id)"
+                " JOIN asset held_asset ON held_asset.asset_id = pos.asset_id"
+                " WHERE aa.article_id = a.article_id AND pos.portfolio_id = ? AND COALESCE(pos.qty, 0) <> 0"
+                "   AND ("
+                "     LOWER(COALESCE(held_asset.asset_subtype, '')) LIKE '%cdr%'"
+                "     OR LOWER(COALESCE(held_asset.name, '')) LIKE '%depositary receipt%'"
+                "     OR LOWER(COALESCE(held_asset.description, '')) LIKE '%depositary receipt%'"
+                "     OR LOWER(COALESCE(held_asset.name, '')) LIKE '% cdr%'"
+                "     OR LOWER(COALESCE(held_asset.description, '')) LIKE '% cdr%'"
+                "   )"
                 ")"
             )
-            params.append(filters["portfolio_id"])
+            params.extend([filters["portfolio_id"], filters["portfolio_id"]])
         if filters.get("category"):
             where.append(
                 "EXISTS ("
@@ -731,12 +761,50 @@ class NewsApiService:
                     )
                 )
                 FROM news_article_asset aa
-                JOIN position pos ON pos.asset_id = aa.asset_id
+                JOIN position pos
+                  ON UPPER(pos.asset_id) = UPPER(aa.asset_id)
+                  OR UPPER(
+                    CASE
+                      WHEN POSITION('.' IN pos.asset_id) > 0 THEN
+                        CASE SPLIT_PART(pos.asset_id, '.', 1)
+                          WHEN 'NOWS' THEN 'NOW'
+                          WHEN 'VISA' THEN 'V'
+                          ELSE SPLIT_PART(pos.asset_id, '.', 1)
+                        END
+                      ELSE pos.asset_id
+                    END
+                  ) = UPPER(aa.asset_id)
+                LEFT JOIN asset held_asset ON held_asset.asset_id = pos.asset_id
                 WHERE aa.article_id = a.article_id
                   AND pos.portfolio_id = {int(portfolio_id)}
                   AND COALESCE(pos.qty, 0) <> 0
+                  AND (
+                    UPPER(pos.asset_id) = UPPER(aa.asset_id)
+                    OR LOWER(COALESCE(held_asset.asset_subtype, '')) LIKE '%cdr%'
+                    OR LOWER(COALESCE(held_asset.name, '')) LIKE '%depositary receipt%'
+                    OR LOWER(COALESCE(held_asset.description, '')) LIKE '%depositary receipt%'
+                    OR LOWER(COALESCE(held_asset.name, '')) LIKE '% cdr%'
+                    OR LOWER(COALESCE(held_asset.description, '')) LIKE '% cdr%'
+                  )
             ), 0.0)
             """
+
+    def _asset_filter_ids(self, asset_id: str) -> list[str]:
+        normalized = str(asset_id).upper().strip()
+        asset_ids = [normalized]
+        try:
+            valuation_asset_id = AnalyticsRepository(self.conn).valuation_asset_id(normalized)
+        except Exception:
+            valuation_asset_id = normalized
+        if valuation_asset_id and valuation_asset_id.upper() not in asset_ids:
+            asset_ids.append(valuation_asset_id.upper())
+        return asset_ids
+
+    @staticmethod
+    def _coerce_asset_ids(value: Any) -> list[str]:
+        values = value if isinstance(value, list) else [value]
+        normalized = [str(item).upper().strip() for item in values if str(item).strip()]
+        return normalized or [""]
 
     def _count_for_empty(self, where_sql: str, params: list[Any]) -> int:
         row = self.conn.execute(

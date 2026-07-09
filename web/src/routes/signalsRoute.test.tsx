@@ -159,6 +159,20 @@ describe("Signals routes", () => {
     expect(apiMock.updateSignalUserState).toHaveBeenCalledWith("sig-nvda-momentum", { reviewed: true });
   });
 
+  it("shows column calculation details from table headers", async () => {
+    const user = userEvent.setup();
+
+    renderWithQuery(<StockRankingsPage notify={vi.fn()} />);
+
+    expect(await screen.findByRole("heading", { name: "Signals" })).toBeInTheDocument();
+    expect((await screen.findAllByText("Momentum breakout")).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: "Sort by Confidence and show calculation details" }));
+
+    expect(await screen.findByText("Confidence calculation")).toBeInTheDocument();
+    expect(screen.getByText(/component coverage/i)).toBeInTheDocument();
+    expect(apiMock.signals).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "confidence" }));
+  });
+
   it("renders signal detail lifecycle", async () => {
     renderSignalDetail();
 

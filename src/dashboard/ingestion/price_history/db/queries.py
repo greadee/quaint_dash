@@ -2,6 +2,11 @@ NEXT_JOB_ID = """
 SELECT nextval('seq_ingestion_job_id')
 """
 
+NEXT_SAFE_JOB_ID = """
+SELECT GREATEST(nextval('seq_ingestion_job_id'), COALESCE(MAX(job_id), 0) + 1)
+FROM ingestion_job
+"""
+
 INSERT_JOB = """
 INSERT INTO ingestion_job (
     job_id,
@@ -37,6 +42,29 @@ SELECT
 FROM ingestion_job
 WHERE domain = ?
   AND status = ?
+  AND COALESCE(attempt_count, 0) = 0
+  AND NOT EXISTS (
+      SELECT 1
+      FROM ingestion_job newer
+      WHERE newer.asset_id = ingestion_job.asset_id
+        AND newer.domain = ingestion_job.domain
+        AND newer.dataset = ingestion_job.dataset
+        AND newer.status = 'done'
+        AND newer.job_id > ingestion_job.job_id
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM asset_sync_state sync
+      WHERE sync.asset_id = ingestion_job.asset_id
+        AND sync.domain = ingestion_job.domain
+        AND sync.dataset = ingestion_job.dataset
+        AND (
+            sync.backfill_status = 'done'
+            OR sync.last_successful_at IS NOT NULL
+            OR sync.last_successful_date IS NOT NULL
+        )
+        AND COALESCE(sync.last_successful_at, sync.last_attempted_at, TIMESTAMP '1970-01-01') >= ingestion_job.updated_at
+  )
 ORDER BY priority DESC, created_at ASC
 LIMIT 1
 """

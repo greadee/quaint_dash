@@ -685,12 +685,7 @@ def test_ingestion_background_disabled_state_does_not_schedule_or_run(tmp_path, 
     assert calls == []
 
 
-def test_ingestion_background_start_stop_endpoints_toggle_worker(tmp_path, monkeypatch):
-    async def idle_loop(self):
-        if self._stop_event is not None:
-            await self._stop_event.wait()
-
-    monkeypatch.setattr(IngestionBackgroundWorker, "_run_loop", idle_loop)
+def test_ingestion_background_start_stop_endpoints_toggle_worker(tmp_path):
     app = create_app(tmp_path / "api.db")
 
     with TestClient(app) as client:
@@ -704,7 +699,7 @@ def test_ingestion_background_start_stop_endpoints_toggle_worker(tmp_path, monke
     assert started.status_code == 200
     assert started.json()["result"]["enabled"] is True
     assert running.json()["enabled"] is True
-    assert running.json()["running"] is True
+    assert running.json()["running"] is False
     assert stopped.status_code == 200
     assert stopped.json()["result"]["enabled"] is False
     assert stopped.json()["result"]["running"] is False
@@ -826,7 +821,7 @@ def test_market_freshness_status_defaults_disabled(tmp_path):
         "poll_interval_seconds": 900,
         "include_watchlist": False,
         "lookback_days": 7,
-        "max_symbols_per_tick": 50,
+        "max_symbols_per_tick": 10,
     }
 
 
@@ -897,6 +892,53 @@ def test_market_freshness_tick_writes_current_and_daily_prices(tmp_path, monkeyp
 
     assert current_row == ("AAPL", "AAPL", 121.0, "yfinance")
     assert daily_row == ("AAPL", date(2026, 6, 23), 121.0, 121.0, 1000, "fake")
+
+
+def test_market_freshness_tick_skips_fresh_current_prices(tmp_path, monkeypatch):
+    db_path = tmp_path / "api.db"
+    db = DB(db_path)
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy)
+        VALUES ('AAPL', 'AAPL', 'stock', 'USD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'AAPL', TRUE, 'position')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO current_asset_price (
+            asset_id, symbol, price, provider, market_session, trade_ts_utc, updated_at
+        )
+        VALUES ('AAPL', 'AAPL', 121.0, 'yfinance', 'regular', now(), now())
+        """
+    )
+    db.conn.close()
+
+    class FailingYahooProvider:
+        def fetch_price_daily(self, asset_id, start_date, end_date):
+            raise AssertionError("fresh current prices should not be fetched")
+
+    monkeypatch.setattr(
+        "dashboard.api.market_freshness_background.YahooPriceProvider",
+        FailingYahooProvider,
+    )
+
+    worker = MarketFreshnessWorker(
+        db_path,
+        Lock(),
+        MarketFreshnessConfig(enabled=True, max_symbols_per_tick=10),
+    )
+
+    assert asyncio.run(worker.tick_poll()) == 0
+    assert worker.status()["last_subscription_count"] == 1
+    assert worker.status()["last_error"] is None
 
 
 def test_data_readiness_status_defaults_disabled(tmp_path):
@@ -1335,6 +1377,72 @@ def test_retry_failed_ingestion_jobs_requeues_bounded_failures(tmp_path):
     assert retry.json()["result"] == {"retried_jobs": 1}
     statuses = {row["job_id"]: row["status"] for row in jobs.json()}
     assert statuses == {1: "pending", 2: "failed"}
+
+
+def test_retry_failed_ingestion_jobs_skips_failures_with_newer_success(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        "INSERT INTO asset(asset_id, symbol, asset_type, ccy) VALUES ('AAPL', 'AAPL', 'stock', 'USD')"
+    )
+    db.conn.execute(
+        """
+        INSERT INTO ingestion_job(
+            job_id, asset_id, domain, job_type, dataset, status, priority, error_message
+        )
+        VALUES
+            (1, 'AAPL', 'market', 'refresh', 'dividends', 'failed', 10, 'old failure'),
+            (2, 'AAPL', 'market', 'refresh', 'dividends', 'done', 10, NULL),
+            (3, 'AAPL', 'market', 'refresh', 'splits', 'failed', 10, 'old failure')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        retry = client.post(
+            "/api/v1/ingestion/retry-failed",
+            json={"domain": "market", "max_jobs": 10},
+        )
+        jobs = client.get("/api/v1/ingestion/jobs?domain=market")
+
+    assert retry.status_code == 200
+    assert retry.json()["result"] == {"retried_jobs": 1}
+    statuses = {row["job_id"]: row["status"] for row in jobs.json()}
+    assert statuses == {1: "failed", 2: "done", 3: "pending"}
+
+
+def test_retry_failed_ingestion_jobs_skips_provider_permanent_failures(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        "INSERT INTO asset(asset_id, symbol, asset_type, ccy) VALUES ('AAPL', 'AAPL', 'stock', 'USD')"
+    )
+    db.conn.execute(
+        """
+        INSERT INTO ingestion_job(
+            job_id, asset_id, domain, job_type, dataset, status, priority, error_message
+        )
+        VALUES
+            (1, 'AAPL', 'corporate', 'refresh', 'financial_statements', 'failed', 10, 'FMP HTTP error 402: plan does not include this corporate endpoint'),
+            (2, 'AAPL', 'market', 'refresh', 'price_daily', 'failed', 10, 'yfinance call budget exhausted (500 calls this run)'),
+            (3, 'AAPL', 'market', 'refresh', 'splits', 'failed', 10, 'temporary provider reset')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        retry = client.post(
+            "/api/v1/ingestion/retry-failed",
+            json={"domain": None, "max_jobs": 10},
+        )
+        jobs = client.get("/api/v1/ingestion/jobs")
+
+    assert retry.status_code == 200
+    assert retry.json()["result"] == {"retried_jobs": 1}
+    statuses = {row["job_id"]: row["status"] for row in jobs.json()}
+    assert statuses == {1: "failed", 2: "failed", 3: "pending"}
 
 
 def test_clear_ingestion_history_removes_jobs_and_sync_state(tmp_path):

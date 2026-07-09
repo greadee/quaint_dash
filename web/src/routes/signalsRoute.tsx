@@ -15,6 +15,7 @@ export function StockRankingsPage({ notify }: { notify: (message: string, tone?:
   const [params, setParams] = useSearchParams();
   const [expandedId, setExpandedId] = useState<string | null>(params.get("signal"));
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const [columnDetail, setColumnDetail] = useState<string | null>(null);
   const showSummaryStrip = usePageFeature("signals", "signals.summaryStrip");
   const showPriorityPanels = usePageFeature("signals", "signals.priorityPanels");
   const showMethodology = usePageFeature("signals", "signals.methodology");
@@ -60,6 +61,10 @@ export function StockRankingsPage({ notify }: { notify: (message: string, tone?:
     if (value) next.set(key, value); else next.delete(key);
     if (key !== "offset") next.delete("offset");
     setParams(next);
+  };
+  const inspectColumn = (label: string, sortKey: string) => {
+    if (sortKey) updateFilter("sort", sortKey);
+    setColumnDetail((current) => current === label ? null : label);
   };
   const applyMetric = (metric: Record<string, string>) => {
     const next = new URLSearchParams(params);
@@ -149,7 +154,15 @@ export function StockRankingsPage({ notify }: { notify: (message: string, tone?:
                     ["Actions", ""],
                   ].map(([label, sortKey]) => (
                     <th key={label} scope="col">
-                      {sortKey ? <button className="sort-header" onClick={() => updateFilter("sort", sortKey)} aria-label={`Sort by ${label}`}>{label}{filters.sort === sortKey ? " desc" : ""}</button> : label}
+                      {sortKey ? (
+                        <button
+                          className="sort-header"
+                          onClick={() => inspectColumn(label, sortKey)}
+                          aria-label={`Sort by ${label} and show calculation details`}
+                        >
+                          {label}{filters.sort === sortKey ? " desc" : ""}<Info size={12} />
+                        </button>
+                      ) : label}
                     </th>
                   ))}
                 </tr>
@@ -171,6 +184,7 @@ export function StockRankingsPage({ notify }: { notify: (message: string, tone?:
               </tbody>
             </table>
           </div>
+          {columnDetail ? <SignalColumnDetailPanel column={columnDetail} onClose={() => setColumnDetail(null)} /> : null}
           <div className="signal-mobile-list">
             {signals.data.items.map((item) => (
               <SignalMobileCard
@@ -190,6 +204,54 @@ export function StockRankingsPage({ notify }: { notify: (message: string, tone?:
       {signals.isFetching && !signals.isLoading ? <p className="signal-refreshing" role="status">Refreshing signals while keeping current results visible.</p> : null}
       {showMethodology ? <LayoutWidget pageId="signals" widgetId="signals.methodology"><p id="signal-methodology" className="signal-methodology">{signals.data?.methodology ?? "Signal methodology loads with the server-side signal response."}</p></LayoutWidget> : null}
     </section>
+  </div>;
+}
+
+const signalColumnDetails: Record<string, { title: string; body: string; details: string[] }> = {
+  Strength: {
+    title: "Strength calculation",
+    body: "Strength is the absolute ranking score scaled from 0 to 100 into a 0% to 100% magnitude. It says how large the current signal is, not how reliable the inputs are.",
+    details: [
+      "Backend field: `strength = min(1, score_strength / 100)`.",
+      "The raw score remains visible in Trigger as the observed value.",
+      "Open Evidence on a row to see which ranking components supported or contradicted that strength.",
+    ],
+  },
+  Confidence: {
+    title: "Confidence calculation",
+    body: "Confidence now measures input quality instead of defaulting to 100% when a factor has data. It blends component coverage, evidence breadth, and freshness of the latest source date.",
+    details: [
+      "Coverage is the share of available ranking components.",
+      "Breadth rewards signals with at least two independent available components.",
+      "Freshness steps down as inputs age beyond 7, 31, and 90 days.",
+    ],
+  },
+  Trigger: {
+    title: "Trigger calculation",
+    body: "Trigger compares the raw observed ranking score with the adapter threshold for that signal family. Positive signals use a positive threshold; negative signals use the mirrored negative threshold.",
+    details: [
+      "Backend field: `trigger_threshold` comes from the signal adapter.",
+      "Rows show `raw observed value vs threshold` so the crossing is auditable.",
+      "Neutral rows show watch when no directional trigger threshold is active.",
+    ],
+  },
+  Signal: {
+    title: "Signal calculation",
+    body: "The signal name maps a ranking factor to a deterministic server-side adapter such as price momentum, sentiment, earnings momentum, or institutional buying.",
+    details: ["The summary sentence is built from the leading supporting evidence and current direction."],
+  },
+};
+
+function SignalColumnDetailPanel({ column, onClose }: { column: string; onClose: () => void }) {
+  const detail = signalColumnDetails[column] ?? {
+    title: `${column} details`,
+    body: "This column is sorted from the server response and can be inspected row-by-row through Evidence.",
+    details: ["Open a row's Evidence panel for the supporting data, source, and timestamps."],
+  };
+  return <div className="signal-column-detail" role="status">
+    <div><strong>{detail.title}</strong><button onClick={onClose} aria-label="Close column details"><X size={14} /></button></div>
+    <p>{detail.body}</p>
+    <ul>{detail.details.map((item) => <li key={item}>{item}</li>)}</ul>
   </div>;
 }
 

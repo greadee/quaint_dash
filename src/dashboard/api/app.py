@@ -4,7 +4,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from threading import Lock
+from threading import RLock
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Request
@@ -70,7 +70,7 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.db_path = resolved_db_path
-    app.state.write_lock = Lock()
+    app.state.write_lock = RLock()
     app.state.web_dist = Path(web_dist)
     app.state.ingestion_background_worker = IngestionBackgroundWorker(
         resolved_db_path,

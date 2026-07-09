@@ -29,9 +29,8 @@ class IngestionBackgroundConfig:
 
     @classmethod
     def from_env(cls) -> "IngestionBackgroundConfig":
-        default_enabled = not _running_under_pytest()
         return cls(
-            enabled=_truthy_env("INGESTION_BACKGROUND_ENABLED", default=default_enabled),
+            enabled=_truthy_env("INGESTION_BACKGROUND_ENABLED", default=False),
             schedule_interval_seconds=_int_env("INGESTION_BACKGROUND_SCHEDULE_INTERVAL_SECONDS", 900),
             run_interval_seconds=_int_env("INGESTION_BACKGROUND_RUN_INTERVAL_SECONDS", 30),
             max_jobs_per_tick=_int_env("INGESTION_BACKGROUND_MAX_JOBS_PER_TICK", 10),
@@ -72,9 +71,8 @@ class IngestionBackgroundWorker:
         self._running = True
 
     def enable(self) -> None:
-        """Enable routine ingestion for this API process and start the loop."""
+        """Enable routine ingestion controls for this API process."""
         self._enabled = True
-        self.start()
 
     async def stop(self) -> None:
         if self._stop_event is not None:

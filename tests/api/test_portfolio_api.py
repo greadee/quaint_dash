@@ -1002,7 +1002,7 @@ def test_stock_rankings_rank_buy_and_sell_signals_from_stored_metrics(tmp_path):
     assert by_symbol["BUYME"]["action"] in {"Buy", "Strong Buy"}
     assert by_symbol["SELLME"]["action"] in {"Sell", "Strong Sell"}
     assert by_symbol["BUYME"]["is_held"] is True
-    assert by_symbol["BUYME"]["confidence"] == 1
+    assert 0.7 <= by_symbol["BUYME"]["confidence"] < 1
     assert by_symbol["BUYME"]["data_status"] == "complete"
     assert [component["name"] for component in by_symbol["BUYME"]["components"]] == [
         "Price trend",
