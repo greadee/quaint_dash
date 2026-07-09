@@ -1033,10 +1033,93 @@ def test_stock_rankings_rank_buy_and_sell_signals_from_stored_metrics(tmp_path):
     assert [component["name"] for component in catalog_row["components"]] == [
         "Share price momentum",
         "News sentiment",
-        "Retail sentiment",
         "Earnings momentum",
         "Institutional buying",
     ]
+    assert all_payload["include_retail_sentiment"] is False
+    assert "Retail sentiment is excluded" in all_payload["methodology"]
+
+    with TestClient(app) as client:
+        retail_addon_response = client.get(
+            "/api/v1/rankings/stocks?factor=aggregate&universe=all&direction=buy&include_retail_sentiment=true&limit=100"
+        )
+
+    retail_addon_payload = retail_addon_response.json()
+    assert retail_addon_response.status_code == 200
+    retail_catalog_row = next(item for item in retail_addon_payload["items"] if item["symbol"] == "AAAACAT")
+    assert retail_addon_payload["include_retail_sentiment"] is True
+    assert "small 10% social-attention add-on" in retail_addon_payload["methodology"]
+    assert [component["name"] for component in retail_catalog_row["components"]] == [
+        "Share price momentum",
+        "News sentiment",
+        "Earnings momentum",
+        "Institutional buying",
+        "Retail sentiment add-on",
+    ]
+
+
+def test_retail_sentiment_overview_lists_holdings_and_popular_social_names(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name)
+        VALUES
+            ('BUYME', 'BUYME', 'stock', 'USD', 'Buy Momentum'),
+            ('LOUD', 'LOUD', 'stock', 'USD', 'Crowd Favorite')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO txn(portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id)
+        VALUES (1, '2026-01-02 10:00:00', 'buy', 'BUYME', 2, 100, 'USD', 0, 1)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO ticker_sentiment_daily(
+            asset_id, ticker, date, retail_sentiment_score, reddit_post_count, x_post_count,
+            bullish_count, neutral_count, bearish_count, sentiment_momentum_1d, unusual_volume_flag
+        )
+        VALUES
+            ('BUYME', 'BUYME', CURRENT_DATE, 0.42, 6, 4, 8, 1, 1, 0.08, TRUE),
+            ('LOUD', 'LOUD', CURRENT_DATE, -0.37, 20, 12, 2, 3, 18, -0.12, FALSE)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO social_post(provider, source_post_id, source_name, title, url, published_at, score, comment_count)
+        VALUES ('reddit', 't3_buyme', 'r/stocks', '$BUYME breakout thread', 'https://reddit.test/buyme', now(), 15, 6)
+        """
+    )
+    post_id = db.conn.execute("SELECT post_id FROM social_post WHERE source_post_id = 't3_buyme'").fetchone()[0]
+    db.conn.execute(
+        """
+        INSERT INTO social_post_asset_mention(post_id, asset_id, ticker, relevance_score, mention_reason)
+        VALUES (?, 'BUYME', 'BUYME', 1.0, 'cashtag')
+        """,
+        [post_id],
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/retail-sentiment?limit=10")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "social-attention layer" in payload["methodology"]
+    assert payload["summary"]["holding_count"] == 1
+    assert payload["summary"]["holding_with_sentiment_count"] == 1
+    holding = payload["holdings"][0]
+    assert holding["symbol"] == "BUYME"
+    assert holding["sentiment_label"] == "Strongly bullish"
+    assert holding["portfolio_names"] == ["Main"]
+    assert holding["latest_posts"][0]["title"] == "$BUYME breakout thread"
+    popular_symbols = [item["symbol"] for item in payload["popular"]]
+    assert popular_symbols[0] == "LOUD"
 
 
 def test_holding_signals_returns_current_holding_factor_grades_without_estimates(tmp_path):

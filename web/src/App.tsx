@@ -8,6 +8,7 @@ import {
   Database,
   LayoutDashboard,
   Menu,
+  MessageSquare,
   Newspaper,
   Search,
   Settings,
@@ -26,6 +27,7 @@ import {
   PortfolioDetailPage,
   PortfolioWorkspacePage,
   RouteErrorBoundary,
+  RetailSentimentPage,
   SettingsPage,
   SignalDetailPage,
   StockRankingsPage,
@@ -79,6 +81,7 @@ export default function App() {
           <NavLink to="/" end><LayoutDashboard />Overview</NavLink>
           <NavLink to="/portfolios"><WalletCards />Portfolios</NavLink>
           <NavLink to="/news"><Newspaper />News</NavLink>
+          <NavLink to="/retail-sentiment"><MessageSquare />Retail sentiment</NavLink>
           <NavLink to="/signals"><Activity />Signals</NavLink>
           <NavLink to="/compare"><BarChart3 />Compare</NavLink>
           <NavLink to="/benchmarks"><Search />Benchmarks</NavLink>
@@ -100,6 +103,7 @@ export default function App() {
             <Route path="/portfolios" element={<PortfolioWorkspacePage />} />
             <Route path="/portfolios/:portfolioId" element={<PortfolioDetailPage />} />
             <Route path="/news" element={<NewsTerminalPage />} />
+            <Route path="/retail-sentiment" element={<RetailSentimentPage />} />
             <Route path="/signals" element={<StockRankingsPage notify={notify} />} />
             <Route path="/signals/:signalId" element={<SignalDetailPage notify={notify} />} />
             <Route path="/compare-" element={<Navigate to={`/compare${location.search}`} replace />} />

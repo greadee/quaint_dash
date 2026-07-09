@@ -150,6 +150,17 @@ export const pageFeatureRegistry: ConfigurablePageDefinition[] = [
     ],
   },
   {
+    id: "retailSentiment",
+    label: "Retail sentiment",
+    description: "Choose optional social sentiment review panels.",
+    features: [
+      { id: "retailSentiment.summary", pageId: "retailSentiment", label: "Summary strip", category: "Summary", defaultEnabled: true, configurable: true, order: 10, ...panelLayout("full", ["wide", "full"]) },
+      { id: "retailSentiment.holdings", pageId: "retailSentiment", label: "Holdings table", category: "Holdings", defaultEnabled: true, configurable: true, order: 20, ...panelLayout("full", ["wide", "full"]) },
+      { id: "retailSentiment.popular", pageId: "retailSentiment", label: "Popular stocks table", category: "Discovery", defaultEnabled: true, configurable: true, order: 30, ...panelLayout("full", ["wide", "full"]) },
+      { id: "retailSentiment.methodology", pageId: "retailSentiment", label: "Methodology note", category: "Data quality", defaultEnabled: true, configurable: true, order: 40, ...panelLayout("full", ["full"]) },
+    ],
+  },
+  {
     id: "benchmarks",
     label: "Benchmarks",
     description: "Choose optional benchmark comparison and diagnostic panels.",
@@ -189,8 +200,9 @@ export const pageFeatureRegistry: ConfigurablePageDefinition[] = [
       { id: "operations.routineWorker", pageId: "operations", label: "Routine ingestion worker", category: "Workers", defaultEnabled: true, configurable: true, order: 10, ...panelLayout("full", ["wide", "full"]) },
       { id: "operations.marketFreshness", pageId: "operations", label: "Market freshness worker", category: "Workers", defaultEnabled: true, configurable: true, order: 20, ...panelLayout("full", ["wide", "full"]) },
       { id: "operations.dataReadiness", pageId: "operations", label: "Portfolio data worker", category: "Workers", defaultEnabled: true, configurable: true, order: 30, ...panelLayout("full", ["wide", "full"]) },
-      { id: "operations.projectionReadiness", pageId: "operations", label: "Projection readiness", category: "Readiness", defaultEnabled: true, configurable: true, order: 40, ...panelLayout("full", ["wide", "full"]) },
-      { id: "operations.rankingReadiness", pageId: "operations", label: "Ranking readiness", category: "Readiness", defaultEnabled: true, configurable: true, order: 50, ...panelLayout("full", ["wide", "full"]) },
+      { id: "operations.retailSentiment", pageId: "operations", label: "Retail sentiment", category: "Sentiment", defaultEnabled: true, configurable: true, order: 40, ...panelLayout("full", ["wide", "full"]) },
+      { id: "operations.projectionReadiness", pageId: "operations", label: "Projection readiness", category: "Readiness", defaultEnabled: true, configurable: true, order: 50, ...panelLayout("full", ["wide", "full"]) },
+      { id: "operations.rankingReadiness", pageId: "operations", label: "Ranking readiness", category: "Readiness", defaultEnabled: true, configurable: true, order: 60, ...panelLayout("full", ["wide", "full"]) },
     ],
   },
 ];

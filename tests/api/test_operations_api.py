@@ -634,6 +634,79 @@ def test_ingestion_job_list_and_bounded_empty_run(tmp_path):
     assert invalid.json()["error"]["code"] == "validation_error"
 
 
+def test_retail_sentiment_status_reports_providers_posts_and_jobs(tmp_path, monkeypatch):
+    monkeypatch.setenv("REDDIT_CLIENT_ID", "client")
+    monkeypatch.setenv("REDDIT_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("REDDIT_USER_AGENT", "quaint-test")
+    monkeypatch.delenv("X_BEARER_TOKEN", raising=False)
+    db_path = tmp_path / "api-retail-sentiment.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    init_db(db)
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name)
+        VALUES ('AMD', 'AMD', 'stock', 'USD', 'Advanced Micro Devices')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO social_post(
+            provider, source_post_id, source_name, title, body, url, published_at, score, comment_count
+        )
+        VALUES (
+            'reddit', 't3_1', 'r/stocks', '$AMD earnings', 'Bullish on $AMD',
+            'https://reddit.test/post', '2026-01-05 12:00:00', 42, 7
+        )
+        """
+    )
+    post_id = db.conn.execute("SELECT post_id FROM social_post WHERE source_post_id = 't3_1'").fetchone()[0]
+    db.conn.execute(
+        """
+        INSERT INTO social_post_asset_mention(post_id, asset_id, ticker, relevance_score, mention_reason)
+        VALUES (?, 'AMD', 'AMD', 1.0, 'cashtag')
+        """,
+        [post_id],
+    )
+    db.conn.execute(
+        """
+        INSERT INTO ticker_sentiment_daily(
+            asset_id, ticker, date, retail_sentiment_score, reddit_post_count, x_post_count,
+            bullish_count, neutral_count, bearish_count, sentiment_momentum_1d, unusual_volume_flag
+        )
+        VALUES ('AMD', 'AMD', '2026-01-05', 0.75, 1, 0, 1, 0, 0, 0.2, TRUE)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO ingestion_job(
+            job_id, asset_id, domain, job_type, dataset, status, priority, error_message
+        )
+        VALUES
+            (nextval('seq_ingestion_job_id'), 'AMD', 'sentiment', 'sentiment_reddit_refresh', 'reddit', 'pending', 40, NULL),
+            (nextval('seq_ingestion_job_id'), 'AMD', 'sentiment', 'sentiment_x_refresh', 'x', 'failed', 40, 'X provider requires X_BEARER_TOKEN.')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/ingestion/retail-sentiment/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    providers = {item["provider"]: item for item in payload["providers"]}
+    assert providers["reddit"]["configured"] is True
+    assert providers["reddit"]["post_count"] == 1
+    assert providers["reddit"]["open_jobs"] == 1
+    assert providers["x"]["configured"] is False
+    assert providers["x"]["failed_jobs"] == 1
+    assert payload["latest_snapshots"][0]["ticker"] == "AMD"
+    assert payload["latest_snapshots"][0]["retail_sentiment_score"] == 0.75
+    assert payload["recent_posts"][0]["source_name"] == "r/stocks"
+    assert payload["pending_jobs"] == 1
+    assert payload["failed_jobs"] == 1
+
+
 def test_ingestion_background_status_defaults_disabled(tmp_path):
     app = create_app(tmp_path / "api.db")
 

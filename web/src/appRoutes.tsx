@@ -23,6 +23,7 @@ export { OverviewPage } from "./routes/overviewRoute";
 export { SignalDetailPage, StockRankingsPage } from "./routes/signalsRoute";
 
 export { NewsTerminalPage } from "./routes/newsRoute";
+export { RetailSentimentPage } from "./routes/retailSentimentRoute";
 
 export { PortfolioDetailPage, PortfolioWorkspacePage } from "./routes/portfolioRoute";
 export { AssetDetailPage } from "./routes/assetRoute";

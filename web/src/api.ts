@@ -387,6 +387,7 @@ export type StockRankingsResponse = {
   direction: string;
   timeframe: string;
   as_of_date: string;
+  include_retail_sentiment: boolean;
   methodology: string;
   total: number;
   data_complete_count: number;
@@ -1229,6 +1230,90 @@ export type IngestionSchedulePayload = {
 };
 export type IngestionRunPayload = { domain: string; max_jobs: number };
 export type IngestionRetryPayload = { domain?: string | null; max_jobs: number };
+export type RetailSentimentProviderStatus = {
+  provider: string;
+  configured: boolean;
+  post_count: number;
+  latest_post_at: string | null;
+  open_jobs: number;
+  failed_jobs: number;
+  latest_error: string | null;
+};
+export type RetailSentimentDailySnapshot = {
+  asset_id: string;
+  ticker: string;
+  date: string;
+  retail_sentiment_score: number | null;
+  reddit_post_count: number;
+  x_post_count: number;
+  bullish_count: number;
+  neutral_count: number;
+  bearish_count: number;
+  sentiment_momentum_1d: number | null;
+  unusual_volume_flag: boolean;
+};
+export type RetailSentimentPost = {
+  provider: string;
+  source_name: string;
+  ticker: string;
+  asset_id: string;
+  title: string | null;
+  body: string | null;
+  url: string | null;
+  published_at: string | null;
+  score: number | null;
+  comment_count: number | null;
+  like_count: number | null;
+  repost_count: number | null;
+  reply_count: number | null;
+  relevance_score: number;
+};
+export type RetailSentimentStatus = {
+  providers: RetailSentimentProviderStatus[];
+  latest_snapshots: RetailSentimentDailySnapshot[];
+  recent_posts: RetailSentimentPost[];
+  pending_jobs: number;
+  running_jobs: number;
+  failed_jobs: number;
+};
+export type RetailSentimentOverviewPost = {
+  provider: string;
+  source_name: string;
+  title: string | null;
+  url: string | null;
+  published_at: string | null;
+  score: number | null;
+  comment_count: number | null;
+};
+export type RetailSentimentOverviewItem = {
+  asset_id: string;
+  symbol: string;
+  name: string | null;
+  is_held: boolean;
+  is_watchlisted: boolean;
+  market_value: number | null;
+  portfolio_names: string[];
+  snapshot_date: string | null;
+  retail_sentiment_score: number | null;
+  sentiment_label: string;
+  confidence: number;
+  reddit_post_count: number;
+  x_post_count: number;
+  bullish_count: number;
+  neutral_count: number;
+  bearish_count: number;
+  sentiment_momentum_1d: number | null;
+  unusual_volume_flag: boolean;
+  source_count: number;
+  latest_posts: RetailSentimentOverviewPost[];
+};
+export type RetailSentimentOverview = {
+  generated_at: string;
+  methodology: string;
+  summary: Record<string, number>;
+  holdings: RetailSentimentOverviewItem[];
+  popular: RetailSentimentOverviewItem[];
+};
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api/v1${path}`, {
@@ -1291,12 +1376,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  stockRankings: (params: { factor: string; universe: string; direction: string; timeframe?: string; limit?: number; offset?: number }) => {
+  stockRankings: (params: { factor: string; universe: string; direction: string; timeframe?: string; include_retail_sentiment?: boolean; limit?: number; offset?: number }) => {
     const query = new URLSearchParams({
       factor: params.factor,
       universe: params.universe,
       direction: params.direction,
       timeframe: params.timeframe ?? "monthly",
+      include_retail_sentiment: String(Boolean(params.include_retail_sentiment)),
       limit: String(params.limit ?? 25),
       offset: String(params.offset ?? 0),
     });
@@ -1526,6 +1612,8 @@ export const api = {
     if (domain) params.set("domain", domain);
     return request<IngestionJob[]>(`/ingestion/jobs?${params.toString()}`);
   },
+  retailSentimentStatus: (limit = 10) => request<RetailSentimentStatus>(`/ingestion/retail-sentiment/status?limit=${limit}`),
+  retailSentimentOverview: (limit = 25) => request<RetailSentimentOverview>(`/retail-sentiment?limit=${limit}`),
   clearIngestionHistory: () => request<ActionResult>("/ingestion/jobs", { method: "DELETE" }),
   ingestionBackgroundStatus: () => request<IngestionBackgroundStatus>("/ingestion/background/status"),
   startIngestionBackground: () => request<ActionResult>("/ingestion/background/start", { method: "POST" }),

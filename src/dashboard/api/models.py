@@ -589,10 +589,52 @@ class StockRankingsResponse(BaseModel):
     direction: str
     timeframe: str
     as_of_date: date
+    include_retail_sentiment: bool = False
     methodology: str
     total: int
     data_complete_count: int
     items: list[StockRankingItem]
+
+
+class RetailSentimentOverviewPost(BaseModel):
+    provider: str
+    source_name: str
+    title: str | None = None
+    url: str | None = None
+    published_at: datetime | None = None
+    score: int | None = None
+    comment_count: int | None = None
+
+
+class RetailSentimentOverviewItem(BaseModel):
+    asset_id: str
+    symbol: str
+    name: str | None = None
+    is_held: bool = False
+    is_watchlisted: bool = False
+    market_value: float | None = None
+    portfolio_names: list[str] = Field(default_factory=list)
+    snapshot_date: date | None = None
+    retail_sentiment_score: float | None = None
+    sentiment_label: str
+    confidence: float
+    reddit_post_count: int = 0
+    x_post_count: int = 0
+    bullish_count: int = 0
+    neutral_count: int = 0
+    bearish_count: int = 0
+    sentiment_momentum_1d: float | None = None
+    unusual_volume_flag: bool = False
+    source_count: int = 0
+    latest_posts: list[RetailSentimentOverviewPost] = Field(default_factory=list)
+
+
+class RetailSentimentOverviewResponse(BaseModel):
+    generated_at: datetime
+    methodology: str
+    summary: dict[str, int]
+    holdings: list[RetailSentimentOverviewItem]
+    popular: list[RetailSentimentOverviewItem]
 
 
 class StockRankingSnapshotRefreshRequest(BaseModel):
@@ -1459,6 +1501,56 @@ class IngestionJobResponse(BaseModel):
     error_message: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class RetailSentimentProviderStatus(BaseModel):
+    provider: str
+    configured: bool
+    post_count: int
+    latest_post_at: datetime | None = None
+    open_jobs: int
+    failed_jobs: int
+    latest_error: str | None = None
+
+
+class RetailSentimentDailySnapshot(BaseModel):
+    asset_id: str
+    ticker: str
+    date: date
+    retail_sentiment_score: float | None = None
+    reddit_post_count: int
+    x_post_count: int
+    bullish_count: int
+    neutral_count: int
+    bearish_count: int
+    sentiment_momentum_1d: float | None = None
+    unusual_volume_flag: bool = False
+
+
+class RetailSentimentPost(BaseModel):
+    provider: str
+    source_name: str
+    ticker: str
+    asset_id: str
+    title: str | None = None
+    body: str | None = None
+    url: str | None = None
+    published_at: datetime | None = None
+    score: int | None = None
+    comment_count: int | None = None
+    like_count: int | None = None
+    repost_count: int | None = None
+    reply_count: int | None = None
+    relevance_score: float
+
+
+class RetailSentimentStatusResponse(BaseModel):
+    providers: list[RetailSentimentProviderStatus]
+    latest_snapshots: list[RetailSentimentDailySnapshot]
+    recent_posts: list[RetailSentimentPost]
+    pending_jobs: int
+    running_jobs: int
+    failed_jobs: int
 
 
 class IngestionBackgroundStatusResponse(BaseModel):

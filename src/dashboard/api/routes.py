@@ -58,6 +58,8 @@ from dashboard.api.models import (
     IngestionRunRequest,
     IngestionScheduleRequest,
     MarketFreshnessStatusResponse,
+    RetailSentimentOverviewResponse,
+    RetailSentimentStatusResponse,
     HoldingSignalsResponse,
     NewsArticleResponse,
     NewsAlertRuleRequest,
@@ -290,6 +292,7 @@ def signals_summary(
     completeness: str | None = Query(default=None, pattern="^(complete|incomplete)$"),
     triggered_after: date | None = None,
     triggered_before: date | None = None,
+    include_retail_sentiment: bool = Query(default=False),
     sort: str = Query(default="priority", pattern="^(priority|triggered|strength|confidence|portfolio_weight|score_change|efficacy|ticker|market_cap)$"),
     limit: int = Query(default=25, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
@@ -311,6 +314,7 @@ def signals_summary(
         completeness=completeness,
         triggered_after=triggered_after,
         triggered_before=triggered_before,
+        include_retail_sentiment=include_retail_sentiment,
         sort=sort,
         limit=limit,
         offset=offset,
@@ -353,6 +357,7 @@ def stock_rankings(
     universe: str = Query(default="tracked", pattern="^(tracked|all)$"),
     direction: str = Query(default="buy", pattern="^(buy|sell)$"),
     timeframe: str = Query(default="monthly", pattern="^(daily|weekly|monthly|yearly)$"),
+    include_retail_sentiment: bool = Query(default=False),
     limit: int = Query(default=25, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     conn=Depends(get_connection),
@@ -362,9 +367,18 @@ def stock_rankings(
         universe=universe,
         direction=direction,
         timeframe=timeframe,
+        include_retail_sentiment=include_retail_sentiment,
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/retail-sentiment", response_model=RetailSentimentOverviewResponse)
+def retail_sentiment_overview(
+    limit: int = Query(default=25, ge=1, le=100),
+    conn=Depends(get_connection),
+):
+    return PortfolioApiService(conn).retail_sentiment_overview(limit=limit)
 
 
 @router.get("/holdings/signals", response_model=HoldingSignalsResponse)
@@ -1011,6 +1025,14 @@ def ingestion_jobs(
     conn=Depends(get_connection),
 ):
     return CommandApiService(conn).ingestion_jobs(job_status, domain, limit)
+
+
+@router.get("/ingestion/retail-sentiment/status", response_model=RetailSentimentStatusResponse)
+def retail_sentiment_status(
+    limit: int = Query(default=10, ge=1, le=50),
+    conn=Depends(get_connection),
+):
+    return CommandApiService(conn).retail_sentiment_status(limit=limit)
 
 
 @router.delete("/ingestion/jobs", response_model=ActionResult)

@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, Trash2 } from "lucide-react";
-import { api, type DataReadinessWorkerStatus, type IngestionBackgroundStatus, type IngestionReadiness, type MarketFreshnessStatus, type StockRankingReadiness } from "../api";
-import { boundedInt, dateRange, formatActionResult, formatCount, formatDuration, formatTimestamp } from "./routeFormatters";
+import { api, type DataReadinessWorkerStatus, type IngestionBackgroundStatus, type IngestionReadiness, type MarketFreshnessStatus, type RetailSentimentStatus, type StockRankingReadiness } from "../api";
+import { boundedInt, dateRange, formatActionResult, formatCount, formatDuration, formatTimestamp, percent, signedNumber } from "./routeFormatters";
 import { EmptyRow, ErrorPanel, HelpDisclosure, Loading, Signal } from "./routeShared";
 import type { HelpItem } from "./routeTypes";
 import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar, usePageFeature } from "../pageFeatureStore";
@@ -75,6 +75,7 @@ export function OperationsPage() {
   const showRoutineWorker = usePageFeature("operations", "operations.routineWorker");
   const showMarketFreshness = usePageFeature("operations", "operations.marketFreshness");
   const showDataReadiness = usePageFeature("operations", "operations.dataReadiness");
+  const showRetailSentiment = usePageFeature("operations", "operations.retailSentiment");
   const showProjectionReadiness = usePageFeature("operations", "operations.projectionReadiness");
   const showRankingReadiness = usePageFeature("operations", "operations.rankingReadiness");
   type ScheduleOverride = {
@@ -88,6 +89,7 @@ export function OperationsPage() {
     missingOnly?: boolean;
     staleOnly?: boolean;
   };
+  type RunOverride = { domain?: string; maxJobs?: string };
   const jobs = useQuery({
     queryKey: ["jobs", status, domain, jobLimit],
     queryFn: () => api.ingestionJobs(status, domain, boundedInt(jobLimit, 100, 1, 500)),
@@ -110,6 +112,12 @@ export function OperationsPage() {
     queryFn: api.dataReadinessStatus ?? (() => Promise.resolve(undefined)),
     enabled: showDataReadiness && typeof api.dataReadinessStatus === "function",
     refetchInterval: showDataReadiness ? 10000 : false,
+  });
+  const retailSentiment = useQuery({
+    queryKey: ["retail-sentiment-status"],
+    queryFn: () => api.retailSentimentStatus(10),
+    enabled: showRetailSentiment,
+    refetchInterval: showRetailSentiment ? 10000 : false,
   });
   const readiness = useQuery({
     queryKey: ["ingestion-readiness"],
@@ -143,17 +151,20 @@ export function OperationsPage() {
       client.invalidateQueries({ queryKey: ["jobs"] });
       client.invalidateQueries({ queryKey: ["ingestion-readiness"] });
       client.invalidateQueries({ queryKey: ["ranking-readiness"] });
+      client.invalidateQueries({ queryKey: ["retail-sentiment-status"] });
     },
   });
   const run = useMutation({
-    mutationFn: () => api.runIngestion({
-      domain: runDomain,
-      max_jobs: boundedInt(runMaxJobs, 1, 1, 25),
+    mutationFn: (override?: RunOverride) => api.runIngestion({
+      domain: override?.domain ?? runDomain,
+      max_jobs: boundedInt(override?.maxJobs ?? runMaxJobs, 1, 1, 25),
     }),
     onSuccess: (result) => {
       setMessage(`Run finished: ${formatActionResult(result.result)}`);
       client.invalidateQueries({ queryKey: ["jobs"] });
       client.invalidateQueries({ queryKey: ["ingestion-readiness"] });
+      client.invalidateQueries({ queryKey: ["ranking-readiness"] });
+      client.invalidateQueries({ queryKey: ["retail-sentiment-status"] });
     },
   });
   const retry = useMutation({
@@ -165,6 +176,7 @@ export function OperationsPage() {
       setMessage(`Retry queued: ${formatActionResult(result.result)}`);
       client.invalidateQueries({ queryKey: ["jobs"] });
       client.invalidateQueries({ queryKey: ["ingestion-readiness"] });
+      client.invalidateQueries({ queryKey: ["retail-sentiment-status"] });
     },
   });
   const clearHistory = useMutation({
@@ -173,6 +185,7 @@ export function OperationsPage() {
       setMessage(`Cleared: ${formatActionResult(result.result)}`);
       client.invalidateQueries({ queryKey: ["jobs"] });
       client.invalidateQueries({ queryKey: ["ingestion-readiness"] });
+      client.invalidateQueries({ queryKey: ["retail-sentiment-status"] });
     },
   });
   const startBackground = useMutation({
@@ -197,6 +210,7 @@ export function OperationsPage() {
       client.invalidateQueries({ queryKey: ["ingestion-background-status"] });
       client.invalidateQueries({ queryKey: ["ingestion-readiness"] });
       client.invalidateQueries({ queryKey: ["ranking-readiness"] });
+      client.invalidateQueries({ queryKey: ["retail-sentiment-status"] });
     },
   });
   const startMarketFreshness = useMutation({
@@ -268,12 +282,24 @@ export function OperationsPage() {
       staleOnly: true,
     });
   };
-  return <div className="page"><div className="page-title"><div><p className="eyebrow">Data health</p><h1>Operations</h1><p className="page-subtitle">Background due work keeps routine data moving. Manual controls remain here for backfills, retries, provider-sensitive refreshes, and explicit runs.</p></div><div className="actions"><PageLayoutButton pageId="operations" /><PageFeatureMenu pageId="operations" /><button onClick={() => { jobs.refetch(); background.refetch(); marketFreshness.refetch(); dataReadiness.refetch(); readiness.refetch(); rankingReadiness.refetch(); }} disabled={jobs.isFetching || background.isFetching || marketFreshness.isFetching || dataReadiness.isFetching || readiness.isFetching || rankingReadiness.isFetching}><RefreshCw size={17}/>Refresh</button><button className="danger" onClick={() => window.confirm("Clear ingestion job history and sync status rows? Market data and broker connections will stay intact.") && clearHistory.mutate()} disabled={isBusy}><Trash2 size={17}/>Clear history</button><button className="primary" onClick={() => window.confirm("Run pending ingestion jobs with these options?") && run.mutate()} disabled={isBusy}><RefreshCw size={17}/>Run jobs</button></div></div>
+  const scheduleRetailSentiment = () => {
+    setPipeline("ranking");
+    setScheduleRankingFactor("retail_sentiment");
+    schedule.mutate({
+      pipeline: "ranking",
+      rankingFactor: "retail_sentiment",
+      rankingUniverse: scheduleRankingUniverse,
+      missingOnly: true,
+      staleOnly: true,
+    });
+  };
+  return <div className="page"><div className="page-title"><div><p className="eyebrow">Data health</p><h1>Operations</h1><p className="page-subtitle">Background due work keeps routine data moving. Manual controls remain here for backfills, retries, provider-sensitive refreshes, and explicit runs.</p></div><div className="actions"><PageLayoutButton pageId="operations" /><PageFeatureMenu pageId="operations" /><button onClick={() => { jobs.refetch(); background.refetch(); marketFreshness.refetch(); dataReadiness.refetch(); retailSentiment.refetch(); readiness.refetch(); rankingReadiness.refetch(); }} disabled={jobs.isFetching || background.isFetching || marketFreshness.isFetching || dataReadiness.isFetching || retailSentiment.isFetching || readiness.isFetching || rankingReadiness.isFetching}><RefreshCw size={17}/>Refresh</button><button className="danger" onClick={() => window.confirm("Clear ingestion job history and sync status rows? Market data and broker connections will stay intact.") && clearHistory.mutate()} disabled={isBusy}><Trash2 size={17}/>Clear history</button><button className="primary" onClick={() => window.confirm("Run pending ingestion jobs with these options?") && run.mutate({})} disabled={isBusy}><RefreshCw size={17}/>Run jobs</button></div></div>
     <PageLayoutToolbar pageId="operations" />
     <OptionalFeaturesEmpty pageId="operations" />
     {showRoutineWorker ? <LayoutWidget pageId="operations" widgetId="operations.routineWorker"><IngestionBackgroundCard status={background.data} isLoading={background.isLoading} error={background.error} onStart={() => startBackground.mutate()} onStop={() => stopBackground.mutate()} onTick={() => tickBackground.mutate()} isBusy={isBusy} /></LayoutWidget> : null}
     {showMarketFreshness ? <LayoutWidget pageId="operations" widgetId="operations.marketFreshness"><MarketFreshnessCard status={marketFreshness.data} isLoading={marketFreshness.isLoading} error={marketFreshness.error} onStart={() => startMarketFreshness.mutate()} onStop={() => stopMarketFreshness.mutate()} onTick={() => tickMarketFreshness.mutate()} isBusy={isBusy} /></LayoutWidget> : null}
     {showDataReadiness ? <LayoutWidget pageId="operations" widgetId="operations.dataReadiness"><DataReadinessCard status={dataReadiness.data} isLoading={dataReadiness.isLoading} error={dataReadiness.error} onStart={() => startDataReadiness.mutate()} onStop={() => stopDataReadiness.mutate()} onTick={() => tickDataReadiness.mutate()} isBusy={isBusy} /></LayoutWidget> : null}
+    {showRetailSentiment ? <LayoutWidget pageId="operations" widgetId="operations.retailSentiment"><RetailSentimentCard status={retailSentiment.data} isLoading={retailSentiment.isLoading} error={retailSentiment.error} onSchedule={scheduleRetailSentiment} onRun={() => run.mutate({ domain: "sentiment", maxJobs: "10" })} isBusy={isBusy} /></LayoutWidget> : null}
     {showProjectionReadiness ? <LayoutWidget pageId="operations" widgetId="operations.projectionReadiness"><IngestionReadinessCard readiness={readiness.data} isLoading={readiness.isLoading} error={readiness.error} onScheduleAsset={scheduleAsset} isBusy={isBusy} /></LayoutWidget> : null}
     {showRankingReadiness ? <LayoutWidget pageId="operations" widgetId="operations.rankingReadiness"><RankingReadinessCard readiness={rankingReadiness.data} isLoading={rankingReadiness.isLoading} error={rankingReadiness.error} onScheduleAsset={scheduleRankingAsset} isBusy={isBusy} /></LayoutWidget> : null}
     <section className="card operations-control">
@@ -300,7 +326,7 @@ export function OperationsPage() {
             <label>Domain<select value={runDomain} onChange={(event) => setRunDomain(event.target.value)}><option value="all">All</option><option value="market">Market</option><option value="corporate">Corporate</option><option value="sentiment">Sentiment</option></select></label>
             <label>Max jobs<input type="number" min="1" max="25" value={runMaxJobs} onChange={(event) => setRunMaxJobs(event.target.value)} /></label>
           </div>
-          <button className="primary" onClick={() => window.confirm("Run pending ingestion jobs with these options?") && run.mutate()} disabled={isBusy}><RefreshCw size={17}/>Run</button>
+          <button className="primary" onClick={() => window.confirm("Run pending ingestion jobs with these options?") && run.mutate({})} disabled={isBusy}><RefreshCw size={17}/>Run</button>
         </div>
         <div className="control-panel">
           <strong>Retry failed jobs</strong>
@@ -465,6 +491,73 @@ function DataReadinessCard({
         </div>
       </div>
     )}
+  </section>;
+}
+
+function RetailSentimentCard({
+  status,
+  isLoading,
+  error,
+  onSchedule,
+  onRun,
+  isBusy,
+}: {
+  status?: RetailSentimentStatus;
+  isLoading: boolean;
+  error: Error | null;
+  onSchedule: () => void;
+  onRun: () => void;
+  isBusy: boolean;
+}) {
+  const totalPosts = status?.providers.reduce((sum, provider) => sum + provider.post_count, 0) ?? 0;
+  return <section className="card operations-readiness">
+    <div className="card-heading">
+      <div><p className="eyebrow">Retail sentiment</p><h2>Social sentiment ingestion</h2></div>
+      <div className="card-tools"><span>{isLoading ? "loading" : formatCount(totalPosts, "post")}</span></div>
+    </div>
+    {error ? <ErrorPanel error={error} /> : isLoading ? <Loading compact /> : status ? (
+      <div className="retail-sentiment-grid">
+        <div className="background-status-grid compact">
+          {status.providers.map((provider) => (
+            <div className="status-card" key={provider.provider}>
+              <strong>{provider.provider === "x" ? "X" : "Reddit"}</strong>
+              <span className={`pill ${provider.configured ? "done" : "failed"}`}>{provider.configured ? "configured" : "missing credentials"}</span>
+              <p>{formatCount(provider.post_count, "stored post")} · latest {formatTimestamp(provider.latest_post_at)}</p>
+              <p>{formatCount(provider.open_jobs, "open job")} · {formatCount(provider.failed_jobs, "failed job")}</p>
+              {provider.latest_error ? <em>{provider.latest_error}</em> : null}
+            </div>
+          ))}
+          <Signal label="Pending social jobs" value={formatCount(status.pending_jobs, "job")} />
+          <Signal label="Running social jobs" value={formatCount(status.running_jobs, "job")} />
+          <Signal label="Failed social jobs" value={formatCount(status.failed_jobs, "job")} />
+          <div className="background-actions">
+            <button onClick={() => window.confirm("Schedule missing or stale retail sentiment jobs for the selected ranking universe?") && onSchedule()} disabled={isBusy}>Schedule retail</button>
+            <button className="primary" onClick={() => window.confirm("Run up to 10 pending sentiment jobs now? Live providers require configured credentials.") && onRun()} disabled={isBusy}><RefreshCw size={17}/>Run sentiment</button>
+          </div>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Ticker</th><th>Date</th><th>Retail score</th><th>Reddit</th><th>X</th><th>Momentum</th><th>Volume</th></tr></thead>
+            <tbody>{status.latest_snapshots.map((item) => <tr key={`${item.asset_id}-${item.date}`}><td>{item.ticker}</td><td>{new Date(item.date).toLocaleDateString()}</td><td>{percent(item.retail_sentiment_score)}</td><td>{item.reddit_post_count}</td><td>{item.x_post_count}</td><td>{signedNumber(item.sentiment_momentum_1d, 2)}</td><td>{item.unusual_volume_flag ? "unusual" : "normal"}</td></tr>)}</tbody>
+          </table>
+          {!status.latest_snapshots.length ? <EmptyRow text="No daily retail sentiment snapshots are stored yet." /> : null}
+        </div>
+        <div className="mini-list news-mini-list">
+          {status.recent_posts.map((post) => {
+            const headline = post.title || post.body || `${post.provider} post`;
+            return <article key={`${post.provider}-${post.asset_id}-${post.published_at}-${headline}`}>
+              <div>
+                {post.url ? <a href={post.url} target="_blank" rel="noreferrer"><strong>{headline}</strong></a> : <strong>{headline}</strong>}
+                <span>{[post.ticker, post.source_name, formatTimestamp(post.published_at)].join(" · ")}</span>
+              </div>
+              <span>{post.provider === "x" ? `likes ${post.like_count ?? 0}` : `score ${post.score ?? 0}`}</span>
+              <b>{percent(post.relevance_score)}</b>
+            </article>;
+          })}
+          {!status.recent_posts.length ? <EmptyRow text="No recent mapped social posts found. Schedule and run retail sentiment ingestion to populate this feed." /> : null}
+        </div>
+      </div>
+    ) : <EmptyRow text="Retail sentiment status is unavailable." />}
   </section>;
 }
 

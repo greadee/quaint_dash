@@ -256,7 +256,7 @@ function SignalColumnDetailPanel({ column, onClose }: { column: string; onClose:
 }
 
 function signalFiltersFromParams(params: URLSearchParams) {
-  const keys = ["q", "portfolio_id", "owned", "category", "direction", "status", "min_strength", "min_confidence", "min_priority", "sector", "industry", "freshness", "completeness", "triggered_after", "triggered_before", "sort", "limit", "offset"];
+  const keys = ["q", "portfolio_id", "owned", "category", "direction", "status", "min_strength", "min_confidence", "min_priority", "sector", "industry", "freshness", "completeness", "triggered_after", "triggered_before", "include_retail_sentiment", "sort", "limit", "offset"];
   return Object.fromEntries(keys.map((key) => [key, params.get(key) ?? undefined]).filter((entry) => entry[1])) as Record<string, string>;
 }
 
@@ -268,7 +268,7 @@ function SignalPrioritySection({ title, items, empty, onOpen }: { title: string;
         <div><strong>{item.ticker}</strong><span>{item.company_name ?? item.exchange ?? "Tracked asset"}</span></div>
         <p>{item.summary}</p>
         <b>{percent(item.confidence)} confidence</b>
-        <span>{percent(item.current_portfolio_weight)} exposure</span>
+        <span>{item.current_portfolio_weight === null || item.current_portfolio_weight === undefined ? "No current holding" : `${percent(item.current_portfolio_weight)} exposure`}</span>
         <span>{timeAgo(item.first_detected_at)}</span>
       </button>
     ))}</div> : <EmptyRow text={empty} />}
@@ -291,6 +291,7 @@ function SignalFilterPanel({ filters, updateFilter, mobileOpen, onClose }: { fil
     <label>Industry<input value={filters.industry ?? ""} onChange={(event) => updateFilter("industry", event.target.value)} /></label>
     <label>Freshness<select value={filters.freshness ?? ""} onChange={(event) => updateFilter("freshness", event.target.value)}><option value="">Any</option><option value="fresh">Fresh</option><option value="stale">Stale</option></select></label>
     <label>Completeness<select value={filters.completeness ?? ""} onChange={(event) => updateFilter("completeness", event.target.value)}><option value="">Any</option><option value="complete">Complete</option><option value="incomplete">Incomplete</option></select></label>
+    <label className="checkbox-label"><input type="checkbox" checked={filters.include_retail_sentiment === "true"} onChange={(event) => updateFilter("include_retail_sentiment", event.target.checked ? "true" : "")} />Include retail add-on</label>
     <label>Sort<select value={filters.sort ?? "priority"} onChange={(event) => updateFilter("sort", event.target.value)}><option value="priority">Portfolio priority</option><option value="triggered">Most recently triggered</option><option value="strength">Strength</option><option value="confidence">Confidence</option><option value="portfolio_weight">Portfolio weight</option><option value="score_change">Recent score change</option><option value="efficacy">Historical efficacy</option><option value="ticker">Ticker</option><option value="market_cap">Market cap</option></select></label>
   </div>;
 }
@@ -299,9 +300,16 @@ function ActiveSignalFilters({ filters, onClear, onClearAll }: { filters: Record
   const entries = Object.entries(filters).filter(([key]) => key !== "limit" && key !== "offset" && key !== "signal");
   if (!entries.length) return null;
   return <div className="active-filter-chips" aria-label="Active filters">
-    {entries.map(([key, value]) => <button key={key} onClick={() => onClear(key)}>{labelize(key)}: {value}<X size={13}/></button>)}
+    {entries.map(([key, value]) => <button key={key} onClick={() => onClear(key)}>{formatActiveFilter(key, value)}<X size={13}/></button>)}
     <button onClick={onClearAll}>Clear all</button>
   </div>;
+}
+
+function formatActiveFilter(key: string, value: string): string {
+  if (key === "include_retail_sentiment") {
+    return value === "true" ? "Retail sentiment included" : "Retail sentiment off";
+  }
+  return `${labelize(key)}: ${value}`;
 }
 
 function SignalTableRow({ item, expanded, detail, onOpen, onClose, onReview, onAlert, onWatchlist }: { item: SignalRow; expanded: boolean; detail?: SignalDetailResponse; onOpen: () => void; onClose: () => void; onReview: () => void; onAlert: () => void; onWatchlist: () => void }) {

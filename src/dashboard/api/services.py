@@ -73,6 +73,13 @@ from dashboard.api.models import (
     PricePointResponse,
     PriceMoverResponse,
     IngestionRequirementStatus,
+    RetailSentimentDailySnapshot,
+    RetailSentimentOverviewItem,
+    RetailSentimentOverviewPost,
+    RetailSentimentOverviewResponse,
+    RetailSentimentPost,
+    RetailSentimentProviderStatus,
+    RetailSentimentStatusResponse,
     SignalAlertRuleRequest,
     SignalAlertRuleResponse,
     SignalDetailResponse,
@@ -2934,11 +2941,12 @@ class PortfolioApiService:
         completeness: str | None,
         triggered_after: date | None,
         triggered_before: date | None,
+        include_retail_sentiment: bool,
         sort: str,
         limit: int,
         offset: int,
     ) -> SignalsSummaryResponse:
-        rows = self._current_signal_rows()
+        rows = self._current_signal_rows(include_retail_sentiment=include_retail_sentiment)
         filtered = [
             row for row in rows
             if self._signal_matches(
@@ -2990,11 +2998,11 @@ class PortfolioApiService:
             partial_provider_failures=_signal_provider_failures(rows),
             stale_cached_results=any(row.status == "expired" for row in rows),
             model_version=_SIGNALS_MODEL_VERSION,
-            methodology=_signals_methodology(),
+            methodology=_signals_methodology(include_retail_sentiment=include_retail_sentiment),
         )
 
     def signal_detail(self, signal_id: str) -> SignalDetailResponse:
-        row = next((item for item in self._current_signal_rows() if item.signal_id == signal_id), None)
+        row = next((item for item in self._current_signal_rows(include_retail_sentiment=True) if item.signal_id == signal_id), None)
         if row is None:
             raise LookupError(f"Signal not found: {signal_id}")
         row = self._with_signal_efficacy(row)
@@ -3003,7 +3011,7 @@ class PortfolioApiService:
             lifecycle=_signal_lifecycle(row),
             strength_history=self._signal_history(row),
             related_news=self._related_signal_news(row.asset_id),
-            methodology=_signals_methodology(),
+            methodology=_signals_methodology(include_retail_sentiment=True),
             links={
                 "ticker": f"/asset/{row.asset_id}",
                 "fundamentals": f"/asset/{row.asset_id}",
@@ -3015,7 +3023,7 @@ class PortfolioApiService:
         )
 
     def update_signal_user_state(self, signal_id: str, payload: SignalUserStateRequest) -> SignalUserState:
-        row = next((item for item in self._current_signal_rows() if item.signal_id == signal_id), None)
+        row = next((item for item in self._current_signal_rows(include_retail_sentiment=True) if item.signal_id == signal_id), None)
         if row is None:
             raise LookupError(f"Signal not found: {signal_id}")
         reviewed_at = datetime.now() if payload.reviewed else None
@@ -3047,7 +3055,7 @@ class PortfolioApiService:
         return self._signal_user_state(signal_id)
 
     def create_signal_alert_rule(self, signal_id: str, payload: SignalAlertRuleRequest) -> SignalAlertRuleResponse:
-        row = next((item for item in self._current_signal_rows() if item.signal_id == signal_id), None)
+        row = next((item for item in self._current_signal_rows(include_retail_sentiment=True) if item.signal_id == signal_id), None)
         if row is None:
             raise LookupError(f"Signal not found: {signal_id}")
         result = self.conn.execute(
@@ -3072,7 +3080,7 @@ class PortfolioApiService:
             is_active=True,
         )
 
-    def _current_signal_rows(self) -> list[SignalRow]:
+    def _current_signal_rows(self, *, include_retail_sentiment: bool = False) -> list[SignalRow]:
         universe_rows = self._stock_ranking_universe("tracked")
         self._ensure_stock_ranking_inputs(universe_rows)
         impacts = self._portfolio_impacts_by_asset()
@@ -3080,7 +3088,14 @@ class PortfolioApiService:
         rows: list[SignalRow] = []
         for asset_row in universe_rows:
             for factor in sorted(_STOCK_RANKING_FACTORS):
-                item = self._stock_ranking_item(asset_row, factor=factor, timeframe="monthly")
+                if factor == "retail_sentiment" and not include_retail_sentiment:
+                    continue
+                item = self._stock_ranking_item(
+                    asset_row,
+                    factor=factor,
+                    timeframe="monthly",
+                    include_retail_sentiment=include_retail_sentiment,
+                )
                 if item.confidence <= 0 and item.data_status != "complete":
                     continue
                 rows.append(self._signal_from_ranking(item, factor, impacts.get(item.asset_id, []), user_states))
@@ -3635,6 +3650,7 @@ class PortfolioApiService:
         universe: str,
         direction: str,
         timeframe: str,
+        include_retail_sentiment: bool,
         limit: int,
         offset: int,
     ) -> StockRankingsResponse:
@@ -3655,7 +3671,12 @@ class PortfolioApiService:
         rows = self._stock_ranking_universe(universe)
         self._ensure_stock_ranking_inputs(rows)
         items = [
-            self._stock_ranking_item(row, factor=factor, timeframe=timeframe)
+            self._stock_ranking_item(
+                row,
+                factor=factor,
+                timeframe=timeframe,
+                include_retail_sentiment=include_retail_sentiment,
+            )
             for row in rows
         ]
         items.sort(
@@ -3672,10 +3693,233 @@ class PortfolioApiService:
             direction=direction,
             timeframe=timeframe,
             as_of_date=as_of_date,
-            methodology=_stock_ranking_methodology(factor, universe, timeframe),
+            include_retail_sentiment=include_retail_sentiment,
+            methodology=_stock_ranking_methodology(factor, universe, timeframe, include_retail_sentiment),
             total=total,
             data_complete_count=sum(1 for item in items if item.data_status == "complete"),
             items=items[offset : offset + limit],
+        )
+
+    def retail_sentiment_overview(self, *, limit: int = 25) -> RetailSentimentOverviewResponse:
+        latest_sentiment_sql = """
+            SELECT *
+            FROM (
+                SELECT
+                    asset_id,
+                    ticker,
+                    date,
+                    retail_sentiment_score,
+                    reddit_post_count,
+                    x_post_count,
+                    bullish_count,
+                    neutral_count,
+                    bearish_count,
+                    sentiment_momentum_1d,
+                    unusual_volume_flag,
+                    ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY date DESC) AS row_rank
+                FROM ticker_sentiment_daily
+            )
+            WHERE row_rank = 1
+        """
+        held_rows = self.conn.execute(
+            f"""
+            WITH portfolio_holdings AS ({_HOLDINGS_SQL}),
+            holdings AS (
+                SELECT
+                    h.asset_id,
+                    SUM(h.quantity) AS quantity,
+                    SUM(COALESCE(h.book_cost, 0)) AS market_value,
+                    STRING_AGG(DISTINCT p.portfolio_name, ', ') AS portfolio_names
+                FROM portfolio_holdings h
+                JOIN portfolio p ON p.portfolio_id = h.portfolio_id
+                GROUP BY h.asset_id
+                HAVING SUM(h.quantity) <> 0
+            ),
+            latest_sentiment AS ({latest_sentiment_sql})
+            SELECT
+                a.asset_id,
+                COALESCE(a.symbol, h.asset_id) AS symbol,
+                a.name,
+                TRUE AS is_held,
+                COALESCE(w.is_active, FALSE) AS is_watchlisted,
+                h.market_value,
+                h.portfolio_names,
+                ls.date,
+                ls.retail_sentiment_score,
+                ls.reddit_post_count,
+                ls.x_post_count,
+                ls.bullish_count,
+                ls.neutral_count,
+                ls.bearish_count,
+                ls.sentiment_momentum_1d,
+                COALESCE(ls.unusual_volume_flag, FALSE),
+                a.asset_type,
+                a.asset_subtype
+            FROM holdings h
+            JOIN asset a ON a.asset_id = h.asset_id
+            LEFT JOIN latest_sentiment ls ON ls.asset_id = h.asset_id
+            LEFT JOIN watchlist_ticker w ON w.asset_id = h.asset_id
+            ORDER BY h.market_value DESC NULLS LAST, symbol
+            """
+        ).fetchall()
+        popular_rows = self.conn.execute(
+            f"""
+            WITH portfolio_holdings AS ({_HOLDINGS_SQL}),
+            holdings AS (
+                SELECT
+                    h.asset_id,
+                    SUM(h.quantity) AS quantity,
+                    SUM(COALESCE(h.book_cost, 0)) AS market_value,
+                    STRING_AGG(DISTINCT p.portfolio_name, ', ') AS portfolio_names
+                FROM portfolio_holdings h
+                JOIN portfolio p ON p.portfolio_id = h.portfolio_id
+                GROUP BY h.asset_id
+                HAVING SUM(h.quantity) <> 0
+            ),
+            latest_sentiment AS ({latest_sentiment_sql})
+            SELECT
+                COALESCE(a.asset_id, ls.asset_id) AS asset_id,
+                COALESCE(a.symbol, ls.ticker, ls.asset_id) AS symbol,
+                a.name,
+                h.asset_id IS NOT NULL AS is_held,
+                COALESCE(w.is_active, FALSE) AS is_watchlisted,
+                h.market_value,
+                h.portfolio_names,
+                ls.date,
+                ls.retail_sentiment_score,
+                ls.reddit_post_count,
+                ls.x_post_count,
+                ls.bullish_count,
+                ls.neutral_count,
+                ls.bearish_count,
+                ls.sentiment_momentum_1d,
+                COALESCE(ls.unusual_volume_flag, FALSE),
+                a.asset_type,
+                a.asset_subtype
+            FROM latest_sentiment ls
+            LEFT JOIN asset a ON a.asset_id = ls.asset_id
+            LEFT JOIN holdings h ON h.asset_id = ls.asset_id
+            LEFT JOIN watchlist_ticker w ON w.asset_id = ls.asset_id
+            ORDER BY COALESCE(ls.reddit_post_count, 0) + COALESCE(ls.x_post_count, 0) DESC,
+                     ABS(COALESCE(ls.retail_sentiment_score, 0)) DESC,
+                     symbol
+            LIMIT ?
+            """,
+            [limit],
+        ).fetchall()
+        asset_ids = {
+            str(row[0])
+            for row in [*held_rows, *popular_rows]
+            if row[0] is not None
+        }
+        posts_by_asset = self._latest_retail_posts_by_asset(asset_ids, per_asset=2)
+        holdings = [self._retail_sentiment_overview_item(row, posts_by_asset) for row in held_rows]
+        popular = [self._retail_sentiment_overview_item(row, posts_by_asset) for row in popular_rows]
+        holdings = [
+            item
+            for item, row in zip(holdings, held_rows)
+            if not _is_etf_like_asset(symbol=item.symbol, name=item.name, asset_type=row[16], asset_subtype=row[17])
+        ]
+        popular = [
+            item
+            for item, row in zip(popular, popular_rows)
+            if not _is_etf_like_asset(symbol=item.symbol, name=item.name, asset_type=row[16], asset_subtype=row[17])
+        ]
+        return RetailSentimentOverviewResponse(
+            generated_at=datetime.now(),
+            methodology=(
+                "Retail sentiment summarizes Reddit and X posts that mention tracked tickers. "
+                "It is useful as a social-attention layer, not as a standalone buy or sell rating. "
+                "Use it to see when the crowd is excited, worried, or unusually active, then compare it with institutional buying, analyst/news sentiment, earnings, and price evidence."
+            ),
+            summary={
+                "holding_count": len(holdings),
+                "holding_with_sentiment_count": sum(1 for item in holdings if item.retail_sentiment_score is not None),
+                "popular_count": len(popular),
+                "total_recent_posts": sum(item.source_count for item in popular),
+            },
+            holdings=holdings,
+            popular=popular,
+        )
+
+    def _latest_retail_posts_by_asset(
+        self,
+        asset_ids: set[str],
+        *,
+        per_asset: int,
+    ) -> dict[str, list[RetailSentimentOverviewPost]]:
+        if not asset_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in asset_ids)
+        rows = self.conn.execute(
+            f"""
+            SELECT asset_id, provider, source_name, title, url, published_at, score, comment_count
+            FROM (
+                SELECT
+                    m.asset_id,
+                    p.provider,
+                    p.source_name,
+                    p.title,
+                    p.url,
+                    p.published_at,
+                    p.score,
+                    p.comment_count,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY m.asset_id
+                        ORDER BY p.published_at DESC NULLS LAST, p.post_id DESC
+                    ) AS row_rank
+                FROM social_post_asset_mention m
+                JOIN social_post p ON p.post_id = m.post_id
+                WHERE m.asset_id IN ({placeholders})
+            )
+            WHERE row_rank <= ?
+            ORDER BY asset_id, published_at DESC NULLS LAST
+            """,
+            [*sorted(asset_ids), per_asset],
+        ).fetchall()
+        posts: dict[str, list[RetailSentimentOverviewPost]] = {}
+        for row in rows:
+            posts.setdefault(str(row[0]), []).append(
+                RetailSentimentOverviewPost(
+                    provider=str(row[1]),
+                    source_name=str(row[2]),
+                    title=row[3],
+                    url=row[4],
+                    published_at=row[5],
+                    score=int(row[6]) if row[6] is not None else None,
+                    comment_count=int(row[7]) if row[7] is not None else None,
+                )
+            )
+        return posts
+
+    def _retail_sentiment_overview_item(
+        self,
+        row,
+        posts_by_asset: dict[str, list[RetailSentimentOverviewPost]],
+    ) -> RetailSentimentOverviewItem:
+        source_count = int(row[9] or 0) + int(row[10] or 0)
+        sentiment = _float_or_none(row[8])
+        return RetailSentimentOverviewItem(
+            asset_id=str(row[0]),
+            symbol=str(row[1]),
+            name=row[2],
+            is_held=bool(row[3]),
+            is_watchlisted=bool(row[4]),
+            market_value=_float_or_none(row[5]),
+            portfolio_names=[name.strip() for name in str(row[6] or "").split(",") if name.strip()],
+            snapshot_date=row[7],
+            retail_sentiment_score=sentiment,
+            sentiment_label=_retail_sentiment_label(sentiment),
+            confidence=_retail_sentiment_confidence(source_count, row[7]),
+            reddit_post_count=int(row[9] or 0),
+            x_post_count=int(row[10] or 0),
+            bullish_count=int(row[11] or 0),
+            neutral_count=int(row[12] or 0),
+            bearish_count=int(row[13] or 0),
+            sentiment_momentum_1d=_float_or_none(row[14]),
+            unusual_volume_flag=bool(row[15]),
+            source_count=source_count,
+            latest_posts=posts_by_asset.get(str(row[0]), []),
         )
 
     def refresh_stock_ranking_snapshots(
@@ -3702,7 +3946,12 @@ class PortfolioApiService:
         refreshed = 0
         for row in rows:
             self._ensure_stock_asset(row["asset_id"])
-            item = self._stock_ranking_item(row, factor=factor, timeframe=timeframe)
+            item = self._stock_ranking_item(
+                row,
+                factor=factor,
+                timeframe=timeframe,
+                include_retail_sentiment=factor == "retail_sentiment",
+            )
             self.conn.execute(
                 """
                 INSERT INTO stock_ranking_snapshot(
@@ -4150,9 +4399,16 @@ class PortfolioApiService:
             [asset_id, symbol, net_flow_score or 0.0, accumulation_score or 0.0, volume_ratio, buy_proxy, sell_proxy],
         )
 
-    def _stock_ranking_item(self, row: dict[str, Any], *, factor: str, timeframe: str = "monthly") -> StockRankingItem:
+    def _stock_ranking_item(
+        self,
+        row: dict[str, Any],
+        *,
+        factor: str,
+        timeframe: str = "monthly",
+        include_retail_sentiment: bool = False,
+    ) -> StockRankingItem:
         if factor == "aggregate":
-            result = self._aggregate_stock_score(row["asset_id"], timeframe)
+            result = self._aggregate_stock_score(row["asset_id"], timeframe, include_retail_sentiment)
         elif factor == "share_price_momentum":
             result = self._price_momentum_score(row["asset_id"], timeframe)
         elif factor == "news_sentiment":
@@ -4201,27 +4457,32 @@ class PortfolioApiService:
             components=components,
         )
 
-    def _aggregate_stock_score(self, asset_id: str, timeframe: str) -> dict[str, Any]:
+    def _aggregate_stock_score(self, asset_id: str, timeframe: str, include_retail_sentiment: bool) -> dict[str, Any]:
         factor_results = [
-            ("Share price momentum", self._price_momentum_score(asset_id, timeframe)),
-            ("News sentiment", self._sentiment_score(asset_id, "news", timeframe)),
-            ("Retail sentiment", self._sentiment_score(asset_id, "retail", timeframe)),
-            ("Earnings momentum", self._earnings_momentum_score(asset_id)),
-            ("Institutional buying", self._institutional_buying_score(asset_id)),
+            ("Share price momentum", 0.26, self._price_momentum_score(asset_id, timeframe)),
+            ("News sentiment", 0.18, self._sentiment_score(asset_id, "news", timeframe)),
+            ("Earnings momentum", 0.28, self._earnings_momentum_score(asset_id)),
+            ("Institutional buying", 0.28, self._institutional_buying_score(asset_id)),
         ]
+        if include_retail_sentiment:
+            factor_results.append(("Retail sentiment add-on", 0.10, self._sentiment_score(asset_id, "retail", timeframe)))
         components: list[StockRankingComponent] = []
         dates = []
-        for name, result in factor_results:
+        weighted_scores: list[tuple[float, float]] = []
+        available_base_weight = sum(weight for _name, weight, result in factor_results if result["score"] is not None)
+        for name, weight, result in factor_results:
             score = result["score"]
+            if score is not None:
+                weighted_scores.append((score, weight))
             components.append(
                 StockRankingComponent(
                     name=name,
-                    metric="factor score",
+                    metric="weighted factor score",
                     value=score,
                     score=score,
                     available=score is not None,
                     detail=(
-                        f"{name} contributed to the aggregate score."
+                        f"{name} contributes {round(weight * 100)}% when available."
                         if score is not None
                         else "; ".join(
                             component.detail
@@ -4234,8 +4495,13 @@ class PortfolioApiService:
             if result.get("latest_data_date") is not None:
                 dates.append(result["latest_data_date"])
         scores = [component.score for component in components if component.score is not None]
+        weighted_score = (
+            sum(score * weight for score, weight in weighted_scores) / available_base_weight
+            if available_base_weight > 0
+            else None
+        )
         return {
-            "score": sum(scores) / len(scores) if scores else None,
+            "score": weighted_score if weighted_score is not None else sum(scores) / len(scores) if scores else None,
             "latest_data_date": max(dates) if dates else None,
             "components": components,
         }
@@ -6820,6 +7086,131 @@ class CommandApiService(BrokerCommands, IngestionCommands):
             for row in rows
         ]
 
+    def retail_sentiment_status(self, limit: int = 10) -> RetailSentimentStatusResponse:
+        providers = ["reddit", "x"]
+        post_rows = self.conn.execute(
+            """
+            SELECT provider, COUNT(*), MAX(published_at)
+            FROM social_post
+            WHERE provider IN ('reddit', 'x')
+            GROUP BY provider
+            """
+        ).fetchall()
+        post_stats = {row[0]: (int(row[1]), row[2]) for row in post_rows}
+        job_rows = self.conn.execute(
+            """
+            SELECT dataset, status, COUNT(*), MAX(error_message)
+            FROM ingestion_job
+            WHERE domain = 'sentiment'
+              AND dataset IN ('reddit', 'x')
+            GROUP BY dataset, status
+            """
+        ).fetchall()
+        job_stats: dict[str, dict[str, tuple[int, str | None]]] = {provider: {} for provider in providers}
+        for dataset, status, count, latest_error in job_rows:
+            job_stats.setdefault(dataset, {})[status] = (int(count), latest_error)
+
+        latest_snapshots = [
+            RetailSentimentDailySnapshot(
+                asset_id=row[0],
+                ticker=row[1],
+                date=row[2],
+                retail_sentiment_score=row[3],
+                reddit_post_count=int(row[4] or 0),
+                x_post_count=int(row[5] or 0),
+                bullish_count=int(row[6] or 0),
+                neutral_count=int(row[7] or 0),
+                bearish_count=int(row[8] or 0),
+                sentiment_momentum_1d=row[9],
+                unusual_volume_flag=bool(row[10]),
+            )
+            for row in self.conn.execute(
+                """
+                SELECT
+                    asset_id,
+                    ticker,
+                    date,
+                    retail_sentiment_score,
+                    reddit_post_count,
+                    x_post_count,
+                    bullish_count,
+                    neutral_count,
+                    bearish_count,
+                    sentiment_momentum_1d,
+                    unusual_volume_flag
+                FROM ticker_sentiment_daily
+                WHERE retail_sentiment_score IS NOT NULL
+                   OR reddit_post_count > 0
+                   OR x_post_count > 0
+                ORDER BY date DESC, reddit_post_count + x_post_count DESC, ticker
+                LIMIT ?
+                """,
+                [limit],
+            ).fetchall()
+        ]
+        recent_posts = [
+            RetailSentimentPost(
+                provider=row[0],
+                source_name=row[1],
+                ticker=row[2],
+                asset_id=row[3],
+                title=row[4],
+                body=row[5],
+                url=row[6],
+                published_at=row[7],
+                score=row[8],
+                comment_count=row[9],
+                like_count=row[10],
+                repost_count=row[11],
+                reply_count=row[12],
+                relevance_score=float(row[13]),
+            )
+            for row in self.conn.execute(
+                """
+                SELECT
+                    p.provider,
+                    p.source_name,
+                    m.ticker,
+                    m.asset_id,
+                    p.title,
+                    p.body,
+                    p.url,
+                    p.published_at,
+                    p.score,
+                    p.comment_count,
+                    p.like_count,
+                    p.repost_count,
+                    p.reply_count,
+                    m.relevance_score
+                FROM social_post p
+                JOIN social_post_asset_mention m ON m.post_id = p.post_id
+                WHERE p.provider IN ('reddit', 'x')
+                ORDER BY COALESCE(p.published_at, p.fetched_at) DESC
+                LIMIT ?
+                """,
+                [limit],
+            ).fetchall()
+        ]
+        return RetailSentimentStatusResponse(
+            providers=[
+                RetailSentimentProviderStatus(
+                    provider=provider,
+                    configured=_retail_provider_configured(provider),
+                    post_count=post_stats.get(provider, (0, None))[0],
+                    latest_post_at=post_stats.get(provider, (0, None))[1],
+                    open_jobs=sum(job_stats.get(provider, {}).get(status, (0, None))[0] for status in ["pending", "running"]),
+                    failed_jobs=job_stats.get(provider, {}).get("failed", (0, None))[0],
+                    latest_error=job_stats.get(provider, {}).get("failed", (0, None))[1],
+                )
+                for provider in providers
+            ],
+            latest_snapshots=latest_snapshots,
+            recent_posts=recent_posts,
+            pending_jobs=sum(job_stats.get(provider, {}).get("pending", (0, None))[0] for provider in providers),
+            running_jobs=sum(job_stats.get(provider, {}).get("running", (0, None))[0] for provider in providers),
+            failed_jobs=sum(job_stats.get(provider, {}).get("failed", (0, None))[0] for provider in providers),
+        )
+
     def ingestion_readiness(self) -> list[IngestionAssetReadiness]:
         asset_ids = TickerUniverseRepository(self.conn).ingestible_asset_ids(
             include_watchlist=True
@@ -6902,7 +7293,12 @@ class CommandApiService(BrokerCommands, IngestionCommands):
             requirements: list[IngestionRequirementStatus] = []
             missing: list[str] = []
             for factor in factors:
-                ranking = portfolio_service._stock_ranking_item(row, factor=factor, timeframe="monthly")
+                ranking = portfolio_service._stock_ranking_item(
+                    row,
+                    factor=factor,
+                    timeframe="monthly",
+                    include_retail_sentiment=False,
+                )
                 ready = ranking.data_status == "complete"
                 detail = (
                     "complete"
@@ -7178,6 +7574,17 @@ def _float_or_none(value) -> float | None:
     return float(value) if value is not None else None
 
 
+def _retail_provider_configured(provider: str) -> bool:
+    if provider == "reddit":
+        return all(
+            os.getenv(name)
+            for name in ["REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET", "REDDIT_USER_AGENT"]
+        )
+    if provider == "x":
+        return bool(os.getenv("X_BEARER_TOKEN"))
+    return False
+
+
 def _signal_status(data_status: str, strength: float, confidence: float, data_as_of: date | None) -> str:
     if data_status != "complete" or data_as_of is None:
         return "unavailable"
@@ -7340,11 +7747,17 @@ def _signal_lifecycle(row: SignalRow) -> list[SignalLifecycleEvent]:
     ]
 
 
-def _signals_methodology() -> str:
+def _signals_methodology(*, include_retail_sentiment: bool = False) -> str:
+    retail_note = (
+        " Retail sentiment is included as an optional social-attention add-on; it can support or challenge the institutional and analyst-style inputs, but it is not treated as their equal."
+        if include_retail_sentiment
+        else " Retail sentiment is excluded from this signal view unless the optional social-attention add-on is enabled."
+    )
     return (
         "Signals are deterministic server-side evaluations adapted from stored ranking inputs. "
         "Strength measures normalized signal magnitude, confidence measures input coverage, and portfolio priority combines strength, confidence, position weight, and number of affected portfolios. "
         "Historical efficacy is shown only when prior point-in-time evaluations are available."
+        f"{retail_note}"
     )
 
 
@@ -7829,14 +8242,24 @@ def _stock_sell_sort_key(item: StockRankingItem):
     )
 
 
-def _stock_ranking_methodology(factor: str, universe: str, timeframe: str = "monthly") -> str:
+def _stock_ranking_methodology(
+    factor: str,
+    universe: str,
+    timeframe: str = "monthly",
+    include_retail_sentiment: bool = False,
+) -> str:
     scope = "tracked stocks" if universe == "tracked" else "the available stock catalog"
     label = _STOCK_RANKING_LABELS[factor]
     window = _STOCK_RANKING_TIMEFRAME_LABELS[timeframe]
     if factor == "aggregate":
+        retail = (
+            " Retail sentiment is included as a small 10% social-attention add-on."
+            if include_retail_sentiment
+            else " Retail sentiment is excluded; enable it when you want social crowd tone to lightly influence the rating."
+        )
         return (
-            f"Ranks {scope} by the {window} average of complete price momentum, news sentiment, retail sentiment, "
-            "earnings momentum, and institutional buying inputs."
+            f"Ranks {scope} by a weighted {window} blend of price momentum, news sentiment, "
+            f"earnings momentum, and institutional buying inputs.{retail}"
         )
     if factor == "share_price_momentum":
         return (
@@ -7849,6 +8272,30 @@ def _stock_ranking_methodology(factor: str, universe: str, timeframe: str = "mon
     if factor == "earnings_momentum":
         return f"Ranks {scope} by stored income statement growth and latest earnings surprise data."
     return f"Ranks {scope} by {label.lower()} using stored institutional flow or local accumulation proxy data."
+
+
+def _retail_sentiment_label(score: float | None) -> str:
+    if score is None:
+        return "No social data"
+    if score >= 0.35:
+        return "Strongly bullish"
+    if score >= 0.12:
+        return "Bullish"
+    if score <= -0.35:
+        return "Strongly bearish"
+    if score <= -0.12:
+        return "Bearish"
+    return "Mixed"
+
+
+def _retail_sentiment_confidence(source_count: int, snapshot_date: date | datetime | None) -> float:
+    if source_count <= 0 or snapshot_date is None:
+        return 0.0
+    coverage = min(1.0, source_count / 20.0)
+    observed_date = snapshot_date.date() if isinstance(snapshot_date, datetime) else snapshot_date
+    age_days = max(0, (date.today() - observed_date).days)
+    freshness = 1.0 if age_days <= 1 else 0.75 if age_days <= 7 else 0.45 if age_days <= 30 else 0.2
+    return round(coverage * freshness, 3)
 
 
 def _stock_momentum_scale(timeframe: str) -> float:

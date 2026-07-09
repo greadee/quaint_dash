@@ -13,6 +13,10 @@ from dashboard.ingestion_sentiment.constants import (
     JOB_TYPE_SENTIMENT_REDDIT_REFRESH,
     JOB_TYPE_SENTIMENT_X_REFRESH,
 )
+from dashboard.ingestion_sentiment.providers.provider_registry import (
+    default_news_providers,
+    default_social_providers,
+)
 from dashboard.ingestion_sentiment.repo import SentimentIngestionRepository
 from dashboard.ingestion_sentiment.service import SentimentIngestionService
 
@@ -25,14 +29,20 @@ class SentimentIngestionWorker:
     ) -> None:
         self.conn = conn
         self.repo = SentimentIngestionRepository(conn)
-        self.service = service or SentimentIngestionService(conn)
+        self.service = service or SentimentIngestionService(
+            conn,
+            news_providers=default_news_providers(),
+            social_providers=default_social_providers(),
+        )
 
     def process_jobs(self, max_jobs: int = 1) -> int:
         processed = 0
-        while processed < max_jobs:
+        attempted = 0
+        while attempted < max_jobs:
             job = self.repo.claim_next_pending_job()
             if job is None:
                 break
+            attempted += 1
 
             try:
                 self._process_job(job)

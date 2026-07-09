@@ -8,6 +8,7 @@ const apiMock = vi.hoisted(() => ({
   ingestionBackgroundStatus: vi.fn(),
   ingestionReadiness: vi.fn(),
   rankingReadiness: vi.fn(),
+  retailSentimentStatus: vi.fn(),
   scheduleIngestion: vi.fn(),
   runIngestion: vi.fn(),
   retryFailedIngestion: vi.fn(),
@@ -118,15 +119,75 @@ describe("OperationsPage", () => {
       total: 1,
       ready_count: 0,
     });
+    apiMock.retailSentimentStatus.mockResolvedValue({
+      providers: [
+        {
+          provider: "reddit",
+          configured: true,
+          post_count: 3,
+          latest_post_at: "2026-06-18T11:00:00Z",
+          open_jobs: 1,
+          failed_jobs: 0,
+          latest_error: null,
+        },
+        {
+          provider: "x",
+          configured: false,
+          post_count: 0,
+          latest_post_at: null,
+          open_jobs: 0,
+          failed_jobs: 1,
+          latest_error: "X provider requires X_BEARER_TOKEN.",
+        },
+      ],
+      latest_snapshots: [
+        {
+          asset_id: "AMD",
+          ticker: "AMD",
+          date: "2026-06-18",
+          retail_sentiment_score: 0.42,
+          reddit_post_count: 3,
+          x_post_count: 0,
+          bullish_count: 2,
+          neutral_count: 1,
+          bearish_count: 0,
+          sentiment_momentum_1d: 0.12,
+          unusual_volume_flag: false,
+        },
+      ],
+      recent_posts: [
+        {
+          provider: "reddit",
+          source_name: "r/stocks",
+          ticker: "AMD",
+          asset_id: "AMD",
+          title: "$AMD earnings thread",
+          body: "Bullish on AMD",
+          url: "https://reddit.test/post",
+          published_at: "2026-06-18T11:00:00Z",
+          score: 42,
+          comment_count: 7,
+          like_count: null,
+          repost_count: null,
+          reply_count: null,
+          relevance_score: 1,
+        },
+      ],
+      pending_jobs: 1,
+      running_jobs: 0,
+      failed_jobs: 1,
+    });
 
     renderOperations();
 
     expect(await screen.findByRole("heading", { name: "Operations" })).toBeInTheDocument();
     expect(await screen.findByText("Routine ingestion worker")).toBeInTheDocument();
+    expect(await screen.findByText("Social sentiment ingestion")).toBeInTheDocument();
     expect(screen.getByText("Projection input readiness")).toBeInTheDocument();
     expect(screen.getByText("Ranking input readiness")).toBeInTheDocument();
     expect(screen.getAllByText("NVDA")).toHaveLength(2);
     expect(screen.getByText("MSFT")).toBeInTheDocument();
+    expect(screen.getByText("$AMD earnings thread")).toBeInTheDocument();
     expect(screen.getByText("provider timeout")).toBeInTheDocument();
   });
 });

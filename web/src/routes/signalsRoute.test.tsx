@@ -173,6 +173,17 @@ describe("Signals routes", () => {
     expect(apiMock.signals).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "confidence" }));
   });
 
+  it("lets retail sentiment be included as an optional signal add-on", async () => {
+    const user = userEvent.setup();
+
+    renderWithQuery(<StockRankingsPage notify={vi.fn()} />);
+
+    expect(await screen.findByRole("heading", { name: "Signals" })).toBeInTheDocument();
+    await user.click(screen.getByLabelText("Include retail add-on"));
+
+    expect(apiMock.signals).toHaveBeenLastCalledWith(expect.objectContaining({ include_retail_sentiment: "true" }));
+  });
+
   it("renders signal detail lifecycle", async () => {
     renderSignalDetail();
 

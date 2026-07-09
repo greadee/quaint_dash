@@ -159,6 +159,7 @@ class IngestionBackgroundWorker:
                         universe="tracked",
                         direction="buy",
                         timeframe="monthly",
+                        include_retail_sentiment=False,
                         limit=self.config.max_assets_per_schedule,
                         offset=0,
                     )
