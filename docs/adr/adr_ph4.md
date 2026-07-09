@@ -1,5 +1,9 @@
 # Phase 4 - Broker Sync
 
+> 2026-07-09 audit note: The read-only SnapTrade design remains current. The API periodic broker
+> background worker now defaults safe-off and must be enabled with `BROKER_SYNC_BACKGROUND_ENABLED`,
+> documented in [ADR PH9](adr_ph9_current_architecture_safety.md) and [the ADR index](index.md).
+
 ## ADR-068: Read-Only Broker Sync Through SnapTrade
 
 **Decision:** Phase 4 broker connectivity will use SnapTrade first, with read-only account linking only.

@@ -1,7 +1,9 @@
 # Investment Dashboard Project
 Author: Connor Proulx
 
-Terminal-based portfolio management dashboard built in Python. The system allows users to create and manage portfolios, track transactions, view actively held positions.
+Local-first investment dashboard built in Python, DuckDB, FastAPI, and React. The system allows
+users to create and manage portfolios, track transactions and positions, run analytics, ingest
+market/provider data, inspect broker sync state, and review the dashboard in a browser.
 
 The project emphasizes separation of concerns, function-dependent layers, UML class diagrams, architecture decision records, CI-backed testing, and phase planning.
 
@@ -26,6 +28,11 @@ python -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
+Or use the project wrapper, which also installs web dependencies:
+
+```cmd
+scripts\qd.cmd setup
+```
 #### (Dev) Linting and testing:
 ```
 ruff check 
@@ -33,6 +40,29 @@ pytest
 ```
 <br>
 
+## Contributor Docs
+
+- [Contributor onboarding](docs/onboarding.md)
+- [Environment setup](docs/environment_setup.md)
+- [Testing and verification](docs/testing.md)
+- [Codebase map](docs/codebase_map.md)
+- [Architecture overview](docs/architecture.md)
+- [Current schema ER diagrams](docs/erd/current_schema.md)
+- [Data safety checklist](docs/data_safety.md)
+- [ADR index](docs/adr/index.md)
+- [Documentation pass evidence](docs/evidence/2026-07-09-docs-safety-architecture-pass.md)
+
+The fastest local workflows are:
+
+```cmd
+scripts\qd.cmd api
+scripts\qd.cmd web
+scripts\qd.cmd verify
+scripts\qd.cmd smoke
+```
+
+Copy `.env.example` to `.env` for local credentials. Keep `.env`, local databases, logs, and raw
+broker/provider exports out of Git.
 
 ## Usage 
 
@@ -148,6 +178,12 @@ dashboard           # or python -m dashboard
 ---
 <br>
 
+### Current architecture and safety baseline
+
+The current API/web/schema/safety baseline is captured in
+[ADR PH9](docs/adr/adr_ph9_current_architecture_safety.md). The normalized ADR status table is in
+[docs/adr/index.md](docs/adr/index.md).
+
 ## Diagrams
 
 
@@ -170,6 +206,8 @@ App Architecture:
 - [Ingestion and fundamentals ER](docs/erd/to-display/erd_ph2_ingestion.svg)
 - [Live price and trading calendar ER](docs/erd/to-display/erd_ph2_live_calendar.svg)
 - [Benchmark index ER](docs/erd/to-display/erd_ph2_benchmarks.svg)
+- [Current schema ER diagrams](docs/erd/current_schema.md)
+- [Current architecture and process diagrams](docs/architecture.md)
 
 ## License: 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)

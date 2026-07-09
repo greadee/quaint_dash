@@ -17,7 +17,7 @@ LOGGER = logging.getLogger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class BrokerBackgroundConfig:
-    enabled: bool = True
+    enabled: bool = False
     interval_seconds: int = 3600
     min_age_hours: int = 1
     max_users: int | None = None
@@ -25,7 +25,7 @@ class BrokerBackgroundConfig:
     @classmethod
     def from_env(cls) -> "BrokerBackgroundConfig":
         return cls(
-            enabled=_truthy_env("BROKER_SYNC_BACKGROUND_ENABLED", default=True),
+            enabled=_truthy_env("BROKER_SYNC_BACKGROUND_ENABLED", default=False),
             interval_seconds=_int_env("BROKER_SYNC_BACKGROUND_INTERVAL_SECONDS", 3600) or 3600,
             min_age_hours=_int_env("BROKER_SYNC_MIN_AGE_HOURS", 1) or 1,
             max_users=_int_env("BROKER_SYNC_MAX_USERS"),

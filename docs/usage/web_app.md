@@ -164,11 +164,15 @@ priority combines strength, confidence, current position weight, and affected po
 Historical efficacy is shown only when enough prior point-in-time evaluations exist; otherwise the
 response reports sample size zero and withholds performance claims.
 
-## Startup Sync
+## Startup And Background Sync
 
 Set `BROKER_SYNC_ON_SERVER_STARTUP=true` to run the same stale-user broker sync used by
 `broker snaptrade sync-due` when the backend starts. `BROKER_SYNC_MAX_USERS` and
 `BROKER_SYNC_MIN_AGE_HOURS` control the launch-time sync window.
+
+Set `BROKER_SYNC_BACKGROUND_ENABLED=true` only when the running API process should periodically
+run broker `sync-due`. The committed default is safe-off so provider calls do not start just
+because credentials are configured.
 
 ## Routine Ingestion Worker
 

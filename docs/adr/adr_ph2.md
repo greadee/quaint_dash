@@ -1,5 +1,11 @@
 # Phase 2 - Metric Ingestion
 
+> 2026-07-09 audit note: Most Phase 2 ingestion decisions are implemented and still current. Some
+> provider roles have expanded since this file was written: yfinance now also supports market
+> freshness and benchmark proxy fallback, and the broader current provider/worker safety baseline is
+> documented in [ADR PH9](adr_ph9_current_architecture_safety.md) and
+> [the ADR index](index.md).
+
 ## ADR-012: Choice of Data Provider(s)
 
 **Decision:** Use Finnhub for semi-real time ticker data and news, and FMP for ticker metadata, earnings, historical data, etc.

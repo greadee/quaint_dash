@@ -6541,7 +6541,7 @@ class CommandApiService(BrokerCommands, IngestionCommands):
         min_age_hours = int(os.getenv("BROKER_SYNC_MIN_AGE_HOURS", "1") or "1")
         last_success = last_row[1] if last_row else None
         next_eligible = last_success + timedelta(hours=min_age_hours) if last_success else None
-        scheduled_enabled = os.getenv("BROKER_SYNC_BACKGROUND_ENABLED", "true").strip().lower() not in {
+        scheduled_enabled = os.getenv("BROKER_SYNC_BACKGROUND_ENABLED", "false").strip().lower() not in {
             "0",
             "false",
             "no",

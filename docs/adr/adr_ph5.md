@@ -1,5 +1,10 @@
 # Phase 5 - API-First Web Application
 
+> 2026-07-09 audit note: The local-first API and backend-owned analytics decisions remain current.
+> Current onboarding, diagrams, schema scope, worker defaults, and safety posture are consolidated
+> in [ADR PH9](adr_ph9_current_architecture_safety.md), [the ADR index](index.md), and
+> `docs/architecture.md`.
+
 ## ADR-076: Local-First API and Web Client
 
 **Decision:** Phase 5 introduces a versioned FastAPI backend and standalone React/TypeScript
