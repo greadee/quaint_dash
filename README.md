@@ -47,6 +47,9 @@ pytest
 - [Testing and verification](docs/testing.md)
 - [Codebase map](docs/codebase_map.md)
 - [Architecture overview](docs/architecture.md)
+- [Phase 1 feature and widget inventory](docs/planning/feature_widget_segmentation_plan.md)
+- [Phase 1.5 architecture blueprint](docs/architecture/README.md)
+- [Contributing guide](CONTRIBUTING.md)
 - [Current schema ER diagrams](docs/erd/current_schema.md)
 - [Data safety checklist](docs/data_safety.md)
 - [ADR index](docs/adr/index.md)
@@ -63,6 +66,9 @@ scripts\qd.cmd smoke
 
 Copy `.env.example` to `.env` for local credentials. Keep `.env`, local databases, logs, and raw
 broker/provider exports out of Git.
+
+Before broad feature refactors, use the Phase 1.5 blueprint to identify the target module owner,
+allowed dependencies, compatibility adapter, and verification path.
 
 ## Usage 
 

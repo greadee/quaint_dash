@@ -1,0 +1,14 @@
+flowchart TB
+  Scheduler["Scheduler/worker tick"]
+  Command["Operations command\nRunIngestionJob"]
+  Providers["Provider adapters"]
+  Normalize["Normalize + validate"]
+  Persist["Repository write"]
+  Readiness["Readiness/freshness update"]
+  Status["Operations status contract"]
+  UI["Operations page"]
+
+  Scheduler --> Command
+  UI --> Command
+  Command --> Providers --> Normalize --> Persist --> Readiness --> Status --> UI
+

@@ -1,0 +1,15 @@
+flowchart TB
+  Request["Insight request\nsubject ids"]
+  Evidence["Evidence references\nmetrics/news/freshness"]
+  Deterministic["Deterministic use cases"]
+  Prompt["Prompt/template builder"]
+  Model["Model provider adapter"]
+  Insight["AIInsight contract\ntext + model + evidence"]
+  UI["Platform display"]
+
+  Request --> Evidence
+  Evidence --> Deterministic
+  Deterministic --> Prompt
+  Prompt --> Model --> Insight --> UI
+  Deterministic --> Insight
+

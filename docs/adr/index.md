@@ -98,11 +98,17 @@ Status vocabulary: Proposed, Accepted, Implemented, Superseded, Deprecated, Reje
 | ADR PH7 | Deterministic business strength scorecard and sector-aware templates | Accepted | Current |  | business strength migration/service/docs |
 | ADR PH8 | Provider-neutral financial news terminal | Accepted | Current |  | `docs/news_terminal.md`, news migration/service/tests |
 | ADR PH9 | Current architecture documentation and safe local operations | Accepted | Current |  | docs added in this pass, `.env.example`, worker defaults |
+| ADR PH10 | Modular boundary blueprint for Phase 1.5 | Accepted | Current |  | `docs/architecture/README.md`, boundary check, pilot report |
+| ADR PH11 | Operations status application boundary | Accepted | Current |  | `src/dashboard/application/operations.py`, Operations API tests |
 
 ## Supersession notes
 
 - ADR PH9 does not delete or rewrite historical ADRs. It supersedes stale onboarding and diagram
   assumptions by documenting the current API/web/schema/safety baseline.
+- ADR PH10 does not replace PH9. It uses the PH9 current-state baseline and Phase 1 inventory to
+  define target module boundaries, dependency rules, and the Phase 2 migration sequence.
+- ADR PH11 implements the first PH10 migration slice for Operations/Data Quality read-status
+  queries without changing API response semantics.
 - ADR-041 is partially superseded in practice because yfinance now does more than gap repair:
   current market freshness and benchmark proxy fallback use it.
 - ADR-073 remains true for explicit broker sync scheduling, but the API periodic background worker

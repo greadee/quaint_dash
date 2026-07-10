@@ -1,0 +1,16 @@
+flowchart LR
+  Client["web/mobile/desktop/AI clients"]
+  Compat["Current compatibility routes\n/api/v1/current paths"]
+  V2["Future capability APIs\n/api/v2/*"]
+  App["Application queries/commands"]
+  Domain["Domain modules"]
+  Infra["Repositories/providers"]
+
+  Client --> Compat
+  Client --> V2
+  Compat -. transitional facade .-> App
+  V2 --> App
+  App --> Domain
+  App -. interfaces .-> Infra
+  Infra --> Domain
+

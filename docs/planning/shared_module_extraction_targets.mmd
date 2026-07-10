@@ -1,0 +1,45 @@
+flowchart TB
+    subgraph Current["Current implementation"]
+      UIUtils["Frontend utilities\ncomparisonUtils\nbenchmarkUtils\nbrokerUtils"]
+      RouteComponents["Route-local widgets"]
+      ApiServices["Large API service classes"]
+      DomainServices["Analytics/news/broker/ingestion/business-strength services"]
+      ApiModels["Pydantic response models"]
+      TsTypes["web/src/api.ts types"]
+    end
+
+    subgraph Shared["Shared future modules"]
+      Contracts["Shared contracts\nDTOs and schemas"]
+      ViewModels["Platform-neutral view models"]
+      AnalyticsMeta["Metric definitions\nformulas\nrank semantics"]
+      RankingDomain["Ranking and signal domain service"]
+      WorkerCommands["Operation command DTOs\naudit and confirmation"]
+      ProviderAdapters["Provider-neutral adapters"]
+    end
+
+    subgraph Platforms["Platform adapters"]
+      Web["Existing React web"]
+      Mobile["Simplified mobile"]
+      Desktop["Advanced desktop"]
+      AI["AI and analytical services"]
+    end
+
+    ApiModels --> Contracts
+    TsTypes --> Contracts
+    UIUtils --> ViewModels
+    UIUtils --> AnalyticsMeta
+    RouteComponents --> ViewModels
+    ApiServices --> RankingDomain
+    ApiServices --> WorkerCommands
+    DomainServices --> ProviderAdapters
+    Contracts --> Web
+    Contracts --> Mobile
+    Contracts --> Desktop
+    Contracts --> AI
+    ViewModels --> Web
+    ViewModels --> Mobile
+    ViewModels --> Desktop
+    AnalyticsMeta --> AI
+    RankingDomain --> AI
+    WorkerCommands --> Web
+    WorkerCommands --> Desktop

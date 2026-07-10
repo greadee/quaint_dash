@@ -3,6 +3,11 @@
 This document reflects the current implementation in `src/dashboard`, `web/src`,
 `src/dashboard/db/schema.sql`, and `src/dashboard/db/migrations/`.
 
+For the Phase 1.5 target module boundaries, ownership matrix, dependency rules,
+public interface catalog, migration sequence, and diagrams, see
+[docs/architecture/README.md](architecture/README.md). This page remains the
+current-state architecture overview.
+
 ## Local-first system
 
 ```mermaid

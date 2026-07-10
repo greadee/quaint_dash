@@ -1,0 +1,42 @@
+flowchart TB
+  subgraph Legend
+    A[Allowed dependency direction]
+    T[Transitional compatibility]
+  end
+  subgraph Platforms
+    Web["Web app"]
+    Desktop["Future desktop"]
+    Mobile["Future mobile"]
+  end
+  subgraph Adapters
+    Api["API adapter\nFastAPI compatibility + v2"]
+    Workers["Worker adapters"]
+    AIAdapter["AI orchestration adapter"]
+  end
+  subgraph Core
+    Contracts["Contracts\nids, DTOs, provenance"]
+    Application["Application use cases\nqueries/commands"]
+    Domain["Domain modules\nbusiness rules/models"]
+  end
+  subgraph Infrastructure
+    Repos["Repository implementations"]
+    Providers["Provider adapters"]
+    Cache["Cache/config/observability"]
+  end
+  Web --> Api
+  Desktop --> Api
+  Desktop --> Application
+  Mobile --> Api
+  Api --> Contracts
+  Api --> Application
+  Workers --> Application
+  AIAdapter --> Application
+  AIAdapter --> Contracts
+  Application --> Contracts
+  Application --> Domain
+  Infrastructure --> Application
+  Repos --> Domain
+  Providers --> Contracts
+  Cache --> Application
+  Application -. interfaces .-> Infrastructure
+

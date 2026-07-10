@@ -1,0 +1,44 @@
+flowchart LR
+    Web["web/src/api.ts\nfetch /api/v1"] --> Routes["FastAPI routes.py"]
+    Routes --> PortfolioSvc["PortfolioApiService"]
+    Routes --> AssetSvc["AssetApiService"]
+    Routes --> CompareSvc["ComparisonApiService"]
+    Routes --> BenchmarkSvc["BenchmarkApiService"]
+    Routes --> CommandSvc["CommandApiService"]
+    Routes --> NewsSvc["NewsApiService"]
+    Routes --> BizSvc["BusinessStrengthAnalyzer"]
+    Routes --> Workers["app.state workers"]
+
+    PortfolioSvc --> PortfolioTables[("portfolio\nposition\ntxn\nwatchlist")]
+    PortfolioSvc --> Analytics["analytics calculations"]
+    PortfolioSvc --> Signals["ranking and signal helpers"]
+    PortfolioSvc --> Sentiment[("sentiment and factor tables")]
+
+    AssetSvc --> AssetTables[("asset\nstock_catalog\nasset_quote_daily\ncurrent_asset_price")]
+    AssetSvc --> AnalyticsEngine["AnalyticsEngine"]
+
+    CompareSvc --> AssetTables
+    CompareSvc --> BenchmarkTables[("benchmark tables")]
+    CompareSvc --> Statements[("financial_statement\nfundamental_sync_state")]
+    CompareSvc --> FX[("fx_rate")]
+
+    BenchmarkSvc --> BenchmarkTables
+    BenchmarkSvc --> IndexScheduler["BenchmarkIndexScheduler"]
+    IndexScheduler --> IndexProviders["FMP/yfinance index providers"]
+
+    CommandSvc --> BrokerDomain["brokers/*"]
+    CommandSvc --> IngestionDomain["ingestion/*"]
+    CommandSvc --> SentimentDomain["ingestion_sentiment/*"]
+    CommandSvc --> OpsTables[("ingestion_job\nsync state tables")]
+
+    NewsSvc --> NewsDomain["news/*"]
+    NewsDomain --> NewsTables[("news tables")]
+
+    BizSvc --> BizTables[("business_strength tables")]
+    BizSvc --> Statements
+
+    Workers --> CommandSvc
+    Workers --> MarketFreshness["MarketFreshnessWorker"]
+    Workers --> DataReadiness["DataReadinessWorker"]
+    MarketFreshness --> AssetTables
+    DataReadiness --> Statements

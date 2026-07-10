@@ -1,0 +1,27 @@
+flowchart TB
+  subgraph ClientTrust["Client trust boundary"]
+    Browser["Browser web UI"]
+    Desktop["Desktop UI future"]
+    Mobile["Mobile UI future"]
+  end
+  subgraph ServerTrust["Server/backend boundary"]
+    API["API"]
+    App["Application/domain"]
+    DB["Database"]
+    Workers["Workers"]
+    AIOrch["AI orchestrator"]
+  end
+  subgraph External["External boundary"]
+    Providers["Market/news/broker providers"]
+    AIProvider["AI provider future"]
+  end
+
+  Browser --> API
+  Desktop --> API
+  Mobile --> API
+  API --> App --> DB
+  Workers --> App
+  Workers --> Providers
+  AIOrch --> App
+  AIOrch -. consent + redaction required .-> AIProvider
+

@@ -5,6 +5,7 @@ from threading import Lock
 
 from fastapi import APIRouter, Depends, Query, Request, status
 
+from dashboard.application.operations import OperationsStatusQueries
 from dashboard.api.dependencies import get_connection
 from dashboard.api.models import (
     ActionResult,
@@ -107,6 +108,14 @@ from dashboard.services.business_strength import BusinessStrengthAnalyzer, Busin
 from dashboard.services.business_strength.models import METHODOLOGY_VERSION
 
 router = APIRouter(prefix="/api/v1")
+
+
+def _operations_status_queries(request: Request) -> OperationsStatusQueries:
+    return OperationsStatusQueries(
+        ingestion_background_worker=request.app.state.ingestion_background_worker,
+        market_freshness_worker=request.app.state.market_freshness_worker,
+        data_readiness_worker=request.app.state.data_readiness_worker,
+    )
 
 
 @router.get("/portfolios", response_model=list[PortfolioSummary])
@@ -1044,7 +1053,7 @@ def ingestion_clear_history(request: Request, conn=Depends(get_connection)):
 
 @router.get("/ingestion/background/status", response_model=IngestionBackgroundStatusResponse)
 def ingestion_background_status(request: Request):
-    return request.app.state.ingestion_background_worker.status()
+    return _operations_status_queries(request).ingestion_background_status()
 
 
 @router.post("/ingestion/background/start", response_model=ActionResult)
@@ -1067,7 +1076,7 @@ async def ingestion_background_tick(request: Request):
 
 @router.get("/market/freshness/status", response_model=MarketFreshnessStatusResponse)
 def market_freshness_status(request: Request):
-    return request.app.state.market_freshness_worker.status()
+    return _operations_status_queries(request).market_freshness_status()
 
 
 @router.post("/market/freshness/start", response_model=ActionResult)
@@ -1138,7 +1147,7 @@ def market_streaming_status(conn=Depends(get_connection)):
 
 @router.get("/data/readiness/status", response_model=DataReadinessWorkerStatusResponse)
 def data_readiness_status(request: Request):
-    return request.app.state.data_readiness_worker.status()
+    return _operations_status_queries(request).data_readiness_status()
 
 
 @router.post("/data/readiness/start", response_model=ActionResult)

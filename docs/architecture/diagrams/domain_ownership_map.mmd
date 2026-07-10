@@ -1,0 +1,37 @@
+flowchart TB
+  Portfolio["Portfolio"]
+  Holdings["Holdings"]
+  Transactions["Transactions"]
+  Assets["Asset Research"]
+  Market["Market Prices"]
+  Fundamentals["Fundamentals"]
+  Valuation["Valuation"]
+  Perf["Performance Analytics"]
+  Risk["Risk Analytics"]
+  Bench["Benchmarking"]
+  News["News"]
+  Sentiment["Sentiment"]
+  Strength["Business Strength"]
+  Ops["Operations/Data Quality"]
+  AI["AI Insights"]
+
+  Portfolio --> Holdings
+  Portfolio --> Perf
+  Holdings --> Market
+  Holdings --> Strength
+  Transactions --> Portfolio
+  Assets --> Market
+  Assets --> Fundamentals
+  Assets --> News
+  Fundamentals --> Valuation
+  Fundamentals --> Strength
+  Perf --> Market
+  Risk --> Market
+  Bench --> Market
+  News --> Sentiment
+  Ops --> Market
+  Ops --> Fundamentals
+  AI --> Assets
+  AI --> News
+  AI --> Perf
+
