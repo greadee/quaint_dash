@@ -5,7 +5,7 @@ from threading import Lock
 
 from fastapi import APIRouter, Depends, Query, Request, status
 
-from dashboard.application.operations import OperationsStatusQueries
+from dashboard.application.operations import OperationsStatusQueries, OperationsWorkerCommands
 from dashboard.api.dependencies import get_connection
 from dashboard.api.models import (
     ActionResult,
@@ -112,6 +112,14 @@ router = APIRouter(prefix="/api/v1")
 
 def _operations_status_queries(request: Request) -> OperationsStatusQueries:
     return OperationsStatusQueries(
+        ingestion_background_worker=request.app.state.ingestion_background_worker,
+        market_freshness_worker=request.app.state.market_freshness_worker,
+        data_readiness_worker=request.app.state.data_readiness_worker,
+    )
+
+
+def _operations_worker_commands(request: Request) -> OperationsWorkerCommands:
+    return OperationsWorkerCommands(
         ingestion_background_worker=request.app.state.ingestion_background_worker,
         market_freshness_worker=request.app.state.market_freshness_worker,
         data_readiness_worker=request.app.state.data_readiness_worker,
@@ -1058,19 +1066,19 @@ def ingestion_background_status(request: Request):
 
 @router.post("/ingestion/background/start", response_model=ActionResult)
 async def ingestion_background_start(request: Request):
-    request.app.state.ingestion_background_worker.enable()
-    return ActionResult(result=request.app.state.ingestion_background_worker.status())
+    result = _operations_worker_commands(request).start_ingestion_background()
+    return ActionResult(result=result)
 
 
 @router.post("/ingestion/background/stop", response_model=ActionResult)
 async def ingestion_background_stop(request: Request):
-    await request.app.state.ingestion_background_worker.disable()
-    return ActionResult(result=request.app.state.ingestion_background_worker.status())
+    result = await _operations_worker_commands(request).stop_ingestion_background()
+    return ActionResult(result=result)
 
 
 @router.post("/ingestion/background/tick", response_model=ActionResult)
 async def ingestion_background_tick(request: Request):
-    result = await request.app.state.ingestion_background_worker.tick()
+    result = await _operations_worker_commands(request).tick_ingestion_background()
     return ActionResult(result=result)
 
 
@@ -1081,19 +1089,19 @@ def market_freshness_status(request: Request):
 
 @router.post("/market/freshness/start", response_model=ActionResult)
 async def market_freshness_start(request: Request):
-    request.app.state.market_freshness_worker.enable()
-    return ActionResult(result=request.app.state.market_freshness_worker.status())
+    result = _operations_worker_commands(request).start_market_freshness()
+    return ActionResult(result=result)
 
 
 @router.post("/market/freshness/stop", response_model=ActionResult)
 async def market_freshness_stop(request: Request):
-    await request.app.state.market_freshness_worker.disable()
-    return ActionResult(result=request.app.state.market_freshness_worker.status())
+    result = await _operations_worker_commands(request).stop_market_freshness()
+    return ActionResult(result=result)
 
 
 @router.post("/market/freshness/tick", response_model=ActionResult)
 async def market_freshness_tick(request: Request):
-    result = await request.app.state.market_freshness_worker.tick()
+    result = await _operations_worker_commands(request).tick_market_freshness()
     return ActionResult(result=result)
 
 
@@ -1152,19 +1160,19 @@ def data_readiness_status(request: Request):
 
 @router.post("/data/readiness/start", response_model=ActionResult)
 async def data_readiness_start(request: Request):
-    request.app.state.data_readiness_worker.enable()
-    return ActionResult(result=request.app.state.data_readiness_worker.status())
+    result = _operations_worker_commands(request).start_data_readiness()
+    return ActionResult(result=result)
 
 
 @router.post("/data/readiness/stop", response_model=ActionResult)
 async def data_readiness_stop(request: Request):
-    await request.app.state.data_readiness_worker.disable()
-    return ActionResult(result=request.app.state.data_readiness_worker.status())
+    result = await _operations_worker_commands(request).stop_data_readiness()
+    return ActionResult(result=result)
 
 
 @router.post("/data/readiness/tick", response_model=ActionResult)
 async def data_readiness_tick(request: Request):
-    result = await request.app.state.data_readiness_worker.tick()
+    result = await _operations_worker_commands(request).tick_data_readiness()
     return ActionResult(result=result)
 
 

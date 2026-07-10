@@ -7,9 +7,9 @@
     "dev": "vite --configLoader native",
     "build": "tsc -b && vite build --configLoader native",
     "lint": "eslint .",
-    "test": "vitest run --configLoader native",
-    "test:watch": "vitest --configLoader native",
-    "test:coverage": "vitest run --configLoader native --coverage",
+    "test": "vitest run --config vite.config.ts --configLoader native",
+    "test:watch": "vitest --config vite.config.ts --configLoader native",
+    "test:coverage": "vitest run --config vite.config.ts --configLoader native --coverage",
     "test:e2e": "playwright test",
     "perf:signals": "node ../tools/profile_signals_browser.mjs"
   },

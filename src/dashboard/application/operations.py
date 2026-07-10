@@ -1,4 +1,4 @@
-"""Operations/Data Quality application queries."""
+"""Operations/Data Quality application use cases."""
 
 from __future__ import annotations
 
@@ -10,6 +10,19 @@ class WorkerStatusSource(Protocol):
 
     def status(self) -> Mapping[str, Any]:
         """Return the worker's current status snapshot."""
+
+
+class WorkerCommandSource(WorkerStatusSource, Protocol):
+    """Minimal interface for controllable process-local workers."""
+
+    def enable(self) -> None:
+        """Enable the worker for this process."""
+
+    async def disable(self) -> None:
+        """Disable and stop the worker for this process."""
+
+    async def tick(self) -> Mapping[str, Any]:
+        """Run one bounded work cycle."""
 
 
 class OperationsStatusQueries:
@@ -39,3 +52,49 @@ class OperationsStatusQueries:
     def data_readiness_status(self) -> dict[str, Any]:
         return dict(self._data_readiness_worker.status())
 
+
+class OperationsWorkerCommands:
+    """Operations worker command use cases."""
+
+    def __init__(
+        self,
+        ingestion_background_worker: WorkerCommandSource,
+        market_freshness_worker: WorkerCommandSource,
+        data_readiness_worker: WorkerCommandSource,
+    ) -> None:
+        self._ingestion_background_worker = ingestion_background_worker
+        self._market_freshness_worker = market_freshness_worker
+        self._data_readiness_worker = data_readiness_worker
+
+    def start_ingestion_background(self) -> dict[str, Any]:
+        self._ingestion_background_worker.enable()
+        return dict(self._ingestion_background_worker.status())
+
+    async def stop_ingestion_background(self) -> dict[str, Any]:
+        await self._ingestion_background_worker.disable()
+        return dict(self._ingestion_background_worker.status())
+
+    async def tick_ingestion_background(self) -> dict[str, Any]:
+        return dict(await self._ingestion_background_worker.tick())
+
+    def start_market_freshness(self) -> dict[str, Any]:
+        self._market_freshness_worker.enable()
+        return dict(self._market_freshness_worker.status())
+
+    async def stop_market_freshness(self) -> dict[str, Any]:
+        await self._market_freshness_worker.disable()
+        return dict(self._market_freshness_worker.status())
+
+    async def tick_market_freshness(self) -> dict[str, Any]:
+        return dict(await self._market_freshness_worker.tick())
+
+    def start_data_readiness(self) -> dict[str, Any]:
+        self._data_readiness_worker.enable()
+        return dict(self._data_readiness_worker.status())
+
+    async def stop_data_readiness(self) -> dict[str, Any]:
+        await self._data_readiness_worker.disable()
+        return dict(self._data_readiness_worker.status())
+
+    async def tick_data_readiness(self) -> dict[str, Any]:
+        return dict(await self._data_readiness_worker.tick())

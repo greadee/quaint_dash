@@ -105,6 +105,27 @@ Phase 1.5.
 - Output: accepted job/result summary and idempotency key.
 - Idempotency: required for external provider-sensitive jobs.
 
+### `OperationsWorkerCommands`
+
+- Owner: Operations/Data Quality.
+- Purpose: Start, stop, and run one bounded cycle for process-local Operations
+  workers.
+- Input: selected worker capability and authenticated operator context at the
+  API boundary.
+- Output: existing worker status or bounded tick result dictionaries wrapped by
+  the current `ActionResult` API model.
+- Error contract: unchanged worker/API exception behavior in this slice.
+- Sync or async behavior: start methods are synchronous; stop and tick methods
+  are async.
+- Freshness: command outputs may update worker status timestamps when the worker
+  implementation does so.
+- Idempotency: future requirement before non-web consumers use these commands.
+- Authorization: unchanged route-level responsibility for now; future command
+  contract must make operator authorization explicit.
+- Intended consumers: current web Operations page through existing `/api/v1`
+  endpoints; future admin automation through versioned contracts.
+- Exposure: internal application facade, not an external API contract yet.
+
 ## Preferences And Widgets
 
 ### `GetWidgetConfiguration`
@@ -132,4 +153,3 @@ Phase 1.5.
 - Output: `AIInsight` with text, evidence, model id, generated timestamp,
   confidence, limitations, and data freshness.
 - Rule: may not create or overwrite deterministic metrics.
-

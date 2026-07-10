@@ -16,6 +16,18 @@
 | Architecture-boundary tests | Validate forbidden imports and direction rules. | Repository-wide. |
 | AI contract tests | Validate evidence references, freshness, prompt version, and no metric mutation. | AI Insights. |
 
+## Web Test Configuration
+
+Vitest must use the tracked TypeScript Vite config explicitly:
+
+```cmd
+npm.cmd test
+```
+
+The package script pins `vite.config.ts` because an ignored generated
+`vite.config.js` can otherwise be selected by native config loading and resolve
+the setup file as `/src/test/setup.ts`.
+
 ## Module Requirements
 
 | Module | Required Tests Before Migration Completion |
@@ -39,4 +51,3 @@
 - UI tests mock API client responses, not backend internals.
 - AI tests use deterministic fake model providers and never call real providers
   in CI.
-

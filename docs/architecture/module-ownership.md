@@ -29,7 +29,7 @@ Every Phase 1 feature group has a target owner. Feature IDs are defined in
 | `OPS-002` routine worker status card | operations route/API/application facade | Operations/Data Quality | Background Jobs | Web Operations | Operations API/application query | Web/admin, status shared | View-model pilot and status query facade created | A started |
 | Market freshness card | operations route/API | Operations/Data Quality | Market Prices, Background Jobs | Web Operations | Operations API | Shared status, web/admin controls | Yes | A |
 | Projection/data readiness tables | operations route/API | Operations/Data Quality | Fundamentals, Portfolio, Valuation | Web Operations | Readiness API | Web/admin, shared status | Yes | A |
-| Manual refresh/retry controls | operations route/API | Operations/Data Quality | Background Jobs, Provider Adapters | Web Operations | Operations command API | Web/admin only | Yes | A |
+| Manual refresh/retry controls | operations route/API/application command facade | Operations/Data Quality | Background Jobs, Provider Adapters | Web Operations | Operations command API/application command | Web/admin only | Worker command facade created for start/stop/tick; broader manual refresh still pending | A started |
 | Monte Carlo/forecasting | analytics/API/future | Simulations | Portfolio, Market Prices, Risk | Desktop future/web preview | Simulation API | Desktop preferred, server/shared core | Yes | E |
 | AI ticker insight/news synthesis | experimental/future | AI Insights | News, Market Prices, Asset Research | Platform display | AI API/worker | AI service, desktop/server preferred | Yes | F |
 
