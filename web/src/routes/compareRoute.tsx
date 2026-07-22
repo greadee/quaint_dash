@@ -294,7 +294,7 @@ function scoreText(value: number | null | undefined) {
   return value == null ? "insufficient" : value.toFixed(0);
 }
 
-const chartColors = ["#245c4f", "#7a4f12", "#305c89", "#7d3c53", "#54613b"];
+const chartColors = ["#58d2c3", "#2f6bff", "#8f5cff", "#f2b544", "#ff8f5b"];
 const performanceMethodologyHelp: HelpItem[] = [
   { term: "Aligned start", detail: "Every visible series starts at the latest common valid date, so returns are compared over the same stored window." },
   { term: "Total return", detail: "Uses adjusted close when available. If adjusted close is missing, the API falls back to stored close and labels the source." },

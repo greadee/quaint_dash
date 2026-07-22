@@ -37,7 +37,7 @@ import {
 import { PageFeatureProvider } from "./pageFeatureStore";
 
 const defaultAppSettings: AppSettings = {
-  theme: "light",
+  theme: "dark",
   moverDefault: "8",
   density: "comfortable",
   featureColor: true,

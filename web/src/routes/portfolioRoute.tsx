@@ -36,7 +36,16 @@ const exposureTabs: { value: ExposureDimension; label: string }[] = [
   { value: "industry", label: "Industry" },
   { value: "currency", label: "Currency" },
 ];
-const pieColors = ["#245c4f", "#7b6f5c", "#486b8f", "#9a6b54", "#6b7c45", "#8b5f79", "#587072", "#b18b3a"];
+const piePalette = [
+  { base: "#7d58de", light: "#9777ee", dark: "#5636ab" },
+  { base: "#d49b29", light: "#e4ae45", dark: "#9a6a13" },
+  { base: "#31c6b8", light: "#47d4c6", dark: "#19857c" },
+  { base: "#3362df", light: "#4a75ef", dark: "#1d3d99" },
+  { base: "#f28b5e", light: "#f6a07d", dark: "#b86642" },
+  { base: "#697381", light: "#7c8793", dark: "#4a525c" },
+  { base: "#43bb68", light: "#5bcc7e", dark: "#2c8a49" },
+  { base: "#ca5ba7", light: "#da73ba", dark: "#94437b" },
+];
 const MARKET_REFRESH_REFETCH_MS = 60_000;
 export function PortfolioWorkspacePage() {
   const [params, setParams] = useSearchParams();
@@ -342,7 +351,7 @@ function AllocationPanel({ positions, currency, dimension, view, onDimensionChan
   const emptyText = "No exposure metadata is available.";
   const body = exposures.length
     ? view === "pie"
-      ? <AllocationPie groups={exposures} currency={currency} selectedGroup={selectedGroupLabel} onSelect={setSelectedGroupLabel} />
+      ? <AllocationPie groups={exposures} currency={currency} />
       : <AllocationGrid groups={exposures} currency={currency} selectedGroup={selectedGroupLabel} onSelect={setSelectedGroupLabel} />
     : <EmptyRow text={emptyText} />;
   return <section className="card">
@@ -359,25 +368,74 @@ function AllocationPanel({ positions, currency, dimension, view, onDimensionChan
       </div>
     </div>
     {body}
-    {selectedGroup ? <AllocationHoldingList group={selectedGroup} currency={currency} dimensionLabel={activeLabel} onClose={() => setSelectedGroupLabel(null)} /> : null}
+    {view !== "pie" && selectedGroup ? <AllocationHoldingList group={selectedGroup} currency={currency} dimensionLabel={activeLabel} onClose={() => setSelectedGroupLabel(null)} /> : null}
   </section>;
 }
 function AllocationGrid({ groups, currency, selectedGroup, onSelect }: { groups: AllocationGroup[]; currency: string; selectedGroup: string | null; onSelect: (label: string) => void }) {
   return <div className="tranche-grid">{groups.map((group) => <button type="button" className={`tranche ${selectedGroup === group.label ? "active" : ""}`} key={group.label} onClick={() => onSelect(group.label)} aria-pressed={selectedGroup === group.label}><div><strong>{group.label}</strong><span>{group.count} holdings</span></div><b>{money(group.marketValue, currency)}</b><div className="bar"><span style={{ width: `${Math.max(group.weight * 100, 2)}%` }} /></div><em>{percent(group.weight)} weight</em><em>{percent(group.returnPercent)} return</em></button>)}</div>;
 }
-function AllocationPie({ groups, currency, selectedGroup, onSelect }: { groups: AllocationGroup[]; currency: string; selectedGroup: string | null; onSelect: (label: string) => void }) {
+function AllocationPie({ groups, currency }: { groups: AllocationGroup[]; currency: string }) {
+  const chartId = useId().replace(/:/g, "");
+  const totalValue = groups.reduce((sum, group) => sum + group.marketValue, 0);
   return <div className="allocation-pie-layout">
-    <div className="allocation-pie-chart" aria-label="Allocation pie chart">
+    <div className="allocation-pie-chart" aria-label="Allocation pie chart" onMouseDownCapture={(event) => event.preventDefault()} onClickCapture={(event) => event.preventDefault()}>
       <ResponsiveContainer width="100%" height="100%">
-        <PieChart>
-          <Pie data={groups} dataKey="marketValue" nameKey="label" innerRadius="52%" outerRadius="82%" paddingAngle={2}>
-            {groups.map((group, index) => <Cell key={group.label} fill={pieColors[index % pieColors.length]} />)}
+        <PieChart accessibilityLayer={false}>
+          <defs>
+            <radialGradient id={`${chartId}-centerGlow`} cx="50%" cy="50%" r="65%">
+              <stop offset="0%" stopColor="rgba(255,255,255,0.04)" />
+              <stop offset="60%" stopColor="rgba(255,255,255,0.012)" />
+              <stop offset="100%" stopColor="rgba(0,0,0,0)" />
+            </radialGradient>
+            {groups.map((group, index) => {
+              const tone = piePalette[index % piePalette.length];
+              return (
+                <>
+                  <linearGradient
+                    key={`${group.label}-face`}
+                    id={`${chartId}-slice-${index}`}
+                    x1="0%"
+                    y1="0%"
+                    x2="100%"
+                    y2="100%"
+                  >
+                    <stop offset="0%" stopColor={tone.dark} />
+                    <stop offset="4%" stopColor={tone.base} />
+                    <stop offset="11%" stopColor={tone.light} />
+                    <stop offset="42%" stopColor={tone.base} />
+                    <stop offset="58%" stopColor={tone.light} />
+                    <stop offset="89%" stopColor={tone.base} />
+                    <stop offset="96%" stopColor={tone.light} />
+                    <stop offset="100%" stopColor={tone.dark} />
+                  </linearGradient>
+                </>
+              );
+            })}
+          </defs>
+          <Pie data={groups} dataKey="marketValue" nameKey="label" innerRadius="51.5%" outerRadius="84.5%" paddingAngle={0.9} cornerRadius={1.45} stroke="none">
+            {groups.map((group, index) => <Cell key={group.label} fill={`url(#${chartId}-slice-${index})`} stroke="rgba(36, 35, 32, 0.82)" strokeWidth={1.2} />)}
           </Pie>
+          <circle cx="50%" cy="50%" r="58" fill="rgba(10,12,14,0.94)" stroke="rgba(255,255,255,0.03)" strokeWidth="0.8" />
+          <circle cx="50%" cy="50%" r="58" fill={`url(#${chartId}-centerGlow)`} />
+          <text x="50%" y="50%" textAnchor="middle" dominantBaseline="middle" dy="-10" className="allocation-center-value">
+            {money(totalValue, currency)}
+          </text>
+          <text x="50%" y="50%" textAnchor="middle" dominantBaseline="middle" dy="16" className="allocation-center-label">
+            Total
+          </text>
           <Tooltip formatter={(value) => money(Number(value), currency)} />
         </PieChart>
       </ResponsiveContainer>
     </div>
-    <div className="allocation-legend">{groups.map((group, index) => <button type="button" key={group.label} className={selectedGroup === group.label ? "active" : ""} onClick={() => onSelect(group.label)} aria-pressed={selectedGroup === group.label}><span style={{ background: pieColors[index % pieColors.length] }} /><strong>{group.label}</strong><b>{percent(group.weight)}</b><em>{percent(group.returnPercent)}</em></button>)}</div>
+    <div className="allocation-legend">{groups.map((group, index) => {
+      const tone = piePalette[index % piePalette.length];
+      return <div key={group.label} className="allocation-legend-item">
+        <span className="allocation-swatch" style={{ "--allocation-swatch-base": tone.base, "--allocation-swatch-light": tone.light, "--allocation-swatch-dark": tone.dark } as CSSProperties} />
+        <strong>{group.label}</strong>
+        <b>{percent(group.weight)}</b>
+        <em>{percent(group.returnPercent)}</em>
+      </div>;
+    })}</div>
   </div>;
 }
 function AllocationHoldingList({ group, currency, dimensionLabel, onClose }: { group: AllocationGroup; currency: string; dimensionLabel: string; onClose: () => void }) {

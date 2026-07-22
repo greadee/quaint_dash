@@ -12,7 +12,7 @@ export function SettingsPage({ settings, onChange }: { settings: AppSettings; on
           <button className={settings.theme === "light" ? "selected" : ""} onClick={() => onChange({ theme: "light" })}>Light</button>
           <button className={settings.theme === "dark" ? "selected" : ""} onClick={() => onChange({ theme: "dark" })}>Dark</button>
         </div>
-        <p>Both themes stay monochrome: the light theme is gray-first, and the dark theme leans black and charcoal.</p>
+        <p>The dark theme uses a charcoal-black dashboard shell with saturated allocation accents. The light theme keeps the same layout and materials on an off-white surface.</p>
       </article>
       <article className="card settings-card">
         <div><p className="eyebrow">Overview</p><h2>Movers list</h2></div>
@@ -30,7 +30,7 @@ export function SettingsPage({ settings, onChange }: { settings: AppSettings; on
       <article className="card settings-card">
         <div><p className="eyebrow">Feature color</p><h2>Accents</h2></div>
         <label className="toggle-row"><input type="checkbox" checked={settings.featureColor} onChange={(event) => onChange({ featureColor: event.target.checked })} /><span>Use color for feature icons and semantic states</span></label>
-        <p>Turn this off for a stricter monochrome workspace. Warnings and losses remain visually distinct through contrast.</p>
+        <p>Leave this on to keep the allocation-material accent system visible across charts, summaries, and action states.</p>
       </article>
     </section>
   </div>;
