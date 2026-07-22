@@ -1,4 +1,4 @@
-import { Info, RefreshCw } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, BarChart3, Info, LineChart, RefreshCw, SearchX } from "lucide-react";
 import type { ReactNode } from "react";
 import type { HelpItem } from "./routeTypes";
 
@@ -25,19 +25,20 @@ export function HelpDisclosure({ title, items, note }: { title: string; items: H
 }
 
 export function Metric({ icon, label, value, detail, positive }: { icon: ReactNode; label: string; value: string; detail?: string; positive?: boolean }) {
-  return <article className="metric card"><div className="metric-icon">{icon}</div><p>{label}</p><strong>{value}</strong>{detail && <span className={positive ? "positive" : "negative"}>{detail}</span>}</article>;
+  const tone = positive == null ? "" : positive ? " positive" : " negative";
+  return <article className={`metric card${tone}`}><div className="metric-icon">{icon}</div><p>{label}</p><strong>{value}</strong>{detail && <span>{detail}</span>}</article>;
 }
 
 export function Loading({ compact = false }: { compact?: boolean }) {
-  return <div className={compact ? "loading compact" : "loading"}><RefreshCw />Loading dashboard data</div>;
+  return <div className={compact ? "loading compact" : "loading"} role="status" aria-live="polite"><RefreshCw /><span>Loading dashboard data</span></div>;
 }
 
 export function ErrorPanel({ error }: { error: Error }) {
-  return <div className="error-panel"><strong>Unable to load data</strong><span>{error.message}</span></div>;
+  return <div className="error-panel" role="alert"><AlertTriangle size={20} /><strong>Unable to load data</strong><span>{error.message}</span></div>;
 }
 
 export function EmptyRow({ text }: { text: string }) {
-  return <div className="empty-row">{text}</div>;
+  return <div className="empty-row"><SearchX size={18} /><span>{text}</span></div>;
 }
 
 export function MetricLine({ label, value }: { label: string; value: string }) {
@@ -58,8 +59,8 @@ export function RangeSelector({ value, onChange }: { value: string; onChange: (v
 
 export function ChartTypeToggle({ value, onChange }: { value: "line" | "bar"; onChange: (value: "line" | "bar") => void }) {
   return <div className="segmented-control compact" aria-label="Chart type">
-    <button className={value === "line" ? "active" : ""} onClick={() => onChange("line")}>Line</button>
-    <button className={value === "bar" ? "active" : ""} onClick={() => onChange("bar")}>Bar</button>
+    <button className={value === "line" ? "active" : ""} onClick={() => onChange("line")} title="Line chart"><LineChart size={14} /><span>Line</span></button>
+    <button className={value === "bar" ? "active" : ""} onClick={() => onChange("bar")} title="Bar chart"><BarChart3 size={14} /><span>Bar</span></button>
   </div>;
 }
 
@@ -71,8 +72,8 @@ export function Pager({ total, limit, offset, onChange }: { total: number; limit
   return <div className="pager">
     <span>{start}-{end} of {total}</span>
     <div className="actions">
-      <button onClick={() => onChange(previousOffset)} disabled={offset <= 0}>Previous</button>
-      <button onClick={() => onChange(nextOffset)} disabled={nextOffset >= total}>Next</button>
+      <button onClick={() => onChange(previousOffset)} disabled={offset <= 0}><ArrowLeft size={14} />Previous</button>
+      <button onClick={() => onChange(nextOffset)} disabled={nextOffset >= total}>Next<ArrowRight size={14} /></button>
     </div>
   </div>;
 }
