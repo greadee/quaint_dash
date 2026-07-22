@@ -2937,6 +2937,57 @@ button:hover,
   line-height: 1.45;
 }
 
+.compare-workspace-toolbar,
+.benchmark-filters,
+.news-toolbar,
+.signal-filter-panel {
+  border: 1px solid var(--dash-border);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.015)),
+    rgba(255, 255, 255, 0.03);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    var(--dash-shadow-soft);
+}
+
+.compare-workspace-toolbar label,
+.benchmark-filters label,
+.news-toolbar label,
+.signal-filter-panel label {
+  color: var(--dash-text-faint);
+  font-size: 10px;
+  font-weight: var(--font-label);
+  letter-spacing: var(--tracking-label);
+}
+
+.compare-workspace-toolbar input,
+.compare-workspace-toolbar select,
+.benchmark-filters input,
+.benchmark-filters select,
+.news-toolbar input,
+.news-toolbar select,
+.signal-filter-panel input,
+.signal-filter-panel select {
+  min-height: 38px;
+  border-radius: 10px;
+  border-color: var(--dash-border);
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--dash-text);
+}
+
+.compare-workspace-toolbar input:focus,
+.compare-workspace-toolbar select:focus,
+.benchmark-filters input:focus,
+.benchmark-filters select:focus,
+.news-toolbar input:focus,
+.news-toolbar select:focus,
+.signal-filter-panel input:focus,
+.signal-filter-panel select:focus {
+  outline: 2px solid rgba(88, 210, 195, 0.28);
+  outline-offset: 1px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .metric::before,
   .signal::before,
