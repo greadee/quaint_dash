@@ -4,7 +4,7 @@ import { Activity, Building2, CircleDollarSign, Database, WalletCards } from "lu
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { money, percent } from "./routeFormatters";
-import { EmptyRow, Loading, Metric } from "./routeShared";
+import { DataList, EmptyRow, Loading, Metric } from "./routeShared";
 import type { MoverDefault } from "./routeTypes";
 import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar } from "../pageFeatureStore";
 
@@ -72,11 +72,11 @@ export function OverviewPage({ moverDefault }: { moverDefault: MoverDefault }) {
             {movers.length > 8 ? <button onClick={() => setShowAllMovers((value) => !value)}>{showAllMovers ? "Show 8" : "See all"}</button> : null}
           </div>
         </div>
-        {updates.isLoading ? <Loading compact /> : movers.length ? <div className="mover-list">{visibleMovers.map((item) => <Link to={`/asset/${item.asset_id}`} className="mover-row" key={item.asset_id}><div className="mover-asset"><strong>{item.symbol}</strong><span>{item.name ?? "Held asset"}</span></div><b className={(item.change_percent ?? 0) >= 0 ? "positive" : "negative"}>{percent(item.change_percent)}</b><span>{money(item.market_value)}</span></Link>)}</div> : <EmptyRow text="No price movers yet. Add price history for held assets to light this up." />}
+        {updates.isLoading ? <Loading compact /> : movers.length ? <DataList className="mover-list">{visibleMovers.map((item) => <Link to={`/asset/${item.asset_id}`} className="data-list-row mover-row" key={item.asset_id}><div className="mover-asset"><strong>{item.symbol}</strong><span>{item.name ?? "Held asset"}</span></div><b className={(item.change_percent ?? 0) >= 0 ? "positive" : "negative"}>{percent(item.change_percent)}</b><span>{money(item.market_value)}</span></Link>)}</DataList> : <EmptyRow text="No price movers yet. Add price history for held assets to light this up." />}
       </section>
       <LayoutWidget pageId="overview" widgetId="overview.marketNews"><section className="card">
         <div className="card-heading"><div><p className="eyebrow">Market notes</p><h2>News affecting holdings</h2></div><span>{updates.data?.news_count ?? 0} items</span></div>
-        {updates.isLoading ? <Loading compact /> : updates.data?.news.length ? <div className="news-list">{updates.data.news.map((item, index) => <a href={item.url ?? undefined} target="_blank" rel="noreferrer" className="news-row" key={`${item.title}-${index}`}><div><strong>{item.title}</strong><span>{[item.symbol, item.provider, item.published_at ? new Date(item.published_at).toLocaleDateString() : null].filter(Boolean).join(" - ")}</span></div></a>)}</div> : <EmptyRow text="No local news found yet. Run sentiment/news ingestion to populate this panel." />}
+        {updates.isLoading ? <Loading compact /> : updates.data?.news.length ? <DataList className="news-list">{updates.data.news.map((item, index) => <a href={item.url ?? undefined} target="_blank" rel="noreferrer" className="data-list-row news-row" key={`${item.title}-${index}`}><div><strong>{item.title}</strong><span>{[item.symbol, item.provider, item.published_at ? new Date(item.published_at).toLocaleDateString() : null].filter(Boolean).join(" - ")}</span></div></a>)}</DataList> : <EmptyRow text="No local news found yet. Run sentiment/news ingestion to populate this panel." />}
       </section></LayoutWidget>
     </section>
   </div>;

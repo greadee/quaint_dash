@@ -2988,11 +2988,40 @@ button:hover,
   outline-offset: 1px;
 }
 
+.data-list {
+  display: grid;
+  gap: 0;
+  padding: 0 20px 18px;
+}
+
+.data-list-row {
+  position: relative;
+  border-color: var(--dash-border);
+  transition: background-color 0.16s ease, color 0.16s ease;
+}
+
+.data-list-row:hover {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.data-list-row strong {
+  color: var(--dash-text);
+}
+
+.data-list-row span {
+  color: var(--dash-text-soft);
+}
+
+.data-list-row b {
+  font-variant-numeric: tabular-nums;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .metric::before,
   .signal::before,
   .tab-bar button,
-  .segmented-control button {
+  .segmented-control button,
+  .data-list-row {
     transition: none;
   }
 }

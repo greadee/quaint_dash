@@ -49,6 +49,10 @@ export function Signal({ label, value }: { label: string; value: string }) {
   return <div className="signal"><span>{label}</span><strong>{value}</strong></div>;
 }
 
+export function DataList({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <div className={`data-list ${className}`.trim()}>{children}</div>;
+}
+
 export function TabBar<T extends string>({ tabs, selected, onSelect, label }: { tabs: { value: T; label: string }[]; selected: T; onSelect: (value: T) => void; label: string }) {
   return <div className="tab-bar" role="tablist" aria-label={label}>{tabs.map((tab) => <button role="tab" aria-selected={selected === tab.value} className={selected === tab.value ? "active" : ""} onClick={() => onSelect(tab.value)} key={tab.value}>{tab.label}</button>)}</div>;
 }
