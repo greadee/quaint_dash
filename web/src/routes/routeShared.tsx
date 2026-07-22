@@ -81,9 +81,9 @@ export function ChartTypeToggle({ value, onChange }: { value: "line" | "bar"; on
   </div>;
 }
 
-export function ChartFrame({ eyebrow, title, detail, tools, children, className = "" }: { eyebrow: string; title: string; detail?: string; tools?: ReactNode; children: ReactNode; className?: string }) {
+export function ChartFrame({ eyebrow, title, detail, tools, children, className = "", id, tabIndex }: { eyebrow: string; title: string; detail?: string; tools?: ReactNode; children: ReactNode; className?: string; id?: string; tabIndex?: number }) {
   return (
-    <section className={`card chart-card chart-frame ${className}`.trim()}>
+    <section className={`card chart-card chart-frame ${className}`.trim()} id={id} tabIndex={tabIndex}>
       <div className="card-heading chart-frame-heading">
         <div>
           <p className="eyebrow">{eyebrow}</p>

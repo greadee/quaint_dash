@@ -61,7 +61,7 @@ import {
   type NormalizedSeries,
   type SortDirection,
 } from "./benchmarkUtils";
-import { ChartTypeToggle } from "./routes/routeShared";
+import { ChartFrame, ChartTypeToggle } from "./routes/routeShared";
 import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar, usePageFeature } from "./pageFeatureStore";
 
 type Notify = (message: string, tone?: "success" | "error") => void;
@@ -336,20 +336,7 @@ function BenchmarkComparisonChart({
   onChartTypeChange: (value: "line" | "bar") => void;
 }) {
   return (
-    <section className="card benchmark-chart-card" id="benchmark-compare-chart" tabIndex={-1}>
-      <div className="card-heading">
-        <div>
-          <p className="eyebrow">Actual benchmark levels</p>
-          <h2>Benchmark price comparison</h2>
-          <span>Stored closes for the selected {period} window. Delta values compare period return against {baseline}.</span>
-        </div>
-        <div className="card-tools benchmark-chart-tools">
-          <ChartTypeToggle value={chartType} onChange={onChartTypeChange} />
-          <div className="benchmark-chip-row" aria-label="Selected benchmarks">
-            {selected.map((id) => <button key={id} onClick={() => onRemove(id)} aria-label={`Remove ${id} from comparison`}>{id}<X size={13} /></button>)}
-          </div>
-        </div>
-      </div>
+    <ChartFrame eyebrow="Actual benchmark levels" title="Benchmark price comparison" detail={`Stored closes for the selected ${period} window. Delta values compare period return against ${baseline}.`} className="benchmark-chart-card" id="benchmark-compare-chart" tabIndex={-1} tools={<><ChartTypeToggle value={chartType} onChange={onChartTypeChange} /><div className="benchmark-chip-row" aria-label="Selected benchmarks">{selected.map((id) => <button key={id} onClick={() => onRemove(id)} aria-label={`Remove ${id} from comparison`}>{id}<X size={13} /></button>)}</div></>}>
       {isLoading ? <BenchmarkSkeleton rows={6} /> : chartData.length < 2 ? (
         <BenchmarkEmpty title="No overlapping chart history" detail="Select benchmarks with daily prices for this period, or run benchmark hardening to backfill history." />
       ) : (
@@ -394,7 +381,7 @@ function BenchmarkComparisonChart({
           <p className="sr-summary">Screen-reader summary: {normalized.map((item) => `${item.id} returned ${formatPercent(item.periodReturn)}; delta versus ${baseline} is ${formatPercent(baselineDelta(item, baselineSeries))}`).join(". ")}</p>
         </>
       )}
-    </section>
+    </ChartFrame>
   );
 }
 

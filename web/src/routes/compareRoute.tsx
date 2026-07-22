@@ -21,7 +21,7 @@ import {
   type MetricDefinition,
 } from "../comparisonUtils";
 import { money, percent } from "./routeFormatters";
-import { ChartTypeToggle, EmptyRow, ErrorPanel, HelpDisclosure, MetricLine } from "./routeShared";
+import { ChartFrame, ChartTypeToggle, EmptyRow, ErrorPanel, HelpDisclosure, MetricLine } from "./routeShared";
 import type { HelpItem } from "./routeTypes";
 import { BenchmarkPicker, TickerPicker } from "./routePickers";
 import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar, usePageFeature } from "../pageFeatureStore";
@@ -158,11 +158,7 @@ export function ComparePage() {
       {showAssetStrip ? <LayoutWidget pageId="compare" widgetId="compare.assetStrip"><section className="compare-asset-strip">
         {data.assets.map((asset) => <CompareAssetSummary key={asset.asset_id} asset={asset} freshness={data.freshness[asset.symbol]} reference={asset.symbol === reference?.symbol} />)}
       </section></LayoutWidget> : null}
-      <section className="card compare-chart-card">
-        <div className="card-heading">
-          <div><p className="eyebrow">Historical prices</p><h2>Actual price comparison</h2></div>
-          <div className="card-tools"><span>{data.coverage.common_start_date ? `Common start ${new Date(data.coverage.common_start_date).toLocaleDateString()}` : "No common history"}</span><ChartTypeToggle value={chartType} onChange={updateChartType} /><HelpDisclosure title="Performance methodology" items={performanceMethodologyHelp} /></div>
-        </div>
+      <ChartFrame eyebrow="Historical prices" title="Actual price comparison" className="compare-chart-card" detail={data.coverage.common_start_date ? `Common start ${new Date(data.coverage.common_start_date).toLocaleDateString()}` : "No common history"} tools={<><ChartTypeToggle value={chartType} onChange={updateChartType} /><HelpDisclosure title="Performance methodology" items={performanceMethodologyHelp} /></>}>
         {chartRows.length ? <div className="compare-chart" aria-label="Actual price comparison chart">
           <ResponsiveContainer width="100%" height="100%">
             {chartType === "bar" ? <BarChart data={chartRows}>
@@ -186,7 +182,7 @@ export function ComparePage() {
           {data.historical_series.map((series) => <button key={series.symbol} className={hiddenSeries.includes(series.symbol) ? "" : "selected"} onClick={() => setHiddenSeries((current) => current.includes(series.symbol) ? current.filter((item) => item !== series.symbol) : [...current, series.symbol])}>{series.symbol}</button>)}
         </div>
         {showChartTable ? <LayoutWidget pageId="compare" widgetId="compare.chartTable"><ComparisonChartTable series={data.historical_series} /></LayoutWidget> : null}
-      </section>
+      </ChartFrame>
       <ComparisonMetricSection title="Key performance and risk metrics" section="performance" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} />
       {showValuation ? <LayoutWidget pageId="compare" widgetId="compare.valuation"><ComparisonMetricSection title="Valuation" section="valuation" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} /></LayoutWidget> : null}
       {showGrowth ? <LayoutWidget pageId="compare" widgetId="compare.growth"><ComparisonMetricSection title="Growth" section="growth" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} /></LayoutWidget> : null}
