@@ -228,6 +228,11 @@ class ForecastMetrics:
 @dataclass(frozen=True)
 class PositionValuationContribution:
     asset_id: str
+    valuation_asset_id: str | None
+    valuation_source: str
+    allocation_class: str | None
+    fcf_metrics_applicable: bool
+    fee_adjustment: float | None
     weight: float | None
     margin_of_safety: float | None
     pe_ratio: float | None

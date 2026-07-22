@@ -291,6 +291,20 @@ class AnalyticsEngine:
                 continue
             asset_id = position.asset_id
             valuation_asset_id = self.repo.valuation_asset_id(asset_id)
+            profile = self.repo.asset_profile(asset_id)
+            asset_class = allocation_class(
+                asset_id=asset_id,
+                symbol=profile.get("symbol"),
+                name=profile.get("name"),
+                asset_type=profile.get("asset_type"),
+                asset_subtype=profile.get("asset_subtype"),
+                sector=profile.get("sector"),
+                industry=profile.get("industry"),
+            )
+            company_valuation_applicable = asset_class in {"Stock", "CDR"}
+            fcf_metrics_applicable = company_valuation_applicable and not _fcf_metrics_not_applicable(
+                self.repo.asset_profile(valuation_asset_id)
+            )
             latest_price = (
                 self.repo.latest_price(valuation_asset_id) or position.latest_price
                 if valuation_asset_id != asset_id
@@ -336,14 +350,38 @@ class AnalyticsEngine:
                 annual_dividend=annual_dividend,
                 forecast_years=forecast_years,
             )
-            expected = forecast.blended_expected_cagr
+            fee_adjustment = self.repo.wrapper_fee_adjustment(asset_id)
+            has_forward_projection = (
+                forecast.expected_cagr_from_valuation is not None
+                or forecast.fundamental_growth_assumption is not None
+            )
+            if has_forward_projection:
+                expected = (
+                    forecast.blended_expected_cagr - fee_adjustment
+                    if forecast.blended_expected_cagr is not None and fee_adjustment is not None
+                    else forecast.blended_expected_cagr
+                )
+            else:
+                expected = None
+            valuation_source = (
+                f"underlying company fundamentals: {valuation_asset_id}"
+                if valuation_asset_id != asset_id
+                else "held security fundamentals"
+            )
             contributions.append(
                 PositionValuationContribution(
                     asset_id=asset_id,
+                    valuation_asset_id=valuation_asset_id,
+                    valuation_source=valuation_source,
+                    allocation_class=asset_class,
+                    fcf_metrics_applicable=fcf_metrics_applicable,
+                    fee_adjustment=fee_adjustment,
                     weight=position.weight,
-                    margin_of_safety=dcf.margin_of_safety,
-                    pe_ratio=valuation_depth.pe_ratio,
-                    price_to_free_cash_flow=valuation_depth.price_to_free_cash_flow,
+                    margin_of_safety=dcf.margin_of_safety if fcf_metrics_applicable else None,
+                    pe_ratio=valuation_depth.pe_ratio if company_valuation_applicable else None,
+                    price_to_free_cash_flow=valuation_depth.price_to_free_cash_flow
+                    if fcf_metrics_applicable
+                    else None,
                     dividend_yield=dividend_yield,
                     expected_cagr=expected,
                     weighted_expected_cagr_contribution=position.weight * expected
@@ -351,9 +389,29 @@ class AnalyticsEngine:
                     else None,
                 )
             )
-            missing.extend(f"{asset_id}: {item}" for item in dcf.missing_inputs)
-            missing.extend(f"{asset_id}: {item}" for item in valuation_depth.missing_inputs)
-            missing.extend(f"{asset_id}: {item}" for item in forecast.missing_inputs)
+            if fcf_metrics_applicable and dcf.margin_of_safety is None:
+                missing.extend(f"{asset_id}: {item}" for item in dcf.missing_inputs)
+            if company_valuation_applicable and valuation_depth.pe_ratio is None:
+                missing.extend(
+                    f"{asset_id}: {item}"
+                    for item in valuation_depth.missing_inputs
+                    if item in {"income statement", "shares outstanding", "market price"}
+                )
+            if fcf_metrics_applicable and valuation_depth.price_to_free_cash_flow is None:
+                missing.extend(
+                    f"{asset_id}: {item}"
+                    for item in valuation_depth.missing_inputs
+                    if item
+                    in {
+                        "cash flow statement",
+                        "free cash flow",
+                        "shares outstanding",
+                        "market price",
+                    }
+                )
+            if not has_forward_projection:
+                missing.extend(f"{asset_id}: {item}" for item in forecast.missing_inputs)
+                missing.append(f"{asset_id}: forward valuation or fundamental projection")
 
         undervalued_weight = sum(
             item.weight or 0.0
@@ -378,10 +436,27 @@ class AnalyticsEngine:
                 contributions, "price_to_free_cash_flow"
             ),
             weighted_dividend_yield=_weighted_average(contributions, "dividend_yield"),
-            weighted_expected_cagr=_weighted_average(contributions, "expected_cagr"),
+            weighted_expected_cagr=sum(
+                item.weight * item.expected_cagr
+                for item in contributions
+                if item.weight is not None and item.expected_cagr is not None
+            )
+            if any(item.expected_cagr is not None for item in contributions)
+            else None,
             undervalued_weight=undervalued_weight,
             overvalued_weight=overvalued_weight,
             fair_value_weight=fair_value_weight,
             position_contributions=contributions,
             missing_inputs=sorted(set(missing)),
         )
+
+
+def _fcf_metrics_not_applicable(profile: dict[str, str | None]) -> bool:
+    sector = str(profile.get("sector") or "").lower()
+    industry = str(profile.get("industry") or "").lower()
+    return (
+        "asset management" in industry
+        or "bank" in industry
+        or "insurance" in industry
+        or sector in {"banks", "insurance"}
+    )

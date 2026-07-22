@@ -131,8 +131,16 @@ def test_portfolio_management_endpoints_are_backend_driven_and_deterministic(tmp
     assert risk.status_code == 200
     assert risk.json()["risk_free_rate"] == 0.02
     assert "weight_balance_score" in risk.json()
+    assert any(item["metric"] == "annualized_volatility" for item in risk.json()["metric_insights"])
     assert fundamentals.status_code == 200
     assert fundamentals.json()["weighted_expected_cagr"]["coverage"] > 0
+    expected_cagr_insight = next(
+        item
+        for item in fundamentals.json()["metric_insights"]
+        if item["metric"] == "weighted_expected_cagr"
+    )
+    assert expected_cagr_insight["formula"].startswith("sum(holding weight")
+    assert expected_cagr_insight["contributors"]
     assert max_cagr.status_code == 200
     assert max_risk_adjusted.status_code == 200
     for payload in [max_cagr.json(), max_risk_adjusted.json()]:
@@ -448,6 +456,7 @@ def test_portfolio_positions_classify_known_cdr_tickers_without_cdr_name(tmp_pat
         positions = client.get("/api/v1/portfolios/1/positions")
 
     assert positions.status_code == 200
+    assert positions.json()[0]["allocation_class"] == "CDR"
     assert positions.json()[0]["sector"] == "Communication Services"
     assert positions.json()[0]["industry"] == "Internet Content & Information"
     assert positions.json()[0]["country"] == "US"

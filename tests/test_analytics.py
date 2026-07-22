@@ -74,6 +74,25 @@ def test_allocation_class_splits_stocks_cdrs_etfs_and_money_market():
         name="ServiceNow Inc Canadian Depository Receipt (CAD Hedged)",
     ) == "CDR"
     assert allocation_class(
+        symbol="AMD.TO",
+        asset_type="stock",
+        name="Advanced Micro Devices, Inc. CDR",
+    ) == "CDR"
+    assert allocation_class(
+        symbol="ASML.TO",
+        asset_type="stock",
+        name="ASML Holding N.V. Depositary Receipt",
+    ) == "CDR"
+    assert allocation_class(symbol="UBER.TO", asset_type="stock", name="UBER") == "CDR"
+    assert (
+        allocation_class(
+            symbol="VUN.TO",
+            asset_type="stock",
+            name="Vanguard U.S. Total Market Index Fund",
+        )
+        == "ETF"
+    )
+    assert allocation_class(
         symbol="CASH.TO",
         asset_type="etf",
         asset_subtype="money_market",
@@ -627,7 +646,82 @@ def test_portfolio_valuation_rollup_uses_cdr_underlying_fundamentals(tmp_path):
     assert report.valuation.weighted_price_to_free_cash_flow == pytest.approx(20.0)
     assert report.valuation.weighted_margin_of_safety is not None
     assert report.valuation.position_contributions[0].asset_id == "AMD.TO"
+    assert report.valuation.position_contributions[0].valuation_asset_id == "AMD"
+    assert report.valuation.position_contributions[0].fee_adjustment == pytest.approx(0.006)
     assert "AMD.TO: income statement" not in report.valuation.missing_inputs
+    assert "AMD.TO: dividend growth history" not in report.valuation.missing_inputs
+
+
+def test_cdr_aliases_use_underlying_company_for_valuation(tmp_path):
+    db = DB(str(tmp_path / "portfolio_cdr_alias_valuation.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name)
+        VALUES
+            ('CEGS.TO', 'CEGS.TO', 'stock', 'CAD', 'Constellation Energy CDR (CAD Hedged)'),
+            ('NVON.NE', 'NVON.NE', 'stock', 'CAD', 'Novo Nordisk A/S Depositary Receipt'),
+            ('UBER.TO', 'UBER.TO', 'stock', 'CAD', 'UBER')
+        """
+    )
+
+    repo = AnalyticsRepository(db.conn)
+
+    assert repo.valuation_asset_id("CEGS.TO") == "CEG"
+    assert repo.valuation_asset_id("NVON.NE") == "NVO"
+    assert repo.valuation_asset_id("UBER.TO") == "UBER"
+
+
+def test_portfolio_expected_cagr_is_not_normalized_over_missing_holdings(tmp_path):
+    db = DB(str(tmp_path / "portfolio_partial_expected_cagr.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, shares_outstanding)
+        VALUES
+            ('READY', 'READY', 'stock', 'USD', 100),
+            ('MISSING', 'MISSING', 'stock', 'USD', NULL)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO position(portfolio_id, asset_id, qty, book_cost, created_at, updated_at)
+        VALUES
+            (1, 'READY', 1, 10, now(), now()),
+            (1, 'MISSING', 1, 10, now(), now())
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+        VALUES
+            ('READY', DATE '2026-01-01', 9, 9, 'test'),
+            ('READY', DATE '2026-01-02', 10, 10, 'test'),
+            ('MISSING', DATE '2026-01-01', 9, 9, 'test'),
+            ('MISSING', DATE '2026-01-02', 10, 10, 'test')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO financial_statement(asset_id, statement_type, year, quarter, data_json, source)
+        VALUES
+            ('READY', 'income', 2025, 4, '{"revenue":500,"netIncome":100,"eps":1}', 'test'),
+            ('READY', 'balance', 2025, 4, '{"totalStockholdersEquity":250,"totalAssets":500,"totalDebt":50}', 'test'),
+            ('READY', 'cashflow', 2025, 4, '{"freeCashFlow":100}', 'test'),
+            ('READY', 'cashflow', 2024, 4, '{"freeCashFlow":90}', 'test')
+        """
+    )
+
+    report = AnalyticsEngine(AnalyticsRepository(db.conn)).portfolio_report(1)
+    ready = next(item for item in report.valuation.position_contributions if item.asset_id == "READY")
+
+    assert ready.weight == pytest.approx(0.5)
+    assert report.valuation.weighted_expected_cagr == pytest.approx(
+        ready.weighted_expected_cagr_contribution
+    )
+    assert report.valuation.weighted_expected_cagr == pytest.approx(ready.expected_cagr * 0.5)
 
 
 def test_valuation_asset_id_does_not_treat_all_tsx_stocks_as_cdrs(tmp_path):

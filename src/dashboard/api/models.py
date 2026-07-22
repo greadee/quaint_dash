@@ -113,6 +113,29 @@ class PortfolioMetricValue(BaseModel):
     as_of: date | datetime | None = None
 
 
+class PortfolioMetricContributor(BaseModel):
+    asset_id: str
+    symbol: str
+    metric_value: float | None = None
+    weight: float | None = None
+    contribution: float | None = None
+    contribution_share: float | None = None
+    explanation: str | None = None
+
+
+class PortfolioMetricInsight(BaseModel):
+    metric: str
+    label: str
+    value: float | None = None
+    unit: str | None = None
+    formula: str
+    methodology: str
+    coverage: float | None = None
+    source: str = "quaint_dash.analytics"
+    contributors: list[PortfolioMetricContributor] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class PortfolioPerformancePoint(BaseModel):
     date: date
     portfolio_value: float | None = None
@@ -137,6 +160,7 @@ class PortfolioPerformanceResponse(BaseModel):
     observation_count: int
     coverage: float | None = None
     missing_inputs: list[str] = Field(default_factory=list)
+    metric_insights: list[PortfolioMetricInsight] = Field(default_factory=list)
     points: list[PortfolioPerformancePoint] = Field(default_factory=list)
     as_of: datetime
     source: str = "quaint_dash.analytics"
@@ -171,12 +195,18 @@ class PortfolioRiskResponse(BaseModel):
     risk_contribution_concentration: float | None = None
     asset_class_concentration: dict[str, float] = Field(default_factory=dict)
     missing_inputs: list[str] = Field(default_factory=list)
+    metric_insights: list[PortfolioMetricInsight] = Field(default_factory=list)
     as_of: datetime
 
 
 class PortfolioFundamentalHolding(BaseModel):
     asset_id: str
     symbol: str
+    allocation_class: str | None = None
+    valuation_asset_id: str | None = None
+    valuation_source: str = "held security"
+    fcf_metrics_applicable: bool = True
+    fee_adjustment: float | None = None
     market_value: float | None = None
     weight: float | None = None
     expected_cagr: float | None = None
@@ -210,6 +240,7 @@ class PortfolioFundamentalsResponse(BaseModel):
     margin_of_safety: PortfolioMetricValue
     holdings: list[PortfolioFundamentalHolding]
     missing_inputs: list[str] = Field(default_factory=list)
+    metric_insights: list[PortfolioMetricInsight] = Field(default_factory=list)
     as_of: datetime
 
 

@@ -78,6 +78,7 @@ export type PortfolioPerformance = {
   observation_count: number;
   coverage: number | null;
   missing_inputs: string[];
+  metric_insights?: PortfolioMetricInsight[];
   points: PortfolioPerformancePoint[];
   as_of: string;
 };
@@ -107,12 +108,39 @@ export type PortfolioRisk = {
   average_pairwise_correlation: number | null;
   risk_contribution_concentration: number | null;
   missing_inputs: string[];
+  metric_insights?: PortfolioMetricInsight[];
   as_of: string;
 };
-export type PortfolioMetricValue = { value: number | null; reason: string | null; coverage: number | null };
+export type PortfolioMetricContributor = {
+  asset_id: string;
+  symbol: string;
+  metric_value: number | null;
+  weight: number | null;
+  contribution: number | null;
+  contribution_share: number | null;
+  explanation: string | null;
+};
+export type PortfolioMetricInsight = {
+  metric: string;
+  label: string;
+  value: number | null;
+  unit: string | null;
+  formula: string;
+  methodology: string;
+  coverage: number | null;
+  source: string;
+  contributors: PortfolioMetricContributor[];
+  warnings: string[];
+};
+export type PortfolioMetricValue = { value: number | null; reason?: string | null; coverage: number | null; source?: string; as_of?: string | null };
 export type PortfolioFundamentalHolding = {
   asset_id: string;
   symbol: string;
+  allocation_class?: string | null;
+  valuation_asset_id?: string | null;
+  valuation_source?: string;
+  fcf_metrics_applicable?: boolean;
+  fee_adjustment?: number | null;
   market_value: number | null;
   weight: number | null;
   expected_cagr: number | null;
@@ -135,6 +163,7 @@ export type PortfolioFundamentals = {
   margin_of_safety: PortfolioMetricValue;
   holdings: PortfolioFundamentalHolding[];
   missing_inputs: string[];
+  metric_insights?: PortfolioMetricInsight[];
   as_of: string;
 };
 export type OptimizationConstraints = {

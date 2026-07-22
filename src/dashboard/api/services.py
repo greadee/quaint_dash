@@ -6,7 +6,7 @@ import json
 import os
 import re
 import statistics
-from typing import Any
+from typing import Any, Callable
 
 from dashboard.api.models import (
     AssetDetail,
@@ -63,6 +63,8 @@ from dashboard.api.models import (
     PortfolioCreate,
     PortfolioFundamentalHolding,
     PortfolioFundamentalsResponse,
+    PortfolioMetricContributor,
+    PortfolioMetricInsight,
     PortfolioMetricValue,
     PortfolioPerformancePoint,
     PortfolioPerformanceResponse,
@@ -1383,6 +1385,7 @@ _CDR_CLASSIFICATION_OVERRIDES = {
     "ANET": {"sector": "Technology", "industry": "Computer Hardware", "country": "US"},
     "ASML": {"sector": "Technology", "industry": "Semiconductors", "country": "NL"},
     "AVGO": {"sector": "Technology", "industry": "Semiconductors", "country": "US"},
+    "CEG": {"sector": "Utilities", "industry": "Utilities - Renewable", "country": "US"},
     "GEV": {"sector": "Industrials", "industry": "Electrical Equipment & Parts", "country": "US"},
     "GOOG": {"sector": "Communication Services", "industry": "Internet Content & Information", "country": "US"},
     "ISRG": {"sector": "Healthcare", "industry": "Medical Instruments & Supplies", "country": "US"},
@@ -1392,8 +1395,10 @@ _CDR_CLASSIFICATION_OVERRIDES = {
     "MU": {"sector": "Technology", "industry": "Semiconductors", "country": "US"},
     "NOW": {"sector": "Technology", "industry": "Software - Application", "country": "US"},
     "NVDA": {"sector": "Technology", "industry": "Semiconductors", "country": "US"},
+    "NVO": {"sector": "Healthcare", "industry": "Drug Manufacturers - General", "country": "DK"},
     "SPGI": {"sector": "Financial Services", "industry": "Financial Data & Stock Exchanges", "country": "US"},
     "TSLA": {"sector": "Consumer Cyclical", "industry": "Auto Manufacturers", "country": "US"},
+    "UBER": {"sector": "Industrials", "industry": "Software - Application", "country": "US"},
     "V": {"sector": "Financial Services", "industry": "Credit Services", "country": "US"},
     "VISA": {"sector": "Financial Services", "industry": "Credit Services", "country": "US"},
 }
@@ -1405,6 +1410,7 @@ _KNOWN_CDR_UNDERLYING_NAMES = {
     "ANET": "Arista Networks, Inc.",
     "ASML": "ASML Holding N.V.",
     "AVGO": "Broadcom Inc.",
+    "CEG": "Constellation Energy Corporation",
     "GEV": "GE Vernova Inc.",
     "GOOG": "Alphabet Inc.",
     "ISRG": "Intuitive Surgical, Inc.",
@@ -1414,13 +1420,17 @@ _KNOWN_CDR_UNDERLYING_NAMES = {
     "MU": "Micron Technology, Inc.",
     "NOW": "ServiceNow, Inc.",
     "NVDA": "NVIDIA Corporation",
+    "NVO": "Novo Nordisk A/S",
     "SPGI": "S&P Global Inc.",
     "TSLA": "Tesla, Inc.",
+    "UBER": "Uber Technologies, Inc.",
     "V": "Visa Inc.",
     "VISA": "Visa Inc.",
 }
 
 _CDR_SYMBOL_ALIASES = {
+    "CEGS": "CEG",
+    "NVON": "NVO",
     "NOWS": "NOW",
     "VISA": "V",
 }
@@ -2459,6 +2469,25 @@ class PortfolioApiService:
                 else None
             ),
             missing_inputs=missing,
+            metric_insights=self._performance_metric_insights(
+                portfolio_id=portfolio_id,
+                actual_twr_cagr=risk.cagr if risk else None,
+                benchmark_cagr=benchmark_risk.cagr if benchmark_risk else None,
+                excess_cagr=(
+                    (risk.cagr - benchmark_risk.cagr)
+                    if risk
+                    and benchmark_risk
+                    and risk.cagr is not None
+                    and benchmark_risk.cagr is not None
+                    else None
+                ),
+                coverage=(
+                    sum(float(row.get("coverage") or 0.0) for row in values) / len(values)
+                    if values
+                    else None
+                ),
+                missing_inputs=missing,
+            ),
             points=points,
             as_of=datetime.now(UTC),
         )
@@ -2515,6 +2544,7 @@ class PortfolioApiService:
             average_pairwise_correlation=decomposition.average_pairwise_correlation,
             risk_contribution_concentration=risk_concentration,
             missing_inputs=report.missing_inputs + decomposition.missing_inputs,
+            metric_insights=self._risk_metric_insights(report),
             as_of=datetime.now(UTC),
         )
 
@@ -2527,11 +2557,21 @@ class PortfolioApiService:
         report = AnalyticsEngine(AnalyticsRepository(self.conn)).portfolio_report(portfolio_id)
         positions = {item.asset_id: item for item in self.list_positions(portfolio_id)}
         contributions = report.valuation.position_contributions
-        total_weight = sum(
-            item.weight or 0.0
-            for item in contributions
-            if item.expected_cagr is not None or item.pe_ratio is not None
-        )
+        coverage_by_metric = {
+            "expected_cagr": self._metric_coverage(contributions, "expected_cagr"),
+            "pe_ratio": self._metric_coverage(contributions, "pe_ratio"),
+            "price_to_free_cash_flow": self._metric_coverage(
+                contributions,
+                "price_to_free_cash_flow",
+                applicable=lambda item: item.fcf_metrics_applicable,
+            ),
+            "dividend_yield": self._metric_coverage(contributions, "dividend_yield"),
+            "margin_of_safety": self._metric_coverage(
+                contributions,
+                "margin_of_safety",
+                applicable=lambda item: item.fcf_metrics_applicable,
+            ),
+        }
 
         holdings: list[PortfolioFundamentalHolding] = []
         for item in contributions:
@@ -2539,14 +2579,19 @@ class PortfolioApiService:
             missing = []
             if item.expected_cagr is None:
                 missing.append("forward expected CAGR")
-            if item.pe_ratio is None:
+            if item.allocation_class in {"Stock", "CDR"} and item.pe_ratio is None:
                 missing.append("P/E")
-            if item.price_to_free_cash_flow is None:
+            if item.fcf_metrics_applicable and item.price_to_free_cash_flow is None:
                 missing.append("P/FCF")
             holdings.append(
                 PortfolioFundamentalHolding(
                     asset_id=item.asset_id,
                     symbol=position.symbol if position else item.asset_id,
+                    allocation_class=item.allocation_class,
+                    valuation_asset_id=item.valuation_asset_id,
+                    valuation_source=item.valuation_source,
+                    fcf_metrics_applicable=item.fcf_metrics_applicable,
+                    fee_adjustment=item.fee_adjustment,
                     market_value=position.market_value if position else None,
                     weight=item.weight,
                     expected_cagr=item.expected_cagr,
@@ -2559,31 +2604,400 @@ class PortfolioApiService:
                     missing_inputs=missing,
                 )
             )
-        coverage = min(1.0, total_weight) if contributions else None
         as_of = datetime.now(UTC)
+        metric_insights = self._fundamental_metric_insights(
+            report.valuation.position_contributions,
+            positions,
+            coverage_by_metric,
+        )
         return PortfolioFundamentalsResponse(
             portfolio_id=portfolio_id,
             base_currency=portfolio.base_ccy,
             horizon_years=horizon_years,
             weighted_expected_cagr=PortfolioMetricValue(
                 value=report.valuation.weighted_expected_cagr,
-                coverage=coverage,
+                coverage=coverage_by_metric["expected_cagr"],
                 as_of=as_of,
                 reason=None if report.valuation.weighted_expected_cagr is not None else "missing valuation inputs",
             ),
-            pe_ratio=PortfolioMetricValue(value=report.valuation.weighted_pe_ratio, coverage=coverage, as_of=as_of),
-            price_to_free_cash_flow=PortfolioMetricValue(value=report.valuation.weighted_price_to_free_cash_flow, coverage=coverage, as_of=as_of),
+            pe_ratio=PortfolioMetricValue(
+                value=report.valuation.weighted_pe_ratio,
+                coverage=coverage_by_metric["pe_ratio"],
+                as_of=as_of,
+            ),
+            price_to_free_cash_flow=PortfolioMetricValue(
+                value=report.valuation.weighted_price_to_free_cash_flow,
+                coverage=coverage_by_metric["price_to_free_cash_flow"],
+                as_of=as_of,
+            ),
             revenue_growth=PortfolioMetricValue(reason="not yet rolled up from statements", coverage=0.0, as_of=as_of),
             eps_growth=PortfolioMetricValue(reason="not yet rolled up from statements", coverage=0.0, as_of=as_of),
             free_cash_flow_growth=PortfolioMetricValue(reason="not yet rolled up from statements", coverage=0.0, as_of=as_of),
             operating_margin=PortfolioMetricValue(reason="not yet rolled up from statements", coverage=0.0, as_of=as_of),
             free_cash_flow_margin=PortfolioMetricValue(reason="not yet rolled up from statements", coverage=0.0, as_of=as_of),
-            dividend_yield=PortfolioMetricValue(value=report.valuation.weighted_dividend_yield, coverage=coverage, as_of=as_of),
-            margin_of_safety=PortfolioMetricValue(value=report.valuation.weighted_margin_of_safety, coverage=coverage, as_of=as_of),
+            dividend_yield=PortfolioMetricValue(
+                value=report.valuation.weighted_dividend_yield,
+                coverage=coverage_by_metric["dividend_yield"],
+                as_of=as_of,
+            ),
+            margin_of_safety=PortfolioMetricValue(
+                value=report.valuation.weighted_margin_of_safety,
+                coverage=coverage_by_metric["margin_of_safety"],
+                as_of=as_of,
+            ),
             holdings=holdings,
             missing_inputs=report.valuation.missing_inputs,
+            metric_insights=metric_insights,
             as_of=as_of,
         )
+
+    def _metric_coverage(
+        self,
+        contributions: list[Any],
+        attr: str,
+        applicable: Callable[[Any], bool] | None = None,
+    ) -> float | None:
+        scoped = [item for item in contributions if applicable is None or applicable(item)]
+        if not scoped:
+            return None
+        total_weight = sum(item.weight or 0.0 for item in scoped)
+        if total_weight <= 0:
+            return None
+        return min(
+            1.0,
+            sum(
+                item.weight or 0.0
+                for item in scoped
+                if getattr(item, attr, None) is not None
+            )
+            / total_weight,
+        )
+
+    def _fundamental_metric_insights(
+        self,
+        contributions: list[Any],
+        positions: dict[str, PositionSummary],
+        coverage_by_metric: dict[str, float | None],
+    ) -> list[PortfolioMetricInsight]:
+        configs = [
+            (
+                "weighted_expected_cagr",
+                "Forward expected CAGR",
+                "expected_cagr",
+                "percent",
+                "sum(holding weight x fee-adjusted holding expected CAGR)",
+                (
+                    "Holding forecasts come from stored underlying company valuation, growth, "
+                    "dividend, and price-history inputs. CDR rows use the underlying company "
+                    "forecast and subtract the wrapper fee adjustment."
+                ),
+                False,
+            ),
+            (
+                "pe_ratio",
+                "P/E ratio",
+                "pe_ratio",
+                "ratio",
+                "sum(holding weight x holding P/E) / covered weight",
+                "Holding P/E uses the valuation asset's latest EPS and market price.",
+                True,
+            ),
+            (
+                "price_to_free_cash_flow",
+                "Price to free cash flow",
+                "price_to_free_cash_flow",
+                "ratio",
+                "sum(holding weight x holding P/FCF) / covered weight",
+                "Holding P/FCF uses free cash flow per share from stored cash-flow statements.",
+                True,
+            ),
+            (
+                "dividend_yield",
+                "Dividend yield",
+                "dividend_yield",
+                "percent",
+                "sum(holding weight x dividend yield) / covered weight",
+                "Dividend yield uses recent stored dividend events divided by the valuation price.",
+                True,
+            ),
+            (
+                "margin_of_safety",
+                "Margin of safety",
+                "margin_of_safety",
+                "percent",
+                "sum(holding weight x DCF margin of safety) / covered weight",
+                "Margin of safety comes from the base discounted cash-flow scenario.",
+                True,
+            ),
+        ]
+        insights: list[PortfolioMetricInsight] = []
+        for metric, label, attr, unit, formula, methodology, normalize in configs:
+            coverage = coverage_by_metric.get(attr)
+            value = self._portfolio_metric_rollup(contributions, attr, normalize)
+            warnings: list[str] = []
+            if coverage is not None and coverage < 0.999:
+                warnings.append(f"{coverage:.1%} of portfolio weight has {label} inputs.")
+            if attr == "expected_cagr" and any(item.fee_adjustment for item in contributions):
+                warnings.append("CDR expected CAGR is net of wrapper fee adjustment.")
+            insights.append(
+                PortfolioMetricInsight(
+                    metric=metric,
+                    label=label,
+                    value=value,
+                    unit=unit,
+                    formula=formula,
+                    methodology=methodology,
+                    coverage=coverage,
+                    contributors=self._fundamental_contributors(
+                        contributions, positions, attr, normalize
+                    ),
+                    warnings=warnings,
+                )
+            )
+        return insights
+
+    def _portfolio_metric_rollup(
+        self,
+        contributions: list[Any],
+        attr: str,
+        normalize: bool,
+    ) -> float | None:
+        weighted_sum = 0.0
+        covered_weight = 0.0
+        present = False
+        for item in contributions:
+            value = getattr(item, attr, None)
+            weight = item.weight
+            if value is None or weight is None:
+                continue
+            present = True
+            weighted_sum += weight * value
+            covered_weight += weight
+        if not present:
+            return None
+        if normalize:
+            return weighted_sum / covered_weight if covered_weight else None
+        return weighted_sum
+
+    def _fundamental_contributors(
+        self,
+        contributions: list[Any],
+        positions: dict[str, PositionSummary],
+        attr: str,
+        normalize: bool,
+    ) -> list[PortfolioMetricContributor]:
+        rows: list[tuple[float, PortfolioMetricContributor]] = []
+        denominator = self._metric_coverage(contributions, attr) if normalize else 1.0
+        raw_values: list[float] = []
+        for item in contributions:
+            value = getattr(item, attr, None)
+            weight = item.weight
+            if value is None or weight is None:
+                continue
+            contribution = weight * value / denominator if denominator else None
+            if contribution is not None:
+                raw_values.append(contribution)
+        total_abs = sum(abs(value) for value in raw_values)
+        for item in contributions:
+            value = getattr(item, attr, None)
+            weight = item.weight
+            if value is None or weight is None:
+                continue
+            contribution = weight * value / denominator if denominator else None
+            position = positions.get(item.asset_id)
+            explanation = item.valuation_source
+            if item.fee_adjustment is not None and attr == "expected_cagr":
+                explanation = f"{explanation}; fee drag {item.fee_adjustment:.2%}"
+            rows.append(
+                (
+                    abs(contribution or 0.0),
+                    PortfolioMetricContributor(
+                        asset_id=item.asset_id,
+                        symbol=position.symbol if position else item.asset_id,
+                        metric_value=value,
+                        weight=weight,
+                        contribution=contribution,
+                        contribution_share=(
+                            abs(contribution) / total_abs
+                            if contribution is not None and total_abs > 0
+                            else None
+                        ),
+                        explanation=explanation,
+                    ),
+                )
+            )
+        return [row for _sort_key, row in sorted(rows, key=lambda item: item[0], reverse=True)[:8]]
+
+    def _performance_metric_insights(
+        self,
+        portfolio_id: int,
+        actual_twr_cagr: float | None,
+        benchmark_cagr: float | None,
+        excess_cagr: float | None,
+        coverage: float | None,
+        missing_inputs: list[str],
+    ) -> list[PortfolioMetricInsight]:
+        contributors = self._position_value_contributors(portfolio_id)
+        warning = (
+            "Contributor rows show current value share; actual TWR CAGR is calculated from "
+            "daily transaction-aware portfolio values and is not attributed to current holdings."
+        )
+        configs = [
+            (
+                "actual_twr_cagr",
+                "Actual TWR CAGR",
+                actual_twr_cagr,
+                "cagr(portfolio TWR index start, portfolio TWR index end, elapsed years)",
+                "The service builds daily portfolio values from transactions and stored prices, then chains subperiod returns around external cash flows.",
+            ),
+            (
+                "benchmark_cagr",
+                "Benchmark CAGR",
+                benchmark_cagr,
+                "cagr(benchmark return index start, benchmark return index end, elapsed years)",
+                "Benchmark CAGR uses same-date stored benchmark closes aligned to portfolio valuation dates.",
+            ),
+            (
+                "excess_cagr",
+                "Excess CAGR",
+                excess_cagr,
+                "actual TWR CAGR - benchmark CAGR",
+                "Excess return compares the portfolio TWR series against the selected benchmark series.",
+            ),
+        ]
+        return [
+            PortfolioMetricInsight(
+                metric=metric,
+                label=label,
+                value=value,
+                unit="percent",
+                formula=formula,
+                methodology=methodology,
+                coverage=coverage,
+                contributors=contributors,
+                warnings=[warning, *missing_inputs[:5]],
+            )
+            for metric, label, value, formula, methodology in configs
+        ]
+
+    def _risk_metric_insights(self, report: Any) -> list[PortfolioMetricInsight]:
+        positions = {item.asset_id: item for item in self.list_positions(report.portfolio_id)}
+        volatility_rows: list[tuple[float, PortfolioMetricContributor]] = []
+        for item in report.risk_decomposition.volatility_contributions:
+            position = positions.get(item.asset_id)
+            contribution = item.percent_of_portfolio_volatility
+            volatility_rows.append(
+                (
+                    abs(contribution or 0.0),
+                    PortfolioMetricContributor(
+                        asset_id=item.asset_id,
+                        symbol=position.symbol if position else item.asset_id,
+                        metric_value=item.annualized_volatility,
+                        weight=item.weight,
+                        contribution=contribution,
+                        contribution_share=abs(contribution) if contribution is not None else None,
+                        explanation="marginal covariance contribution to portfolio volatility",
+                    ),
+                )
+            )
+        concentration_rows: list[tuple[float, PortfolioMetricContributor]] = []
+        for position in positions.values():
+            weight = position.weight
+            if weight is None:
+                continue
+            hhi_contribution = weight * weight
+            concentration_rows.append(
+                (
+                    hhi_contribution,
+                    PortfolioMetricContributor(
+                        asset_id=position.asset_id,
+                        symbol=position.symbol,
+                        metric_value=weight,
+                        weight=weight,
+                        contribution=hhi_contribution,
+                        contribution_share=(
+                            hhi_contribution / report.risk_decomposition.concentration_hhi
+                            if report.risk_decomposition.concentration_hhi
+                            else None
+                        ),
+                        explanation="weight squared contribution to concentration HHI",
+                    ),
+                )
+            )
+        return [
+            PortfolioMetricInsight(
+                metric="annualized_volatility",
+                label="Annualized volatility",
+                value=report.risk_decomposition.portfolio_volatility,
+                unit="percent",
+                formula="sqrt(weighted covariance matrix) x sqrt(252)",
+                methodology="Uses overlapping stored adjusted daily returns for current positive-weight holdings.",
+                coverage=None,
+                contributors=[
+                    row
+                    for _sort_key, row in sorted(
+                        volatility_rows, key=lambda item: item[0], reverse=True
+                    )[:8]
+                ],
+                warnings=report.risk_decomposition.missing_inputs,
+            ),
+            PortfolioMetricInsight(
+                metric="concentration_hhi",
+                label="Concentration HHI",
+                value=report.risk_decomposition.concentration_hhi,
+                unit="ratio",
+                formula="sum(holding weight squared)",
+                methodology="Uses current backend-valued portfolio weights.",
+                coverage=None,
+                contributors=[
+                    row
+                    for _sort_key, row in sorted(
+                        concentration_rows, key=lambda item: item[0], reverse=True
+                    )[:8]
+                ],
+                warnings=[],
+            ),
+            PortfolioMetricInsight(
+                metric="largest_position",
+                label="Largest position",
+                value=report.risk_decomposition.largest_position_weight,
+                unit="percent",
+                formula="max(current holding weight)",
+                methodology="Uses current backend-valued portfolio weights.",
+                coverage=None,
+                contributors=[
+                    row
+                    for _sort_key, row in sorted(
+                        concentration_rows, key=lambda item: item[1].weight or 0.0, reverse=True
+                    )[:8]
+                ],
+                warnings=[],
+            ),
+        ]
+
+    def _position_value_contributors(self, portfolio_id: int) -> list[PortfolioMetricContributor]:
+        positions = [
+            item
+            for item in self.list_positions(portfolio_id)
+            if item.market_value is not None and item.market_value > 0
+        ]
+        total = sum(item.market_value or 0.0 for item in positions)
+        rows = []
+        for item in positions:
+            value = item.market_value or 0.0
+            value_share = value / total if total > 0 else None
+            rows.append(
+                PortfolioMetricContributor(
+                    asset_id=item.asset_id,
+                    symbol=item.symbol,
+                    metric_value=value_share,
+                    weight=item.weight,
+                    contribution=value_share,
+                    contribution_share=value_share,
+                    explanation="current backend-valued market value share",
+                )
+            )
+        return sorted(rows, key=lambda item: item.contribution_share or 0.0, reverse=True)[:8]
 
     def optimization_preview(
         self,

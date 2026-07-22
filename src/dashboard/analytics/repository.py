@@ -23,6 +23,8 @@ from .models import (
 
 
 _CDR_SYMBOL_ALIASES = {
+    "CEGS": "CEG",
+    "NVON": "NVO",
     "NOWS": "NOW",
     "VISA": "V",
 }
@@ -34,6 +36,7 @@ _KNOWN_CDR_BASE_SYMBOLS = {
     "ANET",
     "ASML",
     "AVGO",
+    "CEG",
     "GEV",
     "GOOG",
     "ISRG",
@@ -43,10 +46,14 @@ _KNOWN_CDR_BASE_SYMBOLS = {
     "MU",
     "NOW",
     "NVDA",
+    "NVO",
     "SPGI",
     "TSLA",
+    "UBER",
     "V",
 }
+
+DEFAULT_CDR_FEE_ADJUSTMENT = 0.006
 
 
 class AnalyticsRepository:
@@ -263,6 +270,26 @@ class AnalyticsRepository:
             return asset_id
         return base
 
+    def wrapper_fee_adjustment(self, asset_id: str) -> float | None:
+        """Return annual wrapper fee drag for held wrappers whose fundamentals use another asset."""
+        asset_id = asset_id.upper().strip()
+        row = self.conn.execute(
+            """
+            SELECT asset_id, symbol, asset_subtype, name, description
+            FROM asset
+            WHERE asset_id = ?
+            """,
+            [asset_id],
+        ).fetchone()
+        if row is None or not self._looks_like_cdr_listing(row):
+            return None
+
+        stored = self.etf_profile(asset_id).get("expense_ratio")
+        if stored is not None:
+            value = float(stored)
+            return value / 100.0 if value > 1.0 else value
+        return DEFAULT_CDR_FEE_ADJUSTMENT
+
     def annual_dividend_per_share(
         self, asset_id: str, as_of_date: date | None = None
     ) -> float | None:
@@ -400,15 +427,29 @@ class AnalyticsRepository:
     def asset_profile(self, asset_id: str) -> dict[str, str | None]:
         row = self.conn.execute(
             """
-            SELECT asset_type, asset_subtype, symbol
+            SELECT asset_type, asset_subtype, symbol, name, sector, industry
             FROM asset
             WHERE asset_id = ?
             """,
             [asset_id.upper().strip()],
         ).fetchone()
         if row is None:
-            return {"asset_type": None, "asset_subtype": None, "symbol": None}
-        return {"asset_type": row[0], "asset_subtype": row[1], "symbol": row[2]}
+            return {
+                "asset_type": None,
+                "asset_subtype": None,
+                "symbol": None,
+                "name": None,
+                "sector": None,
+                "industry": None,
+            }
+        return {
+            "asset_type": row[0],
+            "asset_subtype": row[1],
+            "symbol": row[2],
+            "name": row[3],
+            "sector": row[4],
+            "industry": row[5],
+        }
 
     def etf_profile(self, asset_id: str) -> dict[str, Any]:
         if not self._table_exists("etf_profile"):

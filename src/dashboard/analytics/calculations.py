@@ -521,6 +521,7 @@ def allocation_class(
         for value in (asset_id, symbol, name, asset_type, asset_subtype, sector, industry)
     ).lower()
     symbol_key = str(symbol or asset_id or "").upper().strip()
+    symbol_base = symbol_key.split(".", maxsplit=1)[0]
     asset_type_key = str(asset_type or "").lower().strip()
     asset_subtype_key = str(asset_subtype or "").lower().strip()
 
@@ -536,9 +537,52 @@ def allocation_class(
         return "Fixed income"
     if asset_type_key in {"bond", "fixed_income", "fixed income"} or asset_subtype_key in {"bond", "fixed_income", "fixed income"}:
         return "Fixed income"
-    if asset_subtype_key == "cdr" or "canadian depositary receipt" in text or "canadian depository receipt" in text:
+    known_cdr_bases = {
+        "AAPL",
+        "AMD",
+        "AMZN",
+        "ANET",
+        "ASML",
+        "AVGO",
+        "CEG",
+        "CEGS",
+        "GEV",
+        "GOOG",
+        "ISRG",
+        "LLY",
+        "META",
+        "MSFT",
+        "MU",
+        "NOW",
+        "NOWS",
+        "NVDA",
+        "NVO",
+        "NVON",
+        "SPGI",
+        "TSLA",
+        "UBER",
+        "V",
+        "VISA",
+    }
+    if (
+        asset_subtype_key == "cdr"
+        or " cdr" in f" {text} "
+        or "depositary receipt" in text
+        or "depository receipt" in text
+        or (symbol_key.endswith((".TO", ".NE")) and symbol_base in known_cdr_bases)
+    ):
         return "CDR"
-    if any(term in text for term in (" etf", "exchange traded fund", "split corp class a etf")):
+    if any(
+        term in text
+        for term in (
+            " etf",
+            " exchange traded fund",
+            " exchange-traded fund",
+            " index fund",
+            " mutual fund",
+            "split corp class a etf",
+        )
+    ):
         return "ETF"
     if asset_type_key in {"etf", "fund", "mutual_fund", "mutual fund"}:
         return "ETF"
