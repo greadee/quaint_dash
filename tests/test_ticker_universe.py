@@ -242,6 +242,56 @@ def test_sync_portfolio_tickers_from_positions_handles_qty_and_ignores_zero_posi
     ]
 
 
+def test_sync_portfolio_tickers_from_positions_includes_broker_position_maps():
+    conn = make_new_universe_conn()
+    conn.execute(
+        """
+        CREATE TABLE broker_portfolio_position_map (
+            provider TEXT,
+            provider_account_id TEXT,
+            provider_position_id TEXT,
+            portfolio_id BIGINT,
+            asset_id TEXT,
+            quantity DOUBLE,
+            book_cost DOUBLE
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO broker_portfolio_position_map(
+            provider,
+            provider_account_id,
+            provider_position_id,
+            portfolio_id,
+            asset_id,
+            quantity,
+            book_cost
+        )
+        VALUES
+            ('snaptrade', 'acct-1', 'pos-aapl', 1, 'AAPL', 10, 100),
+            ('snaptrade', 'acct-1', 'pos-msft', 1, 'MSFT', 0, 0),
+            ('snaptrade', 'acct-2', 'pos-spy', 2, 'SPY', 3, 300)
+        """
+    )
+
+    count = TickerUniverseRepository(conn).sync_portfolio_tickers_from_positions()
+
+    rows = conn.execute(
+        """
+        SELECT portfolio_id, asset_id, is_active, source
+        FROM portfolio_ticker
+        ORDER BY portfolio_id, asset_id
+        """
+    ).fetchall()
+
+    assert count == 2
+    assert rows == [
+        (1, "AAPL", True, "position"),
+        (2, "SPY", True, "position"),
+    ]
+
+
 def test_sync_portfolio_tickers_from_positions_deactivates_unheld_portfolio_tickers():
     conn = make_new_universe_conn()
     conn.execute(

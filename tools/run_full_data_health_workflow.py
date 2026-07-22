@@ -335,9 +335,13 @@ def scan_payload(source: str, data: Any, findings: list[Finding], path: str = "$
     if isinstance(data, dict):
         for key, value in data.items():
             next_path = f"{path}.{key}"
-            if key in CRITICAL_NUMERIC_KEYS and value is None:
+            if (
+                key in CRITICAL_NUMERIC_KEYS
+                and value is None
+                and not _null_metric_is_not_applicable(data, key)
+            ):
                 findings.append(Finding("error", source, "critical metric is null", {"path": next_path}))
-            if key == "missing_inputs" and value:
+            if key == "missing_inputs" and value and not _missing_inputs_are_not_applicable(data, value):
                 findings.append(Finding("error", source, "missing inputs reported", {"path": next_path, "value": value}))
             if key in {"warnings", "assumptions"} and value:
                 findings.append(Finding("warning", source, f"{key} reported", {"path": next_path, "value": value}))
@@ -347,6 +351,32 @@ def scan_payload(source: str, data: Any, findings: list[Finding], path: str = "$
     elif isinstance(data, list):
         for index, item in enumerate(data):
             scan_payload(source, item, findings, f"{path}[{index}]")
+
+
+def _null_metric_is_not_applicable(parent: dict[str, Any], key: str) -> bool:
+    allocation = str(parent.get("allocation_class") or "").lower()
+    if allocation in {"etf", "money market", "fixed income", "cash"} and key in {
+        "pe_ratio",
+        "price_to_free_cash_flow",
+        "margin_of_safety",
+    }:
+        return True
+    return (
+        key in {"price_to_free_cash_flow", "margin_of_safety"}
+        and parent.get("fcf_metrics_applicable") is False
+    )
+
+
+def _missing_inputs_are_not_applicable(parent: dict[str, Any], values: Any) -> bool:
+    if not isinstance(values, list):
+        return False
+    allocation = str(parent.get("allocation_class") or "").lower()
+    normalized = {str(value).lower() for value in values}
+    if allocation in {"etf", "money market", "fixed income", "cash"}:
+        return normalized <= {"p/e", "p/fcf"}
+    if parent.get("fcf_metrics_applicable") is False:
+        return normalized <= {"p/fcf"}
+    return False
 
 
 def scan_endpoint_semantics(source: str, data: Any, findings: list[Finding]) -> None:

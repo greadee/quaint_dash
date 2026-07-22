@@ -77,11 +77,11 @@ class TickerUniverseRepository:
         return [row[0] for row in rows]
 
     def sync_portfolio_tickers_from_positions(self) -> int:
-        if not self._table_exists("portfolio_ticker") or not self._table_exists("position"):
+        if not self._table_exists("portfolio_ticker"):
             return 0
 
-        quantity_column = self._quantity_column()
-        if quantity_column is None:
+        held_sql = self._held_portfolio_assets_sql()
+        if held_sql is None:
             return 0
 
         self.conn.execute(
@@ -101,9 +101,7 @@ class TickerUniverseRepository:
                 'position',
                 now(),
                 now()
-            FROM position
-            WHERE asset_id IS NOT NULL
-              AND COALESCE({quantity_column}, 0) <> 0
+            FROM ({held_sql}) held
             ON CONFLICT (portfolio_id, asset_id)
             DO UPDATE SET
                 is_active = TRUE,
@@ -112,16 +110,15 @@ class TickerUniverseRepository:
         )
         self.conn.execute(
             f"""
+            WITH held AS ({held_sql})
             UPDATE portfolio_ticker pt
             SET is_active = FALSE,
                 updated_at = now()
             WHERE NOT EXISTS (
                 SELECT 1
-                FROM position p
-                WHERE p.portfolio_id = pt.portfolio_id
-                  AND p.asset_id = pt.asset_id
-                  AND p.asset_id IS NOT NULL
-                  AND COALESCE(p.{quantity_column}, 0) <> 0
+                FROM held h
+                WHERE h.portfolio_id = pt.portfolio_id
+                  AND h.asset_id = pt.asset_id
             )
             """
         )
@@ -134,6 +131,47 @@ class TickerUniverseRepository:
             """
         ).fetchone()
         return int(row[0])
+
+    def _held_portfolio_assets_sql(self) -> str | None:
+        sources: list[str] = []
+
+        if self._table_exists("position"):
+            quantity_column = self._quantity_column()
+            if quantity_column is not None:
+                sources.append(
+                    f"""
+                    SELECT portfolio_id, asset_id
+                    FROM position
+                    WHERE asset_id IS NOT NULL
+                      AND COALESCE({quantity_column}, 0) <> 0
+                    """
+                )
+
+        if self._table_exists("txn"):
+            sources.append(
+                """
+                SELECT portfolio_id, asset_id
+                FROM txn
+                WHERE asset_id IS NOT NULL
+                  AND txn_type IN ('buy', 'sell')
+                GROUP BY portfolio_id, asset_id
+                HAVING SUM(COALESCE(qty, 0)) <> 0
+                """
+            )
+
+        if self._table_exists("broker_portfolio_position_map"):
+            sources.append(
+                """
+                SELECT portfolio_id, asset_id
+                FROM broker_portfolio_position_map
+                WHERE asset_id IS NOT NULL
+                  AND COALESCE(quantity, 0) <> 0
+                """
+            )
+
+        if not sources:
+            return None
+        return "\nUNION\n".join(sources)
 
     def stream_subscriptions(
         self,
@@ -301,6 +339,8 @@ class TickerUniverseRepository:
 
 
 _CDR_SYMBOL_ALIASES = {
+    "CEGS": "CEG",
+    "NVON": "NVO",
     "NOWS": "NOW",
     "VISA": "V",
 }
