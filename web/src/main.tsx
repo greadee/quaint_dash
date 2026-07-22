@@ -6,7 +6,13 @@ import App from "./App";
 import "./styles.css";
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
+  defaultOptions: {
+    queries: {
+      staleTime: 120_000,
+      retry: false,
+      refetchOnWindowFocus: false,
+    },
+  },
 });
 
 createRoot(document.getElementById("root")!).render(

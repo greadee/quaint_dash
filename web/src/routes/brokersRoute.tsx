@@ -98,12 +98,12 @@ export function BrokersPage({ notify }: { notify: (message: string, tone?: AppNo
   const showSummaryCards = usePageFeature("brokers", "brokers.summaryCards");
 
   const statusQuery = useQuery({ queryKey: ["broker-status"], queryFn: api.brokerStatus });
-  const portfolios = useQuery({ queryKey: ["portfolios"], queryFn: api.portfolios });
+  const portfolios = useQuery({ queryKey: ["portfolios"], queryFn: api.portfolios, enabled: selectedTab === "accounts" });
   const connections = useQuery({ queryKey: ["broker-connections"], queryFn: api.brokerConnections });
   const accounts = useQuery({ queryKey: ["broker-accounts"], queryFn: api.brokerAccounts });
-  const preview = useQuery({ queryKey: ["broker-import-preview"], queryFn: api.brokerImportPreview });
-  const reconciliation = useQuery({ queryKey: ["broker-reconciliation"], queryFn: api.brokerReconciliation });
-  const history = useQuery({ queryKey: ["broker-sync-history"], queryFn: api.brokerSyncHistory });
+  const preview = useQuery({ queryKey: ["broker-import-preview"], queryFn: () => api.brokerImportPreview(), enabled: selectedTab === "import" });
+  const reconciliation = useQuery({ queryKey: ["broker-reconciliation"], queryFn: api.brokerReconciliation, enabled: selectedTab === "import" || accountFilter === "attention" });
+  const history = useQuery({ queryKey: ["broker-sync-history"], queryFn: api.brokerSyncHistory, enabled: selectedTab === "history" });
   const brokerUserKey = statusQuery.data?.broker_profile_key ?? null;
 
   const refreshBrokerQueries = () => {

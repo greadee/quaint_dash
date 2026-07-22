@@ -923,8 +923,11 @@ def broker_status(conn=Depends(get_connection)):
 
 
 @router.get("/brokers/import-preview", response_model=BrokerImportPreviewResponse)
-def broker_import_preview(conn=Depends(get_connection)):
-    return CommandApiService(conn).broker_import_preview()
+def broker_import_preview(
+    item_limit: int = Query(default=25, ge=0, le=500),
+    conn=Depends(get_connection),
+):
+    return CommandApiService(conn).broker_import_preview(item_limit=item_limit)
 
 
 @router.get("/brokers/reconciliation", response_model=BrokerReconciliationResponse)

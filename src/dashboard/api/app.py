@@ -12,6 +12,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 
 from dashboard.api.broker_background import BrokerBackgroundConfig, BrokerBackgroundWorker
 from dashboard.api.data_readiness_background import DataReadinessConfig, DataReadinessWorker
@@ -92,6 +93,7 @@ def create_app(
         app.state.write_lock,
         BrokerBackgroundConfig.from_env(),
     )
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[os.getenv("DASHBOARD_WEB_DEV_ORIGIN", "http://127.0.0.1:5173")],

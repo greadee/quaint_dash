@@ -1470,29 +1470,61 @@ class PortfolioApiService:
     def __init__(self, conn) -> None:
         self.conn = conn
         self._signal_efficacy_price_cache: dict[str, list[tuple[date, float]]] = {}
+        self._portfolio_summary_cache: list[PortfolioSummary] | None = None
+        self._position_summary_cache: dict[int | None, list[PositionSummary]] = {}
+
+    def _invalidate_read_caches(self) -> None:
+        self._portfolio_summary_cache = None
+        self._position_summary_cache.clear()
 
     def list_portfolios(self) -> list[PortfolioSummary]:
+        if self._portfolio_summary_cache is not None:
+            return self._portfolio_summary_cache
+        summaries = self._portfolio_summaries()
+        self._portfolio_summary_cache = summaries
+        return summaries
+
+    def _portfolio_summaries(self, portfolio_id: int | None = None) -> list[PortfolioSummary]:
+        scoped_holdings_where = "WHERE portfolio_id = ?" if portfolio_id is not None else ""
+        portfolio_where = "WHERE p.portfolio_id = ?" if portfolio_id is not None else ""
+        params: list[object] = [portfolio_id, portfolio_id] if portfolio_id is not None else []
         rows = self.conn.execute(
             f"""
             WITH holdings AS ({_HOLDINGS_SQL}),
+            scoped_holdings AS (
+                SELECT *
+                FROM holdings
+                {scoped_holdings_where}
+            ),
             latest_prices AS (
                 SELECT asset_id, close AS price
                 FROM asset_quote_daily
-                WHERE close IS NOT NULL
+                WHERE asset_id IN (SELECT DISTINCT asset_id FROM scoped_holdings)
+                  AND close IS NOT NULL
                 QUALIFY ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY date DESC) = 1
             ),
             current_prices AS (
                 SELECT asset_id, price
                 FROM current_asset_price
+                WHERE asset_id IN (SELECT DISTINCT asset_id FROM scoped_holdings)
+            ),
+            mapped_broker_positions AS (
+                SELECT DISTINCT provider, provider_account_id, provider_position_id
+                FROM broker_portfolio_position_map
+                WHERE portfolio_id IN (SELECT DISTINCT portfolio_id FROM scoped_holdings)
             ),
             latest_broker_positions AS (
                 SELECT
-                    provider,
-                    provider_account_id,
-                    provider_position_id,
-                    MAX(as_of_date) AS as_of_date
-                FROM broker_position_snapshot
-                GROUP BY provider, provider_account_id, provider_position_id
+                    ps.provider,
+                    ps.provider_account_id,
+                    ps.provider_position_id,
+                    MAX(ps.as_of_date) AS as_of_date
+                FROM broker_position_snapshot ps
+                JOIN mapped_broker_positions mapped
+                  ON mapped.provider = ps.provider
+                 AND mapped.provider_account_id = ps.provider_account_id
+                 AND mapped.provider_position_id = ps.provider_position_id
+                GROUP BY ps.provider, ps.provider_account_id, ps.provider_position_id
             ),
             broker_prices AS (
                 SELECT
@@ -1521,7 +1553,7 @@ class PortfolioApiService:
                             FILTER (WHERE h.quantity <> 0),
                         0
                     ) AS market_value
-                FROM holdings h
+                FROM scoped_holdings h
                 LEFT JOIN latest_prices lp ON lp.asset_id = h.asset_id
                 LEFT JOIN current_prices cp ON cp.asset_id = h.asset_id
                 LEFT JOIN broker_prices bp
@@ -1540,8 +1572,10 @@ class PortfolioApiService:
                 COALESCE(t.book_cost, 0)
             FROM portfolio p
             LEFT JOIN totals t ON t.portfolio_id = p.portfolio_id
+            {portfolio_where}
             ORDER BY p.portfolio_id
-            """
+            """,
+            params,
         ).fetchall()
         return [self._portfolio_summary(row) for row in rows]
 
@@ -1600,7 +1634,12 @@ class PortfolioApiService:
         )
 
     def get_portfolio(self, portfolio_id: int) -> PortfolioSummary:
-        for portfolio in self.list_portfolios():
+        portfolios = (
+            self._portfolio_summaries(portfolio_id)
+            if self._portfolio_summary_cache is None
+            else self._portfolio_summary_cache
+        )
+        for portfolio in portfolios:
             if portfolio.portfolio_id == portfolio_id:
                 return portfolio
         raise LookupError(f"Portfolio not found: {portfolio_id}")
@@ -1623,6 +1662,7 @@ class PortfolioApiService:
             """,
             [name, request.base_ccy],
         ).fetchone()
+        self._invalidate_read_caches()
         return self.get_portfolio(int(row[0]))
 
     def update_portfolio(self, portfolio_id: int, request: PortfolioUpdate) -> PortfolioSummary:
@@ -1649,6 +1689,7 @@ class PortfolioApiService:
             """,
             [name, portfolio_id],
         )
+        self._invalidate_read_caches()
         return self.get_portfolio(portfolio_id)
 
     def delete_portfolio(self, portfolio_id: int) -> dict[str, int]:
@@ -1660,6 +1701,7 @@ class PortfolioApiService:
         self.conn.execute("DELETE FROM portfolio_ticker WHERE portfolio_id = ?", [portfolio_id])
         self.conn.execute("DELETE FROM txn WHERE portfolio_id = ?", [portfolio_id])
         self.conn.execute("DELETE FROM portfolio WHERE portfolio_id = ?", [portfolio_id])
+        self._invalidate_read_caches()
         return {"portfolio_id": portfolio_id}
 
     def delete_position(self, portfolio_id: int, asset_id: str) -> dict[str, int | str]:
@@ -1730,6 +1772,7 @@ class PortfolioApiService:
             """,
             [portfolio_id, asset_id],
         )
+        self._invalidate_read_caches()
         return {
             "portfolio_id": portfolio_id,
             "asset_id": asset_id,
@@ -1740,10 +1783,12 @@ class PortfolioApiService:
         }
 
     def list_positions(self, portfolio_id: int | None = None) -> list[PositionSummary]:
+        if portfolio_id in self._position_summary_cache:
+            return self._position_summary_cache[portfolio_id]
         if portfolio_id is not None:
             self.get_portfolio(portfolio_id)
             where = "WHERE portfolio_id = ?"
-            params: list[object] = [portfolio_id, portfolio_id, portfolio_id]
+            params: list[object] = [portfolio_id, portfolio_id, portfolio_id, portfolio_id]
         else:
             where = ""
             params = []
@@ -1768,21 +1813,32 @@ class PortfolioApiService:
             latest_prices AS (
                 SELECT asset_id, close AS price
                 FROM asset_quote_daily
-                WHERE close IS NOT NULL
+                WHERE asset_id IN (SELECT DISTINCT asset_id FROM holdings)
+                  AND close IS NOT NULL
                 QUALIFY ROW_NUMBER() OVER (PARTITION BY asset_id ORDER BY date DESC) = 1
             ),
             current_prices AS (
                 SELECT asset_id, price, provider, market_session, updated_at
                 FROM current_asset_price
+                WHERE asset_id IN (SELECT DISTINCT asset_id FROM holdings)
+            ),
+            mapped_broker_positions AS (
+                SELECT DISTINCT provider, provider_account_id, provider_position_id
+                FROM broker_portfolio_position_map
+                {where}
             ),
             latest_broker_positions AS (
                 SELECT
-                    provider,
-                    provider_account_id,
-                    provider_position_id,
-                    MAX(as_of_date) AS as_of_date
-                FROM broker_position_snapshot
-                GROUP BY provider, provider_account_id, provider_position_id
+                    ps.provider,
+                    ps.provider_account_id,
+                    ps.provider_position_id,
+                    MAX(ps.as_of_date) AS as_of_date
+                FROM broker_position_snapshot ps
+                JOIN mapped_broker_positions mapped
+                  ON mapped.provider = ps.provider
+                 AND mapped.provider_account_id = ps.provider_account_id
+                 AND mapped.provider_position_id = ps.provider_position_id
+                GROUP BY ps.provider, ps.provider_account_id, ps.provider_position_id
             ),
             broker_prices AS (
                 SELECT
@@ -1863,9 +1919,12 @@ class PortfolioApiService:
             """,
             params,
         ).fetchall()
-        return [self._position_summary(row) for row in rows]
+        exposure_maps = self._position_exposure_maps_by_asset([str(row[0]) for row in rows])
+        positions = [self._position_summary(row, exposure_maps.get(str(row[0]))) for row in rows]
+        self._position_summary_cache[portfolio_id] = positions
+        return positions
 
-    def _position_summary(self, row) -> PositionSummary:
+    def _position_summary(self, row, exposure_maps: dict[str, dict[str, float]] | None = None) -> PositionSummary:
         classification = _cdr_classification_override(
             asset_id=row[0],
             symbol=row[1],
@@ -1885,7 +1944,7 @@ class PortfolioApiService:
         )
         industry = _canonical_industry_label(classification["industry"])
         country = _canonical_country_label(classification["country"])
-        exposure_maps = self._position_exposure_maps(row[0])
+        exposure_maps = exposure_maps or self._empty_position_exposure_maps()
         return PositionSummary(
             asset_id=row[0],
             symbol=row[1],
@@ -1924,30 +1983,45 @@ class PortfolioApiService:
             stale_reason=None if row[12] is not None else "no usable price",
         )
 
-    def _position_exposure_maps(self, asset_id: str) -> dict[str, dict[str, float]]:
-        empty: dict[str, dict[str, float]] = {
+    def _empty_position_exposure_maps(self) -> dict[str, dict[str, float]]:
+        return {
             "sector": {},
             "industry": {},
             "country": {},
             "currency": {},
         }
+
+    def _position_exposure_maps(self, asset_id: str) -> dict[str, dict[str, float]]:
+        return self._position_exposure_maps_by_asset([asset_id]).get(
+            asset_id,
+            self._empty_position_exposure_maps(),
+        )
+
+    def _position_exposure_maps_by_asset(self, asset_ids: list[str]) -> dict[str, dict[str, dict[str, float]]]:
+        if not asset_ids:
+            return {}
         if not _table_exists(self.conn, "etf_holding"):
-            return empty
+            return {asset_id: self._empty_position_exposure_maps() for asset_id in asset_ids}
+        unique_asset_ids = sorted({asset_id for asset_id in asset_ids if asset_id})
+        if not unique_asset_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in unique_asset_ids)
         try:
             rows = self.conn.execute(
-                """
-                SELECT weight_pct, sector, country, currency
+                f"""
+                SELECT asset_id, weight_pct, sector, country, currency
                 FROM etf_holding
-                WHERE asset_id = ?
+                WHERE asset_id IN ({placeholders})
                 """,
-                [asset_id],
+                unique_asset_ids,
             ).fetchall()
         except Exception:
-            return empty
-        if not rows:
-            return empty
-        maps = {key: {} for key in empty}
-        for weight_pct, sector, country, currency in rows:
+            return {asset_id: self._empty_position_exposure_maps() for asset_id in unique_asset_ids}
+        maps_by_asset = {
+            asset_id: self._empty_position_exposure_maps()
+            for asset_id in unique_asset_ids
+        }
+        for asset_id, weight_pct, sector, country, currency in rows:
             weight = _normalized_weight(weight_pct)
             if weight is None or weight <= 0:
                 continue
@@ -1959,8 +2033,12 @@ class PortfolioApiService:
             for key, value in values.items():
                 if not value:
                     continue
-                maps[key][value] = maps[key].get(value, 0.0) + weight
-        return {key: _normalize_exposure_map(value) for key, value in maps.items()}
+                asset_maps = maps_by_asset.setdefault(str(asset_id), self._empty_position_exposure_maps())
+                asset_maps[key][value] = asset_maps[key].get(value, 0.0) + weight
+        return {
+            asset_id: {key: _normalize_exposure_map(value) for key, value in maps.items()}
+            for asset_id, maps in maps_by_asset.items()
+        }
 
     def list_asset_holdings(self, asset_id: str) -> list[AssetHoldingSummary]:
         asset_id = asset_id.upper().strip()
@@ -6761,7 +6839,7 @@ class CommandApiService(BrokerCommands, IngestionCommands):
             )
         return items
 
-    def broker_import_preview(self) -> BrokerImportPreviewResponse:
+    def broker_import_preview(self, item_limit: int = 25) -> BrokerImportPreviewResponse:
         rows = self.conn.execute(
             """
             SELECT
@@ -6830,26 +6908,27 @@ class CommandApiService(BrokerCommands, IngestionCommands):
             )
             _increment_preview_group(group, status, category)
             date_values.append(row[6])
-            group.items.append(
-                BrokerImportPreviewItem(
-                    provider_transaction_id=row[0],
-                    institution_name=row[1],
-                    account_name=row[2],
-                    masked_account_number=key[4],
-                    portfolio_id=row[4],
-                    portfolio_name=row[5],
-                    trade_date=row[6],
-                    source_type=row[7],
-                    category=category,
-                    status=status,
-                    symbol=row[9],
-                    quantity=_float_or_none(row[10]),
-                    price=_float_or_none(row[11]),
-                    amount=_float_or_none(row[12]),
-                    currency=_valid_currency(row[13]),
-                    normalization_result=reason,
+            if len(group.items) < item_limit:
+                group.items.append(
+                    BrokerImportPreviewItem(
+                        provider_transaction_id=row[0],
+                        institution_name=row[1],
+                        account_name=row[2],
+                        masked_account_number=key[4],
+                        portfolio_id=row[4],
+                        portfolio_name=row[5],
+                        trade_date=row[6],
+                        source_type=row[7],
+                        category=category,
+                        status=status,
+                        symbol=row[9],
+                        quantity=_float_or_none(row[10]),
+                        price=_float_or_none(row[11]),
+                        amount=_float_or_none(row[12]),
+                        currency=_valid_currency(row[13]),
+                        normalization_result=reason,
+                    )
                 )
-            )
         return BrokerImportPreviewResponse(
             generated_at=datetime.now(UTC),
             total_transactions=len(rows),

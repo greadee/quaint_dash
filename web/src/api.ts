@@ -1557,7 +1557,7 @@ export const api = {
   brokerConnections: () => request<BrokerConnection[]>("/brokers/connections"),
   brokerAccounts: () => request<BrokerAccount[]>("/brokers/accounts"),
   brokerStatus: () => request<BrokerStatus>("/brokers/status"),
-  brokerImportPreview: () => request<BrokerImportPreview>("/brokers/import-preview"),
+  brokerImportPreview: (itemLimit = 25) => request<BrokerImportPreview>(`/brokers/import-preview?item_limit=${itemLimit}`),
   brokerReconciliation: () => request<BrokerReconciliation>("/brokers/reconciliation"),
   brokerSyncHistory: () => request<BrokerSyncHistoryItem[]>("/brokers/sync-history"),
   registerBrokerUser: (userKey: string) =>
