@@ -2918,6 +2918,25 @@ button:hover,
   min-height: 36px;
 }
 
+.chart-frame {
+  position: relative;
+}
+
+.chart-frame-heading {
+  align-items: center;
+}
+
+.chart-frame .chart-controls {
+  padding: 0;
+}
+
+.chart-frame-footnote {
+  margin: -8px 20px 18px;
+  color: var(--dash-text-soft);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .metric::before,
   .signal::before,

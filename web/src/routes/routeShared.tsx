@@ -64,6 +64,22 @@ export function ChartTypeToggle({ value, onChange }: { value: "line" | "bar"; on
   </div>;
 }
 
+export function ChartFrame({ eyebrow, title, detail, tools, children, className = "" }: { eyebrow: string; title: string; detail?: string; tools?: ReactNode; children: ReactNode; className?: string }) {
+  return (
+    <section className={`card chart-card chart-frame ${className}`.trim()}>
+      <div className="card-heading chart-frame-heading">
+        <div>
+          <p className="eyebrow">{eyebrow}</p>
+          <h2>{title}</h2>
+        </div>
+        {tools ? <div className="chart-controls">{tools}</div> : detail ? <span>{detail}</span> : null}
+      </div>
+      {children}
+      {tools && detail ? <p className="chart-frame-footnote">{detail}</p> : null}
+    </section>
+  );
+}
+
 export function Pager({ total, limit, offset, onChange }: { total: number; limit: number; offset: number; onChange: (offset: number) => void }) {
   const nextOffset = offset + limit;
   const previousOffset = Math.max(offset - limit, 0);
