@@ -6,7 +6,7 @@ import { Bar, BarChart, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 import { api, type BusinessStrengthScorecard, type BusinessStrengthMetric, type NewsArticle } from "../api";
 import { AssetAnalyticsPanel } from "./routeAnalytics";
 import { money, percent } from "./routeFormatters";
-import { ChartFrame, ChartTypeToggle, EmptyRow, ErrorPanel, Loading, RangeSelector, TabBar } from "./routeShared";
+import { ChartFrame, ChartTypeToggle, EmptyRow, ErrorPanel, Loading, RangeSelector, ScoreGauge, TabBar } from "./routeShared";
 import type { AppNotification } from "./routeTypes";
 import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar, usePageFeature, usePageFeatureControls } from "../pageFeatureStore";
 
@@ -60,7 +60,7 @@ function BusinessStrengthPanel({ data, isLoading, error, onRefresh }: { data?: B
     <section className="card business-strength-hero">
       <div>
         <p className="eyebrow">Deterministic business quality</p>
-        <h2>{scoreText(data.overall_score)} <small>{data.classification}</small></h2>
+        <ScoreGauge value={data.overall_score} label={scoreText(data.overall_score)} detail={data.classification} />
         <p>Template: {data.template_name} v{data.template_version}. Methodology: {data.methodology_version}.</p>
       </div>
       <dl>

@@ -1,5 +1,5 @@
 import { AlertTriangle, ArrowLeft, ArrowRight, BarChart3, Info, LineChart, RefreshCw, SearchX } from "lucide-react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import type { HelpItem } from "./routeTypes";
 
 export function HelpDisclosure({ title, items, note }: { title: string; items: HelpItem[]; note?: string }) {
@@ -51,6 +51,19 @@ export function Signal({ label, value }: { label: string; value: string }) {
 
 export function DataList({ children, className = "" }: { children: ReactNode; className?: string }) {
   return <div className={`data-list ${className}`.trim()}>{children}</div>;
+}
+
+export function ScoreGauge({ value, label, detail }: { value: number | null | undefined; label: string; detail?: string }) {
+  const normalized = value == null ? 0 : Math.max(0, Math.min(100, value));
+  const style = { "--score": `${normalized}%` } as CSSProperties;
+  return (
+    <div className="score-gauge" style={style} aria-label={`${label}${detail ? `, ${detail}` : ""}`}>
+      <div>
+        <strong>{label}</strong>
+        {detail ? <span>{detail}</span> : null}
+      </div>
+    </div>
+  );
 }
 
 export function TabBar<T extends string>({ tabs, selected, onSelect, label }: { tabs: { value: T; label: string }[]; selected: T; onSelect: (value: T) => void; label: string }) {
