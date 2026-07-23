@@ -3167,6 +3167,84 @@ button:hover,
   .setting-row select { width: 100%; }
 }
 
+/* Broker workspace: align connection management with the dashboard material system. */
+.broker-hero {
+  border-color: var(--dash-border);
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at top right, rgba(88, 210, 195, 0.12), transparent 34%),
+    var(--dash-surface);
+  box-shadow: var(--dash-shadow-soft);
+}
+
+.broker-refresh-stamp,
+.broker-card-title span,
+.broker-account-identity span,
+.broker-account-identity em,
+.broker-fact span,
+.broker-history-list span,
+.broker-section-heading p { color: var(--dash-text-soft); }
+
+.broker-action-banner {
+  border-color: rgba(86, 214, 131, 0.22);
+  border-radius: 12px;
+  background: rgba(86, 214, 131, 0.08);
+  color: var(--dash-text);
+}
+
+.broker-summary-card {
+  min-height: 126px;
+  border-color: var(--dash-border);
+  border-radius: 16px;
+  background: var(--dash-surface);
+  color: var(--dash-text);
+  box-shadow: var(--dash-shadow-soft);
+}
+
+.broker-summary-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--dash-border-strong);
+  background: var(--dash-surface-strong);
+}
+
+.broker-summary-card.warn {
+  border-color: rgba(242, 181, 68, 0.3);
+  background: rgba(242, 181, 68, 0.09);
+}
+
+.broker-warning,
+.broker-error-callout {
+  border-radius: 12px;
+  background: rgba(242, 181, 68, 0.1);
+  border-color: rgba(242, 181, 68, 0.24);
+  color: var(--dash-text);
+}
+
+.broker-error-callout {
+  background: rgba(255, 95, 122, 0.1);
+  border-color: rgba(255, 95, 122, 0.24);
+}
+
+.broker-connection-card.needs-attention {
+  border-color: rgba(242, 181, 68, 0.34);
+  background: var(--dash-surface);
+}
+
+.broker-preview-group,
+.broker-preview-totals > div,
+.broker-history-list article,
+.broker-progress span {
+  border-color: var(--dash-border);
+  background: rgba(255, 255, 255, 0.028);
+}
+
+.broker-preview-group { border-radius: 14px; }
+.broker-progress .active { border-color: rgba(88, 210, 195, 0.38); background: rgba(88, 210, 195, 0.12); }
+
+@media (prefers-reduced-motion: reduce) {
+  .broker-summary-card { transition: none; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .metric::before,
   .signal::before,
