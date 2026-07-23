@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useId, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Activity, ArrowUpRight, BarChart3, CircleDollarSign, ShieldCheck, WalletCards } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { Bar, BarChart, Cell, Line, LineChart, Pie, PieChart, PolarAngleAxis, PolarGrid, PolarRadiusAxis, Radar, RadarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, Line, LineChart, PolarAngleAxis, PolarGrid, PolarRadiusAxis, Radar, RadarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, type HoldingSignal, type NewsArticle, type OptimizationPreview, type Portfolio, type PortfolioFundamentals, type PortfolioMetricInsight, type PortfolioPerformance, type PortfolioRisk, type Position } from "../api";
 import { AnalyticsBlock, DataIssueList, ExposureBars } from "./routeAnalytics";
 import { formatTimestamp, money, number, percent } from "./routeFormatters";
@@ -375,57 +375,22 @@ function AllocationGrid({ groups, currency, selectedGroup, onSelect }: { groups:
   return <div className="tranche-grid">{groups.map((group) => <button type="button" className={`tranche ${selectedGroup === group.label ? "active" : ""}`} key={group.label} onClick={() => onSelect(group.label)} aria-pressed={selectedGroup === group.label}><div><strong>{group.label}</strong><span>{group.count} holdings</span></div><b>{money(group.marketValue, currency)}</b><div className="bar"><span style={{ width: `${Math.max(group.weight * 100, 2)}%` }} /></div><em>{percent(group.weight)} weight</em><em>{percent(group.returnPercent)} return</em></button>)}</div>;
 }
 function AllocationPie({ groups, currency }: { groups: AllocationGroup[]; currency: string }) {
-  const chartId = useId().replace(/:/g, "");
   const totalValue = groups.reduce((sum, group) => sum + group.marketValue, 0);
+  let cursor = 0;
+  const segments = groups.map((group, index) => {
+    const tone = piePalette[index % piePalette.length];
+    const size = totalValue > 0 ? (group.marketValue / totalValue) * 100 : 0;
+    const start = cursor;
+    cursor += size;
+    return `${tone.base} ${start.toFixed(2)}% ${cursor.toFixed(2)}%`;
+  });
+  const ringStyle = { "--allocation-ring": `conic-gradient(${segments.join(", ")})` } as CSSProperties;
   return <div className="allocation-pie-layout">
-    <div className="allocation-pie-chart" aria-label="Allocation pie chart" onMouseDownCapture={(event) => event.preventDefault()} onClickCapture={(event) => event.preventDefault()}>
-      <ResponsiveContainer width="100%" height="100%">
-        <PieChart accessibilityLayer={false}>
-          <defs>
-            <radialGradient id={`${chartId}-centerGlow`} cx="50%" cy="50%" r="65%">
-              <stop offset="0%" stopColor="rgba(255,255,255,0.04)" />
-              <stop offset="60%" stopColor="rgba(255,255,255,0.012)" />
-              <stop offset="100%" stopColor="rgba(0,0,0,0)" />
-            </radialGradient>
-            {groups.map((group, index) => {
-              const tone = piePalette[index % piePalette.length];
-              return (
-                <>
-                  <linearGradient
-                    key={`${group.label}-face`}
-                    id={`${chartId}-slice-${index}`}
-                    x1="0%"
-                    y1="0%"
-                    x2="100%"
-                    y2="100%"
-                  >
-                    <stop offset="0%" stopColor={tone.dark} />
-                    <stop offset="4%" stopColor={tone.base} />
-                    <stop offset="11%" stopColor={tone.light} />
-                    <stop offset="42%" stopColor={tone.base} />
-                    <stop offset="58%" stopColor={tone.light} />
-                    <stop offset="89%" stopColor={tone.base} />
-                    <stop offset="96%" stopColor={tone.light} />
-                    <stop offset="100%" stopColor={tone.dark} />
-                  </linearGradient>
-                </>
-              );
-            })}
-          </defs>
-          <Pie data={groups} dataKey="marketValue" nameKey="label" innerRadius="51.5%" outerRadius="84.5%" paddingAngle={0.9} cornerRadius={1.45} stroke="none">
-            {groups.map((group, index) => <Cell key={group.label} fill={`url(#${chartId}-slice-${index})`} stroke="rgba(36, 35, 32, 0.82)" strokeWidth={1.2} />)}
-          </Pie>
-          <circle cx="50%" cy="50%" r="58" fill="rgba(10,12,14,0.94)" stroke="rgba(255,255,255,0.03)" strokeWidth="0.8" />
-          <circle cx="50%" cy="50%" r="58" fill={`url(#${chartId}-centerGlow)`} />
-          <text x="50%" y="50%" textAnchor="middle" dominantBaseline="middle" dy="-10" className="allocation-center-value">
-            {money(totalValue, currency)}
-          </text>
-          <text x="50%" y="50%" textAnchor="middle" dominantBaseline="middle" dy="16" className="allocation-center-label">
-            Total
-          </text>
-          <Tooltip formatter={(value) => money(Number(value), currency)} />
-        </PieChart>
-      </ResponsiveContainer>
+    <div className="allocation-pie-chart allocation-ring" aria-label="Allocation pie chart" role="img" style={ringStyle}>
+      <div className="allocation-ring-center">
+        <strong>{money(totalValue, currency)}</strong>
+        <span>Total</span>
+      </div>
     </div>
     <div className="allocation-legend">{groups.map((group, index) => {
       const tone = piePalette[index % piePalette.length];
