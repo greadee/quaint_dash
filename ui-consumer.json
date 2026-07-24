@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "application": "quaint_dash",
+  "react": "19",
+  "sharedUi": "0.1.0",
+  "packages": {
+    "@prool-ui/tokens": "0.1.0",
+    "@prool-ui/themes": "0.1.0",
+    "@prool-ui/react": "0.1.0"
+  },
+  "theme": {
+    "base": "dark",
+    "extension": "web/src/sharedUi.css"
+  },
+  "components": ["ChartFrame", "SegmentedControl"],
+  "adapters": ["web/src/routes/routeShared.tsx"],
+  "temporaryOverrides": [],
+  "pendingMigrations": ["AsyncStates", "StatusBadge"]
+}

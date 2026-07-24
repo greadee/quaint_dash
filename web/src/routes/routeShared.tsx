@@ -1,3 +1,4 @@
+import { ChartFrame as SharedChartFrame, SegmentedControl } from "@prool-ui/react";
 import { AlertTriangle, ArrowLeft, ArrowRight, BarChart3, Info, LineChart, RefreshCw, SearchX } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 import type { HelpItem } from "./routeTypes";
@@ -71,7 +72,14 @@ export function TabBar<T extends string>({ tabs, selected, onSelect, label }: { 
 }
 
 export function RangeSelector({ value, onChange }: { value: string; onChange: (value: string) => void }) {
-  return <div className="segmented-control" aria-label="Performance range">{["1D", "1W", "1M", "1Y", "YTD", "5Y"].map((item) => <button key={item} className={value.toUpperCase() === item ? "active" : ""} onClick={() => onChange(item)}>{item}</button>)}</div>;
+  const ranges = ["1D", "1W", "1M", "1Y", "YTD", "5Y"] as const;
+  return <SegmentedControl
+    className="segmented-control"
+    label="Performance range"
+    options={ranges.map((item) => ({ value: item, label: item }))}
+    value={value.toUpperCase()}
+    onChange={onChange}
+  />;
 }
 
 export function ChartTypeToggle({ value, onChange }: { value: "line" | "bar"; onChange: (value: "line" | "bar") => void }) {
@@ -83,17 +91,18 @@ export function ChartTypeToggle({ value, onChange }: { value: "line" | "bar"; on
 
 export function ChartFrame({ eyebrow, title, detail, tools, children, className = "", id, tabIndex }: { eyebrow: string; title: string; detail?: string; tools?: ReactNode; children: ReactNode; className?: string; id?: string; tabIndex?: number }) {
   return (
-    <section className={`card chart-card chart-frame ${className}`.trim()} id={id} tabIndex={tabIndex}>
-      <div className="card-heading chart-frame-heading">
-        <div>
-          <p className="eyebrow">{eyebrow}</p>
-          <h2>{title}</h2>
-        </div>
-        {tools ? <div className="chart-controls">{tools}</div> : detail ? <span>{detail}</span> : null}
-      </div>
+    <SharedChartFrame
+      className={`card chart-card chart-frame ${className}`.trim()}
+      id={id}
+      tabIndex={tabIndex}
+      eyebrow={eyebrow}
+      title={title}
+      description={tools ? undefined : detail}
+      actions={tools ? <div className="chart-controls">{tools}</div> : undefined}
+      footer={tools && detail ? detail : undefined}
+    >
       {children}
-      {tools && detail ? <p className="chart-frame-footnote">{detail}</p> : null}
-    </section>
+    </SharedChartFrame>
   );
 }
 
