@@ -14,7 +14,39 @@ The news terminal uses a provider-neutral pipeline:
 8. `NewsApiService` powers global, asset, portfolio, search, state, provider-health, and alert-rule APIs.
 9. The React news terminal and asset/portfolio widgets render only normalized API responses.
 
-The current bundled provider is `mock_news`, a deterministic fixture provider for development and tests. Live provider adapters should implement `NewsProvider` and be registered in the operational script or scheduler once credentials and licensing are available.
+Current production path:
+
+```mermaid
+flowchart LR
+    Subscriptions["portfolio_ticker + watchlist_ticker + CDR underlying mapping"] --> Scheduler["manual/API refresh or news_ops"]
+    Scheduler --> FMP["FMP stable news/stock + news/press-releases"]
+    Scheduler --> Calendar["stored earnings_calendar_event"]
+    FMP --> Normalize["ProviderNewsArticle normalization"]
+    Calendar --> Normalize
+    Normalize --> Dedupe["provider id + URL/headline hashing + story clusters"]
+    Dedupe --> DB[("news_article, news_article_asset, news_story_cluster, news_ingestion_state")]
+    DB --> Ranking["deterministic relevance + importance scoring"]
+    Ranking --> API["/api/v1/news"]
+    API --> UI["/news"]
+```
+
+`mock_news` remains a deterministic fixture provider for unit tests and explicit local fixture commands only. It is not used by `/news/refresh` or the normal browser execution path.
+
+## Audit Summary
+
+Root cause of stale/mock data: the provider-neutral news system existed, but only `mock_news` was registered operationally. The React page already called the backend, but there was no live provider adapter, no subscribed-symbol hydration path, no manual backend refresh endpoint, and earnings calendar rows were not projected into the news feed.
+
+Reused infrastructure:
+
+- `TickerUniverseRepository` resolves portfolio and watchlist symbols, including CDR underlying symbols.
+- `NewsRepository`, `normalize_provider_article`, `EntityResolver`, deterministic classification, clustering, and ranking persist canonical records.
+- `earnings_calendar_event` remains the earnings source of truth; the news layer creates normalized event cards from it instead of creating a second earnings table.
+
+Known disconnected or limited paths:
+
+- Social content is not integrated unless a compliant provider/widget is added. It must remain visually separate from verified reporting.
+- SEC/SEDAR filings are not yet live-ingested in the news pipeline.
+- FMP article metadata and summaries are stored; full article bodies are not stored.
 
 ## Schema
 
@@ -51,7 +83,7 @@ Each match stores `relevance_score`, `confidence_score`, `match_method`, `mentio
 
 ## Classification And Ranking
 
-The initial taxonomy is deterministic and includes earnings, guidance, analyst actions, M&A, regulatory, litigation, management changes, capital actions, macro, central bank, commodity, crypto, press releases, and general news.
+The taxonomy is deterministic and includes earnings, upcoming earnings, reported earnings, guidance, analyst actions, M&A, regulatory, regulatory filings, litigation, management changes, capital actions, macro, central bank, commodity, crypto, press releases, social posts, and general news.
 
 Importance scoring combines provider importance, breaking status, category weight, sentiment severity, press-release penalty, correction/retraction penalty, and headline keywords. Portfolio ranking multiplies article importance by resolved-asset confidence and a bounded position-weight component so small holdings and repetitive press releases do not dominate the feed.
 
@@ -65,6 +97,7 @@ Importance scoring combines provider importance, breaking status, category weigh
 - `POST /api/v1/news/articles/{article_id}/read`
 - `POST /api/v1/news/articles/{article_id}/save`
 - `DELETE /api/v1/news/articles/{article_id}/save`
+- `POST /api/v1/news/refresh`
 - `GET /api/v1/news/providers`
 - `GET /api/v1/news/health`
 - `GET /api/v1/news/categories`
@@ -75,11 +108,22 @@ Importance scoring combines provider importance, breaking status, category weigh
 - `GET /api/v1/assets/{asset_id}/news`
 - `GET /api/v1/portfolios/{portfolio_id}/news`
 
-Responses include provider attribution, UTC timestamps, category mappings, asset mappings, cluster metadata, ranking score, and read/saved state.
+Responses include provider attribution, UTC timestamps, category mappings, asset mappings, cluster metadata, ranking score, read/saved state, last successful sync time, cached-data status, and provider-health status.
+
+`POST /api/v1/news/refresh` is throttled to avoid accidental request flooding. It refreshes FMP subscribed-symbol news when `FMP_API_KEY` is configured and always attempts to normalize currently stored subscribed earnings events.
+
+## Provider Decision Matrix
+
+| Provider | Data type | Coverage | Latency | Rate limits | Cost tier | Attribution | Storage restrictions | Current repository support | Decision |
+| -------- | --------- | -------- | ------- | ----------- | --------- | ----------- | -------------------- | -------------------------- | -------- |
+| Financial Modeling Prep stable API | Stock news, press releases, earnings calendar | Broad market news, symbol search, U.S.-focused press releases; repo already uses FMP earnings | Provider-dependent; suitable for periodic polling | Uses configured FMP rate limiter and plan limits | Depends on account plan | Display returned source/publisher and link to original URL | Store metadata, summaries, URLs, and auditable raw subset; do not store full article bodies unless licensed | Existing FMP key/config/rate limiter and earnings provider; new `FmpNewsProvider` | Primary company-news, press-release, and earnings source |
+| Finnhub API | Company news, market news, optional newsroom/press releases | Company news endpoint covers North American companies; some endpoints premium | Good for company-news fallback where token/plan allows | 429 on exceeded limits plus plan limits | Free and paid plans | Display returned source and original URL | Store metadata/summaries only unless license permits more | Finnhub key exists for streaming prices, but no news adapter in repo | Documented fallback candidate, not enabled in code yet |
+| SEC EDGAR | Regulatory filings | U.S. issuers only | Official source, filing-time dependent | Must respect SEC fair-access guidance | Free | SEC/company attribution | Filing metadata and links are safe; full filing text needs separate product decision | No current news adapter | Future authoritative filing path |
+| Stocktwits/social providers | Social discussion | Provider/API dependent | Near real-time if authorized | Provider-specific | Depends on developer product | Must label as social/unverified | Do not scrape; store only permitted fields | Retail sentiment system exists for Reddit/X, but not Stocktwits | Deferred until authorized source is configured |
 
 ## Operations
 
-Credential-free local commands:
+Credential-free local fixture commands:
 
 ```powershell
 .\.venv\Scripts\python.exe tools\news_ops.py refresh mock_news --limit 100
@@ -87,33 +131,37 @@ Credential-free local commands:
 .\.venv\Scripts\python.exe tools\news_ops.py health
 ```
 
+Live/subscribed hydration commands:
+
+```powershell
+.\.venv\Scripts\python.exe tools\news_ops.py refresh fmp_news --subscribed --limit 100
+.\.venv\Scripts\python.exe tools\news_ops.py backfill-run fmp_news --subscribed --days 7 --limit 250
+.\.venv\Scripts\python.exe tools\news_ops.py earnings-sync --lookback-days 14 --lookahead-days 60
+```
+
 The script defaults to `data/persistent_db.db`; pass `--db` to target another DuckDB file.
 
 ## Configuration
 
-Planned provider configuration keys:
+Configuration keys:
 
-- `NEWS_<PROVIDER>_ENABLED`
-- `NEWS_<PROVIDER>_API_KEY`
-- `NEWS_POLL_INTERVAL_SECONDS`
-- `NEWS_MARKET_HOURS_INTERVAL_SECONDS`
-- `NEWS_OFF_HOURS_INTERVAL_SECONDS`
-- `NEWS_REQUEST_TIMEOUT_SECONDS`
-- `NEWS_RETRY_COUNT`
-- `NEWS_BATCH_SIZE`
-- `NEWS_BACKFILL_DAYS`
-- `NEWS_RAW_PAYLOAD_RETENTION_DAYS`
-- `NEWS_MIN_RELEVANCE_SCORE`
-- `NEWS_MIN_ALERT_IMPORTANCE`
-- `NEWS_DEDUP_THRESHOLD`
-- `NEWS_CLUSTER_THRESHOLD`
-- `NEWS_DEFAULT_FEED_DENSITY`
+- `FMP_API_KEY`: server-side key for FMP news, press releases, and earnings provider calls.
+- `FMP_RATE_LIMIT_PER_MINUTE`, `FMP_MIN_SECONDS_BETWEEN_CALLS`, `FMP_MAX_CALLS_PER_RUN`: shared FMP request bounds.
+- `FINNHUB_API_KEY`: present for existing Finnhub integrations and future news fallback; not used by `/news/refresh` today.
 
-No provider keys are required for `mock_news`.
+No provider keys are required for explicit `mock_news` fixture commands.
+
+## Failure Handling And Freshness
+
+- Missing `FMP_API_KEY` records a failed `fmp_news/subscribed` sync state and the page shows provider degradation instead of mock fallback cards.
+- The feed response includes `last_successful_sync_at`, `provider_status`, `provider_message`, and `is_cached`.
+- Manual refresh is throttled for 15 minutes by default.
+- Duplicate provider records are idempotent by provider article ID; syndicated or repeated stories are grouped into `news_story_cluster`.
+- Provider symbols and internal asset identities are used for ticker relevance. Short ticker strings in article text are not enough for ambiguous symbols.
 
 ## Licensing
 
-The platform stores article metadata, summaries, URLs, provider attribution, and raw payloads when provider terms allow it. Full article bodies must only be stored when the provider license explicitly permits storage and display. The frontend links to original sources instead of scraping or reproducing copyrighted article bodies.
+The platform stores article metadata, summaries, URLs, provider attribution, and a sanitized raw payload subset when provider terms allow it. Full article bodies must only be stored when the provider license explicitly permits storage and display. The frontend links to original sources instead of scraping or reproducing copyrighted article bodies. CNBC, Seeking Alpha, Reuters, MarketWatch, and similar publishers may appear only as the publisher/source returned by a licensed aggregation provider; the application must not imply direct publisher integration unless one is actually configured.
 
 ## Testing
 
@@ -125,3 +173,10 @@ cd web
 npm.cmd test -- --run src/routes/newsRoute.test.tsx src/App.test.tsx src/routes/assetRoute.test.tsx src/routes/portfolioRoute.test.tsx
 npm.cmd run build
 ```
+
+## Remaining Limitations
+
+- Feed freshness depends on the configured FMP plan, the number of subscribed tickers, and shared FMP rate limits.
+- Canadian coverage depends on provider symbol support. CDRs are mapped to underlying symbols where the existing ticker universe can infer them.
+- SEC/SEDAR filings and authorized social feeds remain future provider adapters.
+- No LLM is required for ingestion, ranking, dedupe, or rendering; a future AI summary layer should operate only on already normalized records and should not become a critical-path dependency.

@@ -21,6 +21,16 @@ class NewsRepository:
     def __init__(self, conn) -> None:
         self.conn = conn
 
+    @staticmethod
+    def internal_provider_capabilities() -> ProviderCapabilities:
+        return ProviderCapabilities(
+            supports_latest_news=True,
+            supports_symbol_news=True,
+            supports_summaries=True,
+            supports_categories=True,
+            supports_company_entities=True,
+        )
+
     def upsert_provider(
         self,
         *,

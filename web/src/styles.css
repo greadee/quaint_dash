@@ -1885,6 +1885,43 @@ header {
   align-items: center;
 }
 
+.status-banner {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.status-banner strong {
+  color: var(--text);
+  text-transform: capitalize;
+}
+
+.status-banner.warning {
+  border-color: #c79a35;
+  background: #fff9ea;
+  color: #5e4700;
+}
+
+.status-banner.danger {
+  border-color: #a34440;
+  background: #fff3f1;
+  color: #79231e;
+}
+
+.status-banner.warning strong {
+  color: #4a3700;
+}
+
+.status-banner.danger strong {
+  color: #651c18;
+}
+
 .search-box {
   display: flex;
   align-items: center;

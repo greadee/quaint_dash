@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from dashboard.analytics.repository import AnalyticsRepository
@@ -16,9 +16,13 @@ from dashboard.api.models import (
     NewsFeedResponse,
     NewsProviderHealthResponse,
     NewsProviderResponse,
+    NewsRefreshResponse,
     NewsStoryClusterSummary,
     NewsUserStateResponse,
 )
+from dashboard.news.ingestion import NewsIngestionService
+from dashboard.news.models import ProviderCapabilities
+from dashboard.news.providers.fmp_provider import FmpNewsProvider, FmpNewsProviderError
 
 UTC = timezone.utc
 
@@ -138,6 +142,7 @@ class NewsApiService:
             offset=offset,
             sort=sort,
             generated_at=datetime.now(UTC),
+            **self._feed_metadata(),
         )
 
     def latest(self, limit: int = 25, offset: int = 0) -> NewsFeedResponse:
@@ -374,6 +379,48 @@ class NewsApiService:
                 )
             )
         return health
+
+    def refresh_subscribed(self, *, min_interval_minutes: int = 15, limit: int = 100) -> NewsRefreshResponse:
+        if self._recent_refresh_attempt(minutes=min_interval_minutes):
+            return NewsRefreshResponse(
+                status="skipped_recent_refresh",
+                generated_at=datetime.now(UTC),
+                results=[],
+            )
+        service = NewsIngestionService(self.conn)
+        results = []
+        try:
+            provider = FmpNewsProvider()
+            watermark = self._latest_provider_timestamp(provider.provider_code, "subscribed")
+            result = service.ingest_subscribed(provider, since=watermark, limit=limit)
+            results.append(self._result_dict(result))
+        except (FmpNewsProviderError, RuntimeError) as exc:
+            provider_id = service.repo.upsert_provider(
+                provider_code="fmp_news",
+                provider_name="Financial Modeling Prep News",
+                provider_type="api",
+                base_url="https://financialmodelingprep.com/stable",
+                capabilities=ProviderCapabilities(
+                    supports_latest_news=True,
+                    supports_symbol_news=True,
+                    supports_summaries=True,
+                    supports_images=True,
+                    supports_categories=True,
+                    supports_press_releases=True,
+                ),
+            )
+            from dashboard.news.models import NewsIngestionResult
+
+            result = NewsIngestionResult(provider_code="fmp_news", status="failed", error_message=str(exc))
+            service.repo.mark_ingestion_state(provider_id, "subscribed", result)
+            results.append(self._result_dict(result))
+        earnings = service.ingest_earnings_events()
+        results.append(self._result_dict(earnings))
+        return NewsRefreshResponse(
+            status="success" if any(item["status"] == "success" for item in results) else "degraded",
+            generated_at=datetime.now(UTC),
+            results=results,
+        )
 
     def create_alert_rule(
         self,
@@ -731,6 +778,75 @@ class NewsApiService:
             where.append("CAST(a.published_at AS DATE) <= ?")
             params.append(filters["end_date"])
         return where, params
+
+    def _feed_metadata(self) -> dict[str, Any]:
+        rows = self.provider_health(stale_after_minutes=120)
+        if not rows:
+            return {
+                "last_successful_sync_at": None,
+                "provider_status": "not_started",
+                "provider_message": "No news provider sync has run yet.",
+                "is_cached": True,
+            }
+        successes = [row.last_succeeded_at for row in rows if row.last_succeeded_at is not None]
+        failures = [row for row in rows if row.status in {"failed", "stale"}]
+        status_text = "healthy"
+        if failures and successes:
+            status_text = "degraded"
+        elif failures:
+            status_text = "failed"
+        message = None
+        if failures:
+            message = "; ".join(
+                f"{row.provider_code}: {row.last_error_message or row.status}" for row in failures[:3]
+            )
+        return {
+            "last_successful_sync_at": max(successes) if successes else None,
+            "provider_status": status_text,
+            "provider_message": message,
+            "is_cached": True,
+        }
+
+    def _recent_refresh_attempt(self, *, minutes: int) -> bool:
+        row = self.conn.execute(
+            """
+            SELECT MAX(last_attempted_at)
+            FROM news_ingestion_state
+            WHERE feed_type IN ('subscribed', 'earnings')
+            """
+        ).fetchone()
+        if not row or row[0] is None:
+            return False
+        attempted = row[0]
+        now = datetime.now(UTC) if attempted.tzinfo else datetime.now()
+        return (now - attempted) < timedelta(minutes=minutes)
+
+    def _latest_provider_timestamp(self, provider_code: str, feed_type: str) -> datetime | None:
+        row = self.conn.execute(
+            """
+            SELECT s.last_provider_timestamp
+            FROM news_ingestion_state s
+            JOIN news_provider p ON p.provider_id = s.provider_id
+            WHERE p.provider_code = ? AND s.feed_type = ?
+            """,
+            [provider_code, feed_type],
+        ).fetchone()
+        return None if not row else row[0]
+
+    @staticmethod
+    def _result_dict(result) -> dict[str, int | str | None]:
+        return {
+            "provider_code": result.provider_code,
+            "status": result.status,
+            "articles_received": result.articles_received,
+            "articles_inserted": result.articles_inserted,
+            "articles_updated": result.articles_updated,
+            "articles_rejected": result.articles_rejected,
+            "asset_links_written": result.asset_links_written,
+            "categories_written": result.categories_written,
+            "clusters_written": result.clusters_written,
+            "error_message": result.error_message,
+        }
 
     @staticmethod
     def _score_sql(*, portfolio_id: int | None) -> str:

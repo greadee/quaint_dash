@@ -12,19 +12,20 @@ const apiMock = vi.hoisted(() => ({
   markNewsRead: vi.fn(),
   saveNewsArticle: vi.fn(),
   unsaveNewsArticle: vi.fn(),
+  refreshNews: vi.fn(),
 }));
 
 vi.mock("../api", () => ({ api: apiMock }));
 
 const newsItem = {
   article_id: 1,
-  provider_code: "mock_news",
-  provider_name: "Mock News",
-  provider_article_id: "mock-nvda-1",
+  provider_code: "fmp_news",
+  provider_name: "Financial Modeling Prep News",
+  provider_article_id: "fmp-nvda-1",
   headline: "NVIDIA raises guidance after data center revenue beats expectations",
   summary: "NVIDIA reported stronger data center revenue and raised guidance.",
   canonical_url: "https://example.test/nvda",
-  source_name: "Mock Markets",
+  source_name: "Reuters via FMP",
   author: null,
   language: "en",
   published_at: "2026-06-30T14:30:00Z",
@@ -61,12 +62,13 @@ function renderNews(route = "/news") {
 describe("NewsTerminalPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    apiMock.news.mockResolvedValue({ items: [newsItem], total: 1, limit: 25, offset: 0, sort: "recency", generated_at: "2026-06-30T14:40:00Z" });
-    apiMock.newsProviders.mockResolvedValue([{ provider_code: "mock_news", provider_name: "Mock News", provider_type: "fixture", is_enabled: true, supports_latest_news: true, supports_symbol_news: true, supports_full_text: false, supports_sentiment: true, supports_categories: true, last_attempted_at: "2026-06-30T14:40:00Z", last_succeeded_at: "2026-06-30T14:40:00Z", last_error_at: null, last_error_message: null, sync_status: "success" }]);
+    apiMock.news.mockResolvedValue({ items: [newsItem], total: 1, limit: 25, offset: 0, sort: "recency", generated_at: "2026-06-30T14:40:00Z", last_successful_sync_at: "2026-06-30T14:40:00Z", provider_status: "healthy", provider_message: null, is_cached: true });
+    apiMock.newsProviders.mockResolvedValue([{ provider_code: "fmp_news", provider_name: "Financial Modeling Prep News", provider_type: "api", is_enabled: true, supports_latest_news: true, supports_symbol_news: true, supports_full_text: false, supports_sentiment: false, supports_categories: true, last_attempted_at: "2026-06-30T14:40:00Z", last_succeeded_at: "2026-06-30T14:40:00Z", last_error_at: null, last_error_message: null, sync_status: "success" }]);
     apiMock.newsCategories.mockResolvedValue([{ category_code: "earnings", category_name: "Earnings", default_importance_weight: 0.75, article_count: 1 }]);
     apiMock.markNewsRead.mockResolvedValue({ article_id: 1, user_id: "local", is_read: true, read_at: "2026-06-30T14:41:00Z", is_saved: false, saved_at: null });
     apiMock.saveNewsArticle.mockResolvedValue({ article_id: 1, user_id: "local", is_read: true, read_at: "2026-06-30T14:41:00Z", is_saved: true, saved_at: "2026-06-30T14:41:00Z" });
     apiMock.unsaveNewsArticle.mockResolvedValue({ article_id: 1, user_id: "local", is_read: true, read_at: "2026-06-30T14:41:00Z", is_saved: false, saved_at: null });
+    apiMock.refreshNews.mockResolvedValue({ status: "success", generated_at: "2026-06-30T14:41:00Z", results: [] });
   });
 
   it("renders feed filters, story detail, and save action", async () => {
@@ -91,5 +93,15 @@ describe("NewsTerminalPage", () => {
     await user.type(screen.getByPlaceholderText("Search headlines, tickers, companies"), "NVDA");
 
     expect(apiMock.news).toHaveBeenLastCalledWith(expect.objectContaining({ q: "NVDA", sort: "relevance" }));
+  });
+
+  it("requests a backend news refresh from the toolbar", async () => {
+    const user = userEvent.setup();
+    renderNews();
+
+    await screen.findByRole("heading", { name: "News Terminal" });
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(apiMock.refreshNews).toHaveBeenCalled();
   });
 });

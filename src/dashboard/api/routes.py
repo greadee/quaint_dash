@@ -69,6 +69,7 @@ from dashboard.api.models import (
     NewsFeedResponse,
     NewsProviderHealthResponse,
     NewsProviderResponse,
+    NewsRefreshResponse,
     NewsUserStateResponse,
     OverviewUpdatesResponse,
     Page,
@@ -249,6 +250,12 @@ def news_provider_health(
     conn=Depends(get_connection),
 ):
     return NewsApiService(conn).provider_health(stale_after_minutes=stale_after_minutes)
+
+
+@router.post("/news/refresh", response_model=NewsRefreshResponse)
+def news_refresh(request: Request, conn=Depends(get_connection)):
+    with request.app.state.write_lock:
+        return NewsApiService(conn).refresh_subscribed()
 
 
 @router.get("/news/categories", response_model=list[NewsCategorySummaryResponse])

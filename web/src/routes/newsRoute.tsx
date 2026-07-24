@@ -10,12 +10,12 @@ type NewsPreset = "all" | "breaking" | "earnings" | "corporate" | "macro" | "pre
 type Density = "comfortable" | "compact" | "ultra";
 
 const presets: { value: NewsPreset; label: string }[] = [
-  { value: "all", label: "All News" },
+  { value: "all", label: "For You" },
   { value: "breaking", label: "Breaking" },
   { value: "earnings", label: "Earnings" },
-  { value: "corporate", label: "Corporate Actions" },
-  { value: "macro", label: "Macro" },
-  { value: "press", label: "Press Releases" },
+  { value: "corporate", label: "Official" },
+  { value: "macro", label: "Market" },
+  { value: "press", label: "Press" },
 ];
 
 const corporateCategories = new Set(["merger_acquisition", "buyback", "dividend", "stock_split", "capital_raise"]);
@@ -69,6 +69,13 @@ export function NewsTerminalPage() {
     mutationFn: (article: NewsArticle) => article.is_saved ? api.unsaveNewsArticle(article.article_id) : api.saveNewsArticle(article.article_id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["news"] }),
   });
+  const refreshNews = useMutation({
+    mutationFn: api.refreshNews,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["news"] });
+      queryClient.invalidateQueries({ queryKey: ["news-providers"] });
+    },
+  });
 
   useEffect(() => {
     if (!feed.data) return;
@@ -107,9 +114,14 @@ export function NewsTerminalPage() {
     <div className="page-title">
       <div><p className="eyebrow">Provider-normalized market news</p><h1>News Terminal</h1><p className="page-subtitle">Ranked financial news with provider attribution, asset mapping, clustering, and saved/read state.</p></div>
       <div className="actions">
-        <button onClick={() => feed.refetch()}><RefreshCw size={16} />Refresh</button>
+        <button onClick={() => refreshNews.mutate()} disabled={refreshNews.isPending || feed.isFetching}><RefreshCw size={16} />{refreshNews.isPending ? "Refreshing" : "Refresh"}</button>
       </div>
     </div>
+    {visibleFeed?.provider_status && visibleFeed.provider_status !== "healthy" ? <div className={`status-banner ${visibleFeed.provider_status === "failed" ? "danger" : "warning"}`}>
+      <strong>{visibleFeed.provider_status.replace(/_/g, " ")}</strong>
+      <span>{visibleFeed.provider_message ?? "Showing cached normalized records from the last available provider sync."}</span>
+    </div> : null}
+    {refreshNews.data?.status === "skipped_recent_refresh" ? <div className="status-banner warning"><strong>Refresh throttled</strong><span>A recent news refresh already ran. The cached backend feed is being reused to avoid unnecessary provider calls.</span></div> : null}
     <section className="news-toolbar card">
       <label className="search-box"><Search size={16} /><input value={q} onChange={(event) => setParam("q", event.target.value)} placeholder="Search headlines, tickers, companies" /></label>
       <select aria-label="Provider" value={provider} onChange={(event) => setParam("provider", event.target.value)}>
@@ -137,7 +149,7 @@ export function NewsTerminalPage() {
           <Signal label="Stories" value={String(visibleFeed?.total ?? 0)} />
           <Signal label="Providers" value={String(providers.data?.length ?? 0)} />
           <Signal label="Categories" value={String(categories.data?.filter((item) => item.article_count > 0).length ?? 0)} />
-          <Signal label="Updated" value={formatTimestamp(visibleFeed?.generated_at)} />
+          <Signal label="Synced" value={formatTimestamp(visibleFeed?.last_successful_sync_at ?? visibleFeed?.generated_at)} />
         </div>
       </aside>
       <main className="news-stream card" aria-label="News stream">

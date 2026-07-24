@@ -5,8 +5,9 @@ from datetime import datetime, timedelta, timezone
 from dashboard.db.db_conn import DB, init_db
 from dashboard.news.entity_resolution import EntityResolver
 from dashboard.news.ingestion import NewsIngestionService
-from dashboard.news.models import ProviderNewsArticle
+from dashboard.news.models import ProviderCapabilities, ProviderHealthStatus, ProviderNewsArticle
 from dashboard.news.normalization import NewsValidationError, normalize_provider_article
+from dashboard.news.providers.fmp_provider import FmpNewsProvider
 from dashboard.news.providers.mock_provider import MockNewsProvider
 
 UTC = timezone.utc
@@ -159,3 +160,118 @@ def test_mock_provider_ingestion_is_idempotent_and_clusters(tmp_path):
     assert ("NOW", "alias_match") in asset_links
     assert state == ("success", 3, 0, 3, 0)
     assert clusters == (3, 3)
+
+
+class _SubscribedProvider:
+    provider_code = "test_live"
+    provider_name = "Test Live News"
+    provider_type = "api"
+    base_url = "https://provider.test"
+    capabilities = ProviderCapabilities(supports_symbol_news=True, supports_press_releases=True)
+
+    def fetch_latest(self, since=None, limit=100):
+        return []
+
+    def fetch_for_symbols(self, symbols, since=None, limit=100):
+        assert "NVDA" in symbols
+        return [
+            ProviderNewsArticle(
+                provider_article_id="live-nvda",
+                headline="NVIDIA signs material supply agreement",
+                source_name="Wire",
+                published_at=datetime(2026, 6, 30, 14, 0, tzinfo=UTC),
+                url="https://provider.test/nvda?utm_source=x",
+                symbols=["NVDA"],
+                provider_categories=["contract_award"],
+            )
+        ]
+
+    def fetch_article(self, provider_article_id):
+        raise LookupError(provider_article_id)
+
+    def health_check(self):
+        return ProviderHealthStatus("test_live", "healthy", datetime.now(UTC))
+
+
+def test_subscribed_ingestion_uses_portfolio_and_watchlist_symbols(tmp_path):
+    db = _db(tmp_path)
+    _seed_assets(db.conn)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')")
+    db.conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'NVDA', TRUE, 'position')
+        """
+    )
+
+    result = NewsIngestionService(db.conn).ingest_subscribed(_SubscribedProvider())
+    rows = db.conn.execute(
+        """
+        SELECT a.provider, aa.asset_id, aa.match_method
+        FROM news_article a
+        JOIN news_article_asset aa ON aa.article_id = a.article_id
+        """
+    ).fetchall()
+
+    assert result.articles_inserted == 1
+    assert rows == [("test_live", "NVDA", "provider_symbol")]
+
+
+def test_earnings_events_are_normalized_into_news_feed(tmp_path):
+    db = _db(tmp_path)
+    _seed_assets(db.conn)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')")
+    db.conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'NVDA', TRUE, 'position')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO earnings_calendar_event(
+            asset_id, earnings_date, fiscal_year, fiscal_quarter, time,
+            eps_estimated, eps_actual, revenue_estimated, revenue_actual, source
+        )
+        VALUES ('NVDA', current_date + 7, 2026, 2, 'amc', 1.25, NULL, 40000000000, NULL, 'fmp')
+        """
+    )
+
+    result = NewsIngestionService(db.conn).ingest_earnings_events()
+    row = db.conn.execute(
+        """
+        SELECT a.provider, a.headline, c.category_code, aa.asset_id
+        FROM news_article a
+        JOIN news_article_category ac ON ac.article_id = a.article_id
+        JOIN news_category c ON c.category_id = ac.category_id
+        JOIN news_article_asset aa ON aa.article_id = a.article_id
+        WHERE c.category_code = 'earnings_upcoming'
+        """
+    ).fetchone()
+
+    assert result.articles_inserted == 1
+    assert row[0] == "corporate_calendar"
+    assert "scheduled to report earnings" in row[1]
+    assert row[2:] == ("earnings_upcoming", "NVDA")
+
+
+def test_fmp_provider_parses_stock_news_payload_without_secrets():
+    provider = FmpNewsProvider(api_key="test-key")
+    payload = [
+        {
+            "symbol": "NVDA",
+            "publishedDate": "2026-06-30 14:30:00",
+            "title": "NVIDIA expands data center platform",
+            "site": "Example Wire",
+            "url": "https://example.test/story",
+            "text": "Provider supplied summary.",
+            "apikey": "must-not-persist",
+        }
+    ]
+
+    parsed = provider._parse_items(payload, default_symbols=[])
+
+    assert parsed[0].symbols == ["NVDA"]
+    assert parsed[0].published_at.tzinfo is not None
+    assert parsed[0].raw_payload["symbol"] == "NVDA"
+    assert "apikey" not in parsed[0].raw_payload

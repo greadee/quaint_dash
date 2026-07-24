@@ -482,6 +482,16 @@ class NewsFeedResponse(BaseModel):
     offset: int
     sort: str
     generated_at: datetime
+    last_successful_sync_at: datetime | None = None
+    provider_status: str = "unknown"
+    provider_message: str | None = None
+    is_cached: bool = True
+
+
+class NewsRefreshResponse(BaseModel):
+    status: str
+    generated_at: datetime
+    results: list[dict[str, int | str | None]]
 
 
 class NewsUserStateResponse(BaseModel):

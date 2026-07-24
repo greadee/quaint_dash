@@ -327,6 +327,15 @@ export type NewsFeed = {
   offset: number;
   sort: string;
   generated_at: string;
+  last_successful_sync_at: string | null;
+  provider_status: string;
+  provider_message: string | null;
+  is_cached: boolean;
+};
+export type NewsRefreshResponse = {
+  status: string;
+  generated_at: string;
+  results: Array<Record<string, string | number | null>>;
 };
 export type NewsProvider = {
   provider_code: string;
@@ -1384,6 +1393,7 @@ export const api = {
   markNewsRead: (articleId: number) => request<NewsUserState>(`/news/articles/${articleId}/read`, { method: "POST" }),
   saveNewsArticle: (articleId: number) => request<NewsUserState>(`/news/articles/${articleId}/save`, { method: "POST" }),
   unsaveNewsArticle: (articleId: number) => request<NewsUserState>(`/news/articles/${articleId}/save`, { method: "DELETE" }),
+  refreshNews: () => request<NewsRefreshResponse>("/news/refresh", { method: "POST" }),
   newsProviders: () => request<NewsProvider[]>("/news/providers"),
   newsCategories: () => request<NewsCategory[]>("/news/categories"),
   signals: (params: Record<string, string | number | null | undefined> = {}) => {

@@ -270,6 +270,9 @@ CREATE TABLE IF NOT EXISTS news_alert_delivery (
 INSERT INTO news_category(category_code, category_name, default_importance_weight)
 VALUES
     ('earnings', 'Earnings', 0.75),
+    ('earnings_upcoming', 'Upcoming earnings', 0.65),
+    ('earnings_reported', 'Reported earnings', 0.85),
+    ('earnings_transcript', 'Earnings transcript', 0.55),
     ('guidance', 'Guidance', 0.8),
     ('analyst_rating', 'Analyst rating', 0.5),
     ('merger_acquisition', 'Merger and acquisition', 0.9),
@@ -301,6 +304,8 @@ VALUES
     ('bankruptcy', 'Bankruptcy', 0.95),
     ('restructuring', 'Restructuring', 0.75),
     ('press_release', 'Press release', 0.25),
+    ('regulatory_filing', 'Regulatory filing', 0.8),
+    ('social_post', 'Social post', 0.15),
     ('general', 'General', 0.3)
 ON CONFLICT(category_code) DO UPDATE SET
     category_name = excluded.category_name,
