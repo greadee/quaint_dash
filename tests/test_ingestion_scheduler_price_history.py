@@ -235,6 +235,38 @@ def test_market_claim_skips_pending_jobs_already_satisfied_by_sync_state(manager
     assert rows == [(10, "pending"), (11, "running")]
 
 
+def test_market_claim_skips_jobs_at_attempt_budget(manager):
+    insert_asset(manager, "BN.TO")
+    manager.conn.execute(
+        """
+        INSERT INTO ingestion_job(
+            job_id, asset_id, domain, job_type, dataset, status, priority,
+            requested_start_date, requested_end_date, attempt_count, error_message,
+            created_at, updated_at
+        )
+        VALUES
+            (10, 'BN.TO', 'market', 'refresh', 'dividends', 'pending', 90, NULL, NULL, 3, NULL, now(), now()),
+            (11, 'BN.TO', 'market', 'refresh', 'splits', 'pending', 80, NULL, NULL, 1, NULL, now(), now())
+        """
+    )
+
+    job = PriceHistoryIngestionRepository(manager.conn).claim_next_pending_job()
+
+    assert job is not None
+    assert job.job_id == 11
+    assert job.status == "running"
+    assert job.attempt_count == 2
+    rows = manager.conn.execute(
+        """
+        SELECT job_id, status, attempt_count
+        FROM ingestion_job
+        WHERE job_id IN (10, 11)
+        ORDER BY job_id
+        """
+    ).fetchall()
+    assert rows == [(10, "pending", 3), (11, "running", 2)]
+
+
 def test_metadata_scheduler_refreshes_pending_assets(manager, monkeypatch):
     """
     refresh_due_asset_metadata should select pending metadata rows and pass them

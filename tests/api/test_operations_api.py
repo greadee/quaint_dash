@@ -23,6 +23,9 @@ from dashboard.brokers.repository import BrokerSyncRepository
 from dashboard.brokers.secrets import LocalSecretCipher
 from dashboard.brokers.sync import BrokerSyncSummary
 from dashboard.db.db_conn import DB, init_db
+from dashboard.ingestion.price_history.db.ingestion_repo import (
+    PriceHistoryIngestionRepository,
+)
 from dashboard.ingestion.price_history.models import PriceDailyRow
 
 
@@ -1430,11 +1433,12 @@ def test_retry_failed_ingestion_jobs_requeues_bounded_failures(tmp_path):
     db.conn.execute(
         """
         INSERT INTO ingestion_job(
-            job_id, asset_id, domain, job_type, dataset, status, priority, error_message
+            job_id, asset_id, domain, job_type, dataset, status, priority,
+            attempt_count, error_message
         )
         VALUES
-            (1, 'AAPL', 'market', 'refresh', 'dividends', 'failed', 10, 'old failure'),
-            (2, 'AAPL', 'market', 'refresh', 'splits', 'failed', 10, 'old failure')
+            (1, 'AAPL', 'market', 'refresh', 'dividends', 'failed', 10, 1, 'old failure'),
+            (2, 'AAPL', 'market', 'refresh', 'splits', 'failed', 10, 1, 'old failure')
         """
     )
     db.conn.close()
@@ -1450,6 +1454,48 @@ def test_retry_failed_ingestion_jobs_requeues_bounded_failures(tmp_path):
     assert retry.json()["result"] == {"retried_jobs": 1}
     statuses = {row["job_id"]: row["status"] for row in jobs.json()}
     assert statuses == {1: "pending", 2: "failed"}
+
+    db = DB(db_path)
+    claimed = PriceHistoryIngestionRepository(db.conn).claim_next_pending_job()
+    persisted = db.conn.execute(
+        "SELECT status, attempt_count FROM ingestion_job WHERE job_id = 1"
+    ).fetchone()
+    db.conn.close()
+
+    assert claimed is not None
+    assert claimed.job_id == 1
+    assert persisted == ("running", 2)
+
+
+def test_retry_failed_ingestion_jobs_does_not_exceed_attempt_budget(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        "INSERT INTO asset(asset_id, symbol, asset_type, ccy) VALUES ('AAPL', 'AAPL', 'stock', 'USD')"
+    )
+    db.conn.execute(
+        """
+        INSERT INTO ingestion_job(
+            job_id, asset_id, domain, job_type, dataset, status, priority,
+            attempt_count, error_message
+        )
+        VALUES (1, 'AAPL', 'market', 'refresh', 'price_daily', 'failed', 10, 3, 'temporary provider reset')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        retry = client.post(
+            "/api/v1/ingestion/retry-failed",
+            json={"domain": "market", "max_jobs": 10},
+        )
+        jobs = client.get("/api/v1/ingestion/jobs?domain=market")
+
+    assert retry.status_code == 200
+    assert retry.json()["result"] == {"retried_jobs": 0}
+    assert jobs.json()[0]["status"] == "failed"
+    assert jobs.json()[0]["attempt_count"] == 3
 
 
 def test_retry_failed_ingestion_jobs_skips_failures_with_newer_success(tmp_path):

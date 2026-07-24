@@ -8004,13 +8004,16 @@ class CommandApiService(BrokerCommands, IngestionCommands):
         return row[0] if row and row[0] else None
 
     def retry_failed_ingestion_jobs(self, domain: str | None, max_jobs: int) -> int:
+        from dashboard.ingestion.job_policy import MAX_INGESTION_JOB_ATTEMPTS
+
         where = [
             "status = 'failed'",
+            "COALESCE(attempt_count, 0) < ?",
             "NOT (LOWER(COALESCE(error_message, '')) LIKE '%http error 402%')",
             "NOT (LOWER(COALESCE(error_message, '')) LIKE '%plan does not include%')",
             "NOT (LOWER(COALESCE(error_message, '')) LIKE '%call budget exhausted%')",
         ]
-        params: list[object] = []
+        params: list[object] = [MAX_INGESTION_JOB_ATTEMPTS]
         if domain:
             where.append("domain = ?")
             params.append(domain)

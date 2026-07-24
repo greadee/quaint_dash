@@ -18,6 +18,7 @@ from dashboard.ingestion_sentiment.models import (
     SocialPostInput,
     TickerMention,
 )
+from dashboard.ingestion.job_policy import MAX_INGESTION_JOB_ATTEMPTS
 from dashboard.ingestion_sentiment.constants import (
     DOMAIN_SENTIMENT,
     STATUS_DONE,
@@ -234,15 +235,19 @@ class SentimentIngestionRepository:
 
     def claim_next_pending_job(self) -> SentimentIngestionJob | None:
         row = self.conn.execute(
-            qry.SELECT_NEXT_PENDING_SENTIMENT_JOB,
-            [DOMAIN_SENTIMENT, STATUS_PENDING],
+            qry.CLAIM_NEXT_PENDING_SENTIMENT_JOB,
+            [
+                STATUS_RUNNING,
+                DOMAIN_SENTIMENT,
+                STATUS_PENDING,
+                MAX_INGESTION_JOB_ATTEMPTS,
+                STATUS_PENDING,
+            ],
         ).fetchone()
         if row is None:
             return None
 
-        job = SentimentIngestionJob(*row)
-        self.conn.execute(qry.MARK_JOB_RUNNING, [STATUS_RUNNING, job.job_id])
-        return job
+        return SentimentIngestionJob(*row)
 
     def mark_job_done(self, job_id: int) -> None:
         self.conn.execute(qry.MARK_JOB_DONE, [STATUS_DONE, job_id])

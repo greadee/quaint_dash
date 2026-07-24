@@ -26,8 +26,50 @@ INSERT INTO ingestion_job (
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 """
 
-SELECT_NEXT_PENDING_JOB = """
-SELECT
+CLAIM_NEXT_PENDING_JOB = """
+UPDATE ingestion_job
+SET
+    status = ?,
+    attempt_count = attempt_count + 1,
+    error_message = NULL,
+    updated_at = CURRENT_TIMESTAMP
+WHERE job_id = (
+    SELECT candidate.job_id
+    FROM ingestion_job candidate
+    WHERE candidate.domain = ?
+      AND candidate.status = ?
+      AND COALESCE(candidate.attempt_count, 0) < ?
+      AND NOT EXISTS (
+          SELECT 1
+          FROM ingestion_job newer
+          WHERE newer.asset_id = candidate.asset_id
+            AND newer.domain = candidate.domain
+            AND newer.dataset = candidate.dataset
+            AND newer.status = 'done'
+            AND newer.job_id > candidate.job_id
+      )
+      AND NOT EXISTS (
+          SELECT 1
+          FROM asset_sync_state sync
+          WHERE sync.asset_id = candidate.asset_id
+            AND sync.domain = candidate.domain
+            AND sync.dataset = candidate.dataset
+            AND (
+                sync.backfill_status = 'done'
+                OR sync.last_successful_at IS NOT NULL
+                OR sync.last_successful_date IS NOT NULL
+            )
+            AND COALESCE(
+                sync.last_successful_at,
+                sync.last_attempted_at,
+                TIMESTAMP '1970-01-01'
+            ) >= candidate.updated_at
+      )
+    ORDER BY candidate.priority DESC, candidate.created_at ASC
+    LIMIT 1
+)
+  AND status = ?
+RETURNING
     job_id,
     asset_id,
     domain,
@@ -39,43 +81,6 @@ SELECT
     requested_end_date,
     attempt_count,
     error_message
-FROM ingestion_job
-WHERE domain = ?
-  AND status = ?
-  AND COALESCE(attempt_count, 0) = 0
-  AND NOT EXISTS (
-      SELECT 1
-      FROM ingestion_job newer
-      WHERE newer.asset_id = ingestion_job.asset_id
-        AND newer.domain = ingestion_job.domain
-        AND newer.dataset = ingestion_job.dataset
-        AND newer.status = 'done'
-        AND newer.job_id > ingestion_job.job_id
-  )
-  AND NOT EXISTS (
-      SELECT 1
-      FROM asset_sync_state sync
-      WHERE sync.asset_id = ingestion_job.asset_id
-        AND sync.domain = ingestion_job.domain
-        AND sync.dataset = ingestion_job.dataset
-        AND (
-            sync.backfill_status = 'done'
-            OR sync.last_successful_at IS NOT NULL
-            OR sync.last_successful_date IS NOT NULL
-        )
-        AND COALESCE(sync.last_successful_at, sync.last_attempted_at, TIMESTAMP '1970-01-01') >= ingestion_job.updated_at
-  )
-ORDER BY priority DESC, created_at ASC
-LIMIT 1
-"""
-
-MARK_JOB_RUNNING = """
-UPDATE ingestion_job
-SET
-    status = ?,
-    attempt_count = attempt_count + 1,
-    updated_at = CURRENT_TIMESTAMP
-WHERE job_id = ?
 """
 
 MARK_JOB_DONE = """

@@ -23,6 +23,7 @@ from dashboard.ingestion.corporate_calendar.models import (
     CorporateIngestionJob,
     FinancialStatementRow,
 )
+from dashboard.ingestion.job_policy import MAX_INGESTION_JOB_ATTEMPTS
 from dashboard.ingestion.ticker_universe import TickerUniverseRepository
 import dashboard.ingestion.corporate_calendar.db.queries as qry
 
@@ -75,16 +76,20 @@ class CorporateCalendarIngestionRepository:
 
     def claim_next_pending_job(self) -> Optional[CorporateIngestionJob]:
         row = self.conn.execute(
-            qry.SELECT_NEXT_PENDING_JOB,
-            [DOMAIN_CORPORATE, STATUS_PENDING],
+            qry.CLAIM_NEXT_PENDING_JOB,
+            [
+                STATUS_RUNNING,
+                DOMAIN_CORPORATE,
+                STATUS_PENDING,
+                MAX_INGESTION_JOB_ATTEMPTS,
+                STATUS_PENDING,
+            ],
         ).fetchone()
 
         if row is None:
             return None
 
-        job = CorporateIngestionJob(*row)
-        self.conn.execute(qry.MARK_JOB_RUNNING, [STATUS_RUNNING, job.job_id])
-        return job
+        return CorporateIngestionJob(*row)
 
     def mark_sync_running(
         self,

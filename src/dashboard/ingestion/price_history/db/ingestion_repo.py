@@ -21,6 +21,7 @@ from dashboard.ingestion.price_history.constants import (
     STATUS_RUNNING,
 )
 from dashboard.ingestion.price_history.models import DividendEventRow, IngestionJob, PriceDailyRow, SplitEventRow
+from dashboard.ingestion.job_policy import MAX_INGESTION_JOB_ATTEMPTS
 from dashboard.ingestion.ticker_universe import TickerUniverseRepository
 import dashboard.ingestion.price_history.db.queries as qry
 
@@ -73,16 +74,20 @@ class PriceHistoryIngestionRepository:
 
     def claim_next_pending_job(self) -> Optional[IngestionJob]:
         row = self.conn.execute(
-            qry.SELECT_NEXT_PENDING_JOB,
-            [DOMAIN_MARKET, STATUS_PENDING],
+            qry.CLAIM_NEXT_PENDING_JOB,
+            [
+                STATUS_RUNNING,
+                DOMAIN_MARKET,
+                STATUS_PENDING,
+                MAX_INGESTION_JOB_ATTEMPTS,
+                STATUS_PENDING,
+            ],
         ).fetchone()
 
         if row is None:
             return None
 
-        job = IngestionJob(*row)
-        self.conn.execute(qry.MARK_JOB_RUNNING, [STATUS_RUNNING, job.job_id])
-        return job
+        return IngestionJob(*row)
 
     def mark_job_done(
         self,

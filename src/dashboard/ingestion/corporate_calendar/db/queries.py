@@ -26,8 +26,24 @@ INSERT INTO ingestion_job (
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 """
 
-SELECT_NEXT_PENDING_JOB = """
-SELECT
+CLAIM_NEXT_PENDING_JOB = """
+UPDATE ingestion_job
+SET
+    status = ?,
+    attempt_count = attempt_count + 1,
+    error_message = NULL,
+    updated_at = CURRENT_TIMESTAMP
+WHERE job_id = (
+    SELECT candidate.job_id
+    FROM ingestion_job candidate
+    WHERE candidate.domain = ?
+      AND candidate.status = ?
+      AND COALESCE(candidate.attempt_count, 0) < ?
+    ORDER BY candidate.priority DESC, candidate.created_at ASC
+    LIMIT 1
+)
+  AND status = ?
+RETURNING
     job_id,
     asset_id,
     domain,
@@ -39,20 +55,6 @@ SELECT
     requested_end_date,
     attempt_count,
     error_message
-FROM ingestion_job
-WHERE domain = ?
-  AND status = ?
-ORDER BY priority DESC, created_at ASC
-LIMIT 1
-"""
-
-MARK_JOB_RUNNING = """
-UPDATE ingestion_job
-SET
-    status = ?,
-    attempt_count = attempt_count + 1,
-    updated_at = CURRENT_TIMESTAMP
-WHERE job_id = ?
 """
 
 MARK_JOB_DONE = """
