@@ -158,6 +158,7 @@ def test_market_job_ids_stay_above_existing_rows(manager):
         VALUES (100, 'BN.TO', 'market', 'refresh', 'price_daily', 'done', 100, NULL, NULL, 0, NULL, now(), now())
         """
     )
+    init_db(manager.db)
 
     repo = PriceHistoryIngestionRepository(manager.conn)
 

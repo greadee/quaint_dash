@@ -23,7 +23,11 @@ from dashboard.ingestion.corporate_calendar.models import (
     CorporateIngestionJob,
     FinancialStatementRow,
 )
-from dashboard.ingestion.job_policy import MAX_INGESTION_JOB_ATTEMPTS
+from dashboard.ingestion.job_policy import (
+    INGESTION_JOB_LEASE_SECONDS,
+    MAX_INGESTION_JOB_ATTEMPTS,
+    ingestion_worker_id,
+)
 from dashboard.ingestion.ticker_universe import TickerUniverseRepository
 import dashboard.ingestion.corporate_calendar.db.queries as qry
 
@@ -79,6 +83,8 @@ class CorporateCalendarIngestionRepository:
             qry.CLAIM_NEXT_PENDING_JOB,
             [
                 STATUS_RUNNING,
+                ingestion_worker_id(),
+                INGESTION_JOB_LEASE_SECONDS,
                 DOMAIN_CORPORATE,
                 STATUS_PENDING,
                 MAX_INGESTION_JOB_ATTEMPTS,

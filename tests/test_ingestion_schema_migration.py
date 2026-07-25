@@ -115,6 +115,34 @@ def test_init_db_keeps_fundamental_sync_state_asset_id_as_text(tmp_path: Path):
     assert columns["asset_id"].upper() == "VARCHAR"
 
 
+def test_init_db_repairs_ingestion_job_sequence_after_explicit_ids(tmp_path: Path):
+    db = DB(str(tmp_path / "ingestion_sequence.db"))
+    init_db(db)
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, asset_type, ccy, name)
+        VALUES ('AAPL', 'stock', 'USD', 'Apple Inc.')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO ingestion_job(
+            job_id, asset_id, domain, job_type, dataset, status, priority
+        )
+        VALUES (10000, 'AAPL', 'market', 'refresh', 'price_daily', 'done', 100)
+        """
+    )
+
+    init_db(db)
+
+    allocated = db.conn.execute(
+        """
+        SELECT nextval('seq_ingestion_job_id'), nextval('seq_ingestion_job_id')
+        """
+    ).fetchone()
+    assert allocated == (10001, 10002)
+
+
 def test_init_db_adds_backfill_columns_to_existing_fundamental_subscription(tmp_path: Path):
     db_path = tmp_path / "legacy_fundamental_subscription.db"
     conn = duckdb.connect(str(db_path))

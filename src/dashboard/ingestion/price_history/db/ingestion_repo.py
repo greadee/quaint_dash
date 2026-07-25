@@ -21,7 +21,11 @@ from dashboard.ingestion.price_history.constants import (
     STATUS_RUNNING,
 )
 from dashboard.ingestion.price_history.models import DividendEventRow, IngestionJob, PriceDailyRow, SplitEventRow
-from dashboard.ingestion.job_policy import MAX_INGESTION_JOB_ATTEMPTS
+from dashboard.ingestion.job_policy import (
+    INGESTION_JOB_LEASE_SECONDS,
+    MAX_INGESTION_JOB_ATTEMPTS,
+    ingestion_worker_id,
+)
 from dashboard.ingestion.ticker_universe import TickerUniverseRepository
 import dashboard.ingestion.price_history.db.queries as qry
 
@@ -35,7 +39,7 @@ class PriceHistoryIngestionRepository:
         self.ticker_universe = TickerUniverseRepository(conn)
 
     def next_job_id(self) -> int:
-        return int(self.conn.execute(qry.NEXT_SAFE_JOB_ID).fetchone()[0])
+        return int(self.conn.execute(qry.NEXT_JOB_ID).fetchone()[0])
 
     def create_job(
         self,
@@ -77,6 +81,8 @@ class PriceHistoryIngestionRepository:
             qry.CLAIM_NEXT_PENDING_JOB,
             [
                 STATUS_RUNNING,
+                ingestion_worker_id(),
+                INGESTION_JOB_LEASE_SECONDS,
                 DOMAIN_MARKET,
                 STATUS_PENDING,
                 MAX_INGESTION_JOB_ATTEMPTS,

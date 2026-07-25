@@ -18,7 +18,11 @@ from dashboard.ingestion_sentiment.models import (
     SocialPostInput,
     TickerMention,
 )
-from dashboard.ingestion.job_policy import MAX_INGESTION_JOB_ATTEMPTS
+from dashboard.ingestion.job_policy import (
+    INGESTION_JOB_LEASE_SECONDS,
+    MAX_INGESTION_JOB_ATTEMPTS,
+    ingestion_worker_id,
+)
 from dashboard.ingestion_sentiment.constants import (
     DOMAIN_SENTIMENT,
     STATUS_DONE,
@@ -238,6 +242,8 @@ class SentimentIngestionRepository:
             qry.CLAIM_NEXT_PENDING_SENTIMENT_JOB,
             [
                 STATUS_RUNNING,
+                ingestion_worker_id(),
+                INGESTION_JOB_LEASE_SECONDS,
                 DOMAIN_SENTIMENT,
                 STATUS_PENDING,
                 MAX_INGESTION_JOB_ATTEMPTS,

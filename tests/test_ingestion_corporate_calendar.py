@@ -97,6 +97,12 @@ def make_conn():
             requested_end_date DATE,
             attempt_count INTEGER NOT NULL DEFAULT 0,
             error_message TEXT,
+            lease_owner TEXT,
+            leased_at TIMESTAMP,
+            lease_expires_at TIMESTAMP,
+            max_attempts INTEGER DEFAULT 3,
+            terminal_reason TEXT,
+            completed_at TIMESTAMP,
             created_at TIMESTAMP NOT NULL DEFAULT now(),
             updated_at TIMESTAMP NOT NULL DEFAULT now()
         )

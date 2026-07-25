@@ -588,6 +588,14 @@ CREATE TABLE IF NOT EXISTS ingestion_job (
 
     attempt_count INTEGER NOT NULL DEFAULT 0,
     error_message TEXT,
+    work_key TEXT,
+    lease_owner TEXT,
+    leased_at TIMESTAMP,
+    lease_expires_at TIMESTAMP,
+    max_attempts INTEGER DEFAULT 3,
+    terminal_reason TEXT,
+    completed_at TIMESTAMP,
+    superseded_by_job_id BIGINT,
 
     created_at TIMESTAMP NOT NULL DEFAULT now(),
     updated_at TIMESTAMP NOT NULL DEFAULT now(),

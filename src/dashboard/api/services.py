@@ -8024,6 +8024,11 @@ class CommandApiService(BrokerCommands, IngestionCommands):
             SET
                 status = 'pending',
                 error_message = NULL,
+                lease_owner = NULL,
+                leased_at = NULL,
+                lease_expires_at = NULL,
+                terminal_reason = NULL,
+                completed_at = NULL,
                 updated_at = now()
             WHERE job_id IN (
                 SELECT job_id

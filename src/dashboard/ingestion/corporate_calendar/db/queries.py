@@ -3,8 +3,7 @@ SQL helpers for Domain B corporate calendar ingestion.
 """
 
 NEXT_JOB_ID = """
-SELECT GREATEST(nextval('seq_ingestion_job_id'), COALESCE(MAX(job_id), 0) + 1)
-FROM ingestion_job
+SELECT nextval('seq_ingestion_job_id')
 """
 
 INSERT_JOB = """
@@ -32,13 +31,21 @@ SET
     status = ?,
     attempt_count = attempt_count + 1,
     error_message = NULL,
+    lease_owner = ?,
+    leased_at = CURRENT_TIMESTAMP,
+    lease_expires_at = CURRENT_TIMESTAMP + (? * INTERVAL '1 second'),
+    terminal_reason = NULL,
+    completed_at = NULL,
     updated_at = CURRENT_TIMESTAMP
 WHERE job_id = (
     SELECT candidate.job_id
     FROM ingestion_job candidate
     WHERE candidate.domain = ?
       AND candidate.status = ?
-      AND COALESCE(candidate.attempt_count, 0) < ?
+      AND COALESCE(candidate.attempt_count, 0) < COALESCE(
+          candidate.max_attempts,
+          ?
+      )
     ORDER BY candidate.priority DESC, candidate.created_at ASC
     LIMIT 1
 )
@@ -62,6 +69,10 @@ UPDATE ingestion_job
 SET
     status = ?,
     error_message = NULL,
+    lease_owner = NULL,
+    leased_at = NULL,
+    lease_expires_at = NULL,
+    completed_at = CURRENT_TIMESTAMP,
     updated_at = CURRENT_TIMESTAMP
 WHERE job_id = ?
 """
@@ -71,6 +82,10 @@ UPDATE ingestion_job
 SET
     status = ?,
     error_message = ?,
+    lease_owner = NULL,
+    leased_at = NULL,
+    lease_expires_at = NULL,
+    completed_at = CURRENT_TIMESTAMP,
     updated_at = CURRENT_TIMESTAMP
 WHERE job_id = ?
 """

@@ -310,13 +310,21 @@ SET
     status = ?,
     attempt_count = attempt_count + 1,
     updated_at = now(),
-    error_message = NULL
+    error_message = NULL,
+    lease_owner = ?,
+    leased_at = CURRENT_TIMESTAMP,
+    lease_expires_at = CURRENT_TIMESTAMP + (? * INTERVAL '1 second'),
+    terminal_reason = NULL,
+    completed_at = NULL
 WHERE job_id = (
     SELECT candidate.job_id
     FROM ingestion_job candidate
     WHERE candidate.domain = ?
       AND candidate.status = ?
-      AND COALESCE(candidate.attempt_count, 0) < ?
+      AND COALESCE(candidate.attempt_count, 0) < COALESCE(
+          candidate.max_attempts,
+          ?
+      )
     ORDER BY candidate.priority DESC, candidate.created_at ASC
     LIMIT 1
 )
@@ -339,7 +347,11 @@ MARK_JOB_DONE = """
 UPDATE ingestion_job
 SET status = ?,
     updated_at = now(),
-    error_message = NULL
+    error_message = NULL,
+    lease_owner = NULL,
+    leased_at = NULL,
+    lease_expires_at = NULL,
+    completed_at = CURRENT_TIMESTAMP
 WHERE job_id = ?
 """
 
@@ -347,7 +359,11 @@ MARK_JOB_FAILED = """
 UPDATE ingestion_job
 SET status = ?,
     error_message = ?,
-    updated_at = now()
+    updated_at = now(),
+    lease_owner = NULL,
+    leased_at = NULL,
+    lease_expires_at = NULL,
+    completed_at = CURRENT_TIMESTAMP
 WHERE job_id = ?
 """
 

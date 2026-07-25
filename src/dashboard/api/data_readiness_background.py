@@ -698,12 +698,7 @@ def _create_job(
     end_date: date | None,
 ) -> None:
     job_id = int(
-        conn.execute(
-            """
-            SELECT GREATEST(nextval('seq_ingestion_job_id'), COALESCE(MAX(job_id), 0) + 1)
-            FROM ingestion_job
-            """
-        ).fetchone()[0]
+        conn.execute("SELECT nextval('seq_ingestion_job_id')").fetchone()[0]
     )
     conn.execute(
         """
