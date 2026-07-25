@@ -277,10 +277,32 @@ def _schedule_missing_inputs(
             continue
         seen_assets.add(asset_id)
         missing = _missing_inputs(conn, asset_id, config)
-        if any(item.endswith("statements") or item in {"shares_outstanding", "fundamental_metrics"} for item in missing):
+        terminal_corporate_gap = _has_terminal_provider_gap(
+            conn,
+            asset_id,
+            "corporate",
+            "financial_statements",
+        )
+        if (
+            any(
+                item.endswith("statements")
+                or item in {"shares_outstanding", "fundamental_metrics"}
+                for item in missing
+            )
+            and not terminal_corporate_gap
+        ):
             _hydrate_yfinance_summary(conn, asset_id)
             missing = _missing_inputs(conn, asset_id, config)
-        if any(item.startswith("price") for item in missing) and not _has_open_job(conn, asset_id, "market", "price_daily"):
+        if (
+            any(item.startswith("price") for item in missing)
+            and not _has_open_job(conn, asset_id, "market", "price_daily")
+            and not _has_terminal_provider_gap(
+                conn,
+                asset_id,
+                "market",
+                "price_daily",
+            )
+        ):
             _create_job(
                 conn,
                 asset_id=asset_id,
@@ -292,11 +314,19 @@ def _schedule_missing_inputs(
                 end_date=date.today(),
             )
             total += 1
-        if any(item.endswith("statements") or item in {"shares_outstanding", "fundamental_metrics"} for item in missing) and not _has_open_job(
-            conn,
-            asset_id,
-            "corporate",
-            "financial_statements",
+        if (
+            any(
+                item.endswith("statements")
+                or item in {"shares_outstanding", "fundamental_metrics"}
+                for item in missing
+            )
+            and not _has_open_job(
+                conn,
+                asset_id,
+                "corporate",
+                "financial_statements",
+            )
+            and not terminal_corporate_gap
         ):
             _create_job(
                 conn,
@@ -684,6 +714,27 @@ def _has_open_job(conn, asset_id: str, domain: str, dataset: str) -> bool:
         [asset_id, domain, dataset],
     ).fetchone()
     return bool(row and row[0])
+
+
+def _has_terminal_provider_gap(
+    conn,
+    asset_id: str,
+    domain: str,
+    dataset: str,
+) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM ingestion_job
+        WHERE asset_id = ?
+          AND domain = ?
+          AND dataset = ?
+          AND status IN ('unsupported', 'dead_letter')
+        LIMIT 1
+        """,
+        [asset_id, domain, dataset],
+    ).fetchone()
+    return row is not None
 
 
 def _create_job(

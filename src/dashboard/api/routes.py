@@ -86,6 +86,7 @@ from dashboard.api.models import (
     SignalAlertRuleRequest,
     SignalAlertRuleResponse,
     SignalDetailResponse,
+    SignalSnapshotRefreshResponse,
     SignalUserState,
     SignalUserStateRequest,
     SignalsSummaryResponse,
@@ -343,6 +344,21 @@ def signals_summary(
         limit=limit,
         offset=offset,
     )
+
+
+@router.post(
+    "/signals/snapshots/refresh",
+    response_model=SignalSnapshotRefreshResponse,
+)
+def refresh_signal_snapshots(
+    request: Request,
+    include_retail_sentiment: bool = Query(default=True),
+    conn=Depends(get_connection),
+):
+    with request.app.state.write_lock:
+        return PortfolioApiService(conn).refresh_signal_snapshots(
+            include_retail_sentiment=include_retail_sentiment
+        )
 
 
 @router.get("/signals/{signal_id:path}", response_model=SignalDetailResponse)

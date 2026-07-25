@@ -27,6 +27,8 @@ DEFAULT_DB_PATH = ROOT / "data" / "persistent_db.db"
 PROFILED_METHODS = [
     "signals_summary",
     "signal_detail",
+    "refresh_signal_snapshots",
+    "_stored_signal_rows",
     "_current_signal_rows",
     "_stock_ranking_universe",
     "_ensure_stock_ranking_inputs",
@@ -35,6 +37,7 @@ PROFILED_METHODS = [
     "_stock_ranking_item",
     "_signal_from_ranking",
     "_signal_efficacy",
+    "_with_signal_efficacy_batch",
     "_persist_signal_evaluation",
 ]
 
@@ -175,6 +178,11 @@ def _filters_from_query(query: str) -> dict[str, Any]:
         "completeness": values.get("completeness"),
         "triggered_after": _date_or_none(values.get("triggered_after")),
         "triggered_before": _date_or_none(values.get("triggered_before")),
+        "include_retail_sentiment": values.get(
+            "include_retail_sentiment",
+            "false",
+        ).lower()
+        == "true",
         "sort": values.get("sort", "priority"),
         "limit": int(values.get("limit", "25")),
         "offset": int(values.get("offset", "0")),

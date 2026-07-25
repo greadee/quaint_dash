@@ -224,6 +224,7 @@ header strong { font-size: 13px; font-weight: 520; letter-spacing: 0.02em; text-
 .signal-table-skeleton { display: grid; gap: 10px; padding: 18px 20px; }
 .skeleton-row { height: 42px; border-radius: 8px; }
 .signal-refreshing { margin: 12px 20px 0; display: inline-flex; color: var(--mono-600); font-size: 12px; }
+.signal-load-more { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 16px 20px 20px; color: var(--mono-600); font-size: 12px; }
 .signal-detail-card { overflow: hidden; }
 .signal-detail-grid { border-top: 1px solid var(--mono-200); padding: 18px 20px; display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; }
 .signal-detail-grid > div { border: 1px solid var(--mono-200); border-radius: 8px; padding: 13px; background: var(--mono-50); display: grid; gap: 8px; align-content: start; }

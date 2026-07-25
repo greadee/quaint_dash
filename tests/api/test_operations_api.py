@@ -1108,6 +1108,96 @@ def test_data_readiness_tick_schedules_missing_underlying_for_cdr(tmp_path, monk
     ]
 
 
+def test_data_readiness_does_not_reschedule_terminal_provider_gaps(
+    tmp_path,
+    monkeypatch,
+):
+    db_path = tmp_path / "api.db"
+    db = DB(db_path)
+    init_db(db)
+    db.conn.execute(
+        "INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')"
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset(
+            asset_id, symbol, asset_type, asset_subtype, ccy, name
+        )
+        VALUES
+            ('AMD', 'AMD', 'stock', NULL, 'USD', 'Advanced Micro Devices'),
+            (
+                'AMD.TO', 'AMD.TO', 'stock', 'cdr', 'CAD',
+                'AMD Canadian Depositary Receipt'
+            )
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO portfolio_ticker(
+            portfolio_id, asset_id, is_active, source
+        )
+        VALUES (1, 'AMD.TO', TRUE, 'position')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO position(
+            portfolio_id, asset_id, qty, book_cost, created_at, updated_at
+        )
+        VALUES (1, 'AMD.TO', 1, 10, now(), now())
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO ingestion_job(
+            asset_id, domain, job_type, dataset, status, terminal_reason
+        )
+        VALUES
+            (
+                'AMD', 'market', 'backfill', 'price_daily', 'dead_letter',
+                'provider retry budget exhausted'
+            ),
+            (
+                'AMD', 'corporate', 'backfill', 'financial_statements',
+                'unsupported', 'provider entitlement unavailable'
+            )
+        """
+    )
+    db.conn.close()
+
+    monkeypatch.setattr(
+        "dashboard.api.data_readiness_background._hydrate_yfinance_summary",
+        lambda conn, asset_id: False,
+    )
+    monkeypatch.setattr(
+        CommandApiService,
+        "run_ingestion_jobs",
+        lambda self, **kwargs: 0,
+    )
+
+    worker = DataReadinessWorker(
+        db_path,
+        Lock(),
+        DataReadinessConfig(enabled=True, max_run_batches_per_tick=1),
+    )
+
+    result = asyncio.run(worker.tick())
+
+    assert result["scheduled_jobs"] == 0
+    assert result["pending_jobs"] == 0
+    db = DB(db_path)
+    statuses = db.conn.execute(
+        """
+        SELECT status, COUNT(*)
+        FROM ingestion_job
+        GROUP BY status
+        ORDER BY status
+        """
+    ).fetchall()
+    db.conn.close()
+    assert statuses == [("dead_letter", 1), ("unsupported", 1)]
+
+
 def test_data_readiness_tick_calculates_cdr_valuation_from_underlying(tmp_path, monkeypatch):
     db_path = tmp_path / "api.db"
     db = DB(db_path)

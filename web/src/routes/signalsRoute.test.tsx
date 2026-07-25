@@ -126,6 +126,8 @@ describe("Signals routes", () => {
       total: 1,
       limit: 25,
       offset: 0,
+      has_more: false,
+      next_offset: null,
       metrics: [{ key: "active", label: "Active", value: 1, filter_params: { status: "active" } }],
       needs_attention: [signalRow],
       top_opportunities: [signalRow],
@@ -182,6 +184,66 @@ describe("Signals routes", () => {
     await user.click(screen.getByLabelText("Include retail add-on"));
 
     expect(apiMock.signals).toHaveBeenLastCalledWith(expect.objectContaining({ include_retail_sentiment: "true" }));
+  });
+
+  it("loads the next bounded page only when requested", async () => {
+    const user = userEvent.setup();
+    const nextSignal = {
+      ...signalRow,
+      signal_id: "sig-amd-momentum",
+      asset_id: "AMD",
+      ticker: "AMD",
+      company_name: "Advanced Micro Devices",
+    };
+    apiMock.signals.mockImplementation(({ offset }: { offset: number }) => Promise.resolve(
+      offset === 25
+        ? {
+            items: [nextSignal],
+            total: 26,
+            limit: 25,
+            offset: 25,
+            has_more: false,
+            next_offset: null,
+            metrics: [],
+            needs_attention: [],
+            top_opportunities: [],
+            generated_at: "2026-06-19T12:00:00Z",
+            data_as_of: "2026-06-19T00:00:00Z",
+            last_successful_computation_at: "2026-06-19T12:00:00Z",
+            partial_provider_failures: [],
+            stale_cached_results: false,
+            model_version: "test-v1",
+            methodology: "Stored snapshots.",
+          }
+        : {
+            items: [signalRow],
+            total: 26,
+            limit: 25,
+            offset: 0,
+            has_more: true,
+            next_offset: 25,
+            metrics: [],
+            needs_attention: [],
+            top_opportunities: [],
+            generated_at: "2026-06-19T12:00:00Z",
+            data_as_of: "2026-06-19T00:00:00Z",
+            last_successful_computation_at: "2026-06-19T12:00:00Z",
+            partial_provider_failures: [],
+            stale_cached_results: false,
+            model_version: "test-v1",
+            methodology: "Stored snapshots.",
+          },
+    ));
+
+    renderWithQuery(<StockRankingsPage notify={vi.fn()} />);
+
+    await user.click(await screen.findByRole("button", { name: "Load 25 more signals" }));
+
+    expect((await screen.findAllByText("AMD")).length).toBeGreaterThan(0);
+    expect(apiMock.signals).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ limit: 25, offset: 25 }),
+    );
   });
 
   it("renders signal detail lifecycle", async () => {

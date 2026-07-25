@@ -579,6 +579,8 @@ export type SignalsSummaryResponse = {
   total: number;
   limit: number;
   offset: number;
+  has_more: boolean;
+  next_offset: number | null;
   metrics: SignalSummaryMetric[];
   needs_attention: SignalRow[];
   top_opportunities: SignalRow[];

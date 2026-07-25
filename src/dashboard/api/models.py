@@ -801,6 +801,8 @@ class SignalsSummaryResponse(BaseModel):
     total: int
     limit: int
     offset: int
+    has_more: bool
+    next_offset: int | None
     metrics: list[SignalSummaryMetric]
     needs_attention: list[SignalRow]
     top_opportunities: list[SignalRow]
@@ -811,6 +813,13 @@ class SignalsSummaryResponse(BaseModel):
     stale_cached_results: bool = False
     model_version: str
     methodology: str
+
+
+class SignalSnapshotRefreshResponse(BaseModel):
+    refreshed_count: int
+    pruned_count: int
+    generated_at: datetime
+    model_version: str
 
 
 class SignalDetailResponse(SignalRow):

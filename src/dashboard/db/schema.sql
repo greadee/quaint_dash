@@ -153,6 +153,7 @@ CREATE TABLE IF NOT EXISTS signal_evaluation (
     signal_id TEXT PRIMARY KEY,
     definition_id TEXT NOT NULL,
     asset_id TEXT NOT NULL,
+    summary TEXT,
     status TEXT NOT NULL,
     direction TEXT NOT NULL,
     strength DOUBLE PRECISION NOT NULL,
@@ -180,8 +181,43 @@ CREATE TABLE IF NOT EXISTS signal_evaluation (
     FOREIGN KEY (asset_id) REFERENCES asset(asset_id)
 );
 
+ALTER TABLE signal_evaluation ADD COLUMN IF NOT EXISTS summary TEXT;
+
 CREATE INDEX IF NOT EXISTS idx_signal_evaluation_summary
 ON signal_evaluation(status, direction, portfolio_priority, confidence, last_evaluated_at);
+
+CREATE TABLE IF NOT EXISTS signal_evaluation_current (
+    signal_id TEXT PRIMARY KEY,
+    summary TEXT NOT NULL,
+    status TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    strength DOUBLE PRECISION NOT NULL,
+    confidence DOUBLE PRECISION NOT NULL,
+    portfolio_priority DOUBLE PRECISION NOT NULL,
+    raw_observed_value DOUBLE PRECISION,
+    normalized_value DOUBLE PRECISION,
+    trigger_threshold DOUBLE PRECISION,
+    first_detected_at TIMESTAMP,
+    confirmation_at TIMESTAMP,
+    last_evaluated_at TIMESTAMP NOT NULL,
+    data_as_of TIMESTAMP,
+    expires_at TIMESTAMP,
+    resolved_at TIMESTAMP,
+    resolution_reason TEXT,
+    model_version TEXT NOT NULL,
+    source TEXT NOT NULL,
+    missing_data_status TEXT NOT NULL,
+    input_data_timestamps_json TEXT NOT NULL DEFAULT '{}',
+    missing_inputs_json TEXT NOT NULL DEFAULT '[]',
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    FOREIGN KEY (signal_id) REFERENCES signal_evaluation(signal_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_signal_evaluation_current_summary
+ON signal_evaluation_current(is_active, status, direction, portfolio_priority, confidence, last_evaluated_at);
 
 CREATE TABLE IF NOT EXISTS signal_evidence (
     signal_id TEXT NOT NULL,

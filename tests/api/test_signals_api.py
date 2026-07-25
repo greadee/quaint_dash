@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from dashboard.api.app import create_app
+from dashboard.api.services import PortfolioApiService
 from dashboard.db.db_conn import DB
 
 
@@ -155,3 +156,70 @@ def test_signal_efficacy_uses_prior_snapshots_without_lookahead(tmp_path):
     assert efficacy["median_forward_return"] is not None
     assert efficacy["hit_rate"] is not None
     assert efficacy["warning"] is None
+
+
+class _CountingConnection:
+    def __init__(self, conn):
+        self._conn = conn
+        self.query_count = 0
+
+    def execute(self, sql, parameters=None):
+        self.query_count += 1
+        if parameters is None:
+            return self._conn.execute(sql)
+        return self._conn.execute(sql, parameters)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def test_signal_snapshots_bound_summary_and_detail_queries(tmp_path):
+    db_path = tmp_path / "signals.db"
+    create_app(db_path)
+    db = DB(db_path)
+    _seed_signal_assets(db)
+    service = PortfolioApiService(db.conn)
+    refresh = service.refresh_signal_snapshots(include_retail_sentiment=False)
+    assert refresh.refreshed_count >= 5
+    repeated_refresh = service.refresh_signal_snapshots(
+        include_retail_sentiment=False
+    )
+    assert repeated_refresh.refreshed_count == refresh.refreshed_count
+
+    counting = _CountingConnection(db.conn)
+    stored_service = PortfolioApiService(counting)
+
+    summary = stored_service.signals_summary(
+        q=None,
+        portfolio_id=None,
+        owned=None,
+        category=None,
+        direction=None,
+        status=None,
+        min_strength=None,
+        min_confidence=None,
+        min_priority=None,
+        sector=None,
+        industry=None,
+        freshness=None,
+        completeness=None,
+        triggered_after=None,
+        triggered_before=None,
+        include_retail_sentiment=False,
+        sort="priority",
+        limit=3,
+        offset=0,
+    )
+
+    assert len(summary.items) == 3
+    assert summary.has_more is True
+    assert summary.next_offset == 3
+    assert summary.last_successful_computation_at >= refresh.generated_at
+    assert summary.last_successful_computation_at <= summary.generated_at
+    assert counting.query_count <= 5
+
+    counting.query_count = 0
+    detail = stored_service.signal_detail(summary.items[0].signal_id)
+    assert detail.supporting_evidence
+    assert counting.query_count <= 9
+    db.conn.close()

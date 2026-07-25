@@ -91,6 +91,7 @@ from dashboard.api.models import (
     SignalLifecycleEvent,
     SignalPortfolioImpact,
     SignalRow,
+    SignalSnapshotRefreshResponse,
     SignalSummaryMetric,
     SignalUserState,
     SignalUserStateRequest,
@@ -3438,7 +3439,13 @@ class PortfolioApiService:
         limit: int,
         offset: int,
     ) -> SignalsSummaryResponse:
-        rows = self._current_signal_rows(include_retail_sentiment=include_retail_sentiment)
+        stored_rows = self._stored_signal_rows(
+            include_retail_sentiment=include_retail_sentiment
+        )
+        rows = stored_rows
+        if not stored_rows:
+            rows = self._current_signal_rows(include_retail_sentiment=include_retail_sentiment)
+        classifications = self._signal_classifications(rows) if sector or industry else None
         filtered = [
             row for row in rows
             if self._signal_matches(
@@ -3458,13 +3465,19 @@ class PortfolioApiService:
                 completeness=completeness,
                 triggered_after=triggered_after,
                 triggered_before=triggered_before,
+                classifications=classifications,
             )
         ]
         if sort == "efficacy":
-            filtered = [self._with_signal_efficacy(row) for row in filtered]
+            filtered = self._with_signal_efficacy_batch(filtered)
         filtered.sort(key=_signal_sort_key(sort), reverse=sort != "ticker")
         generated_at = datetime.now()
         data_dates = [row.data_as_of for row in rows if row.data_as_of is not None]
+        computation_dates = [
+            row.last_evaluated_at
+            for row in rows
+            if row.last_evaluated_at is not None
+        ]
         needs_attention = [
             row for row in sorted(rows, key=lambda item: (item.portfolio_priority, item.confidence), reverse=True)
             if row.direction == "negative" and row.status in {"confirmed", "active", "weakening"}
@@ -3473,20 +3486,35 @@ class PortfolioApiService:
             row for row in sorted(rows, key=lambda item: (item.portfolio_priority, item.confidence), reverse=True)
             if row.direction == "positive" and row.status in {"confirmed", "active"}
         ][:5]
-        items = [self._with_signal_efficacy(row) for row in filtered[offset : offset + limit]]
-        needs_attention = [self._with_signal_efficacy(row) for row in needs_attention]
-        top_opportunities = [self._with_signal_efficacy(row) for row in top_opportunities]
+        page = filtered[offset : offset + limit]
+        selected_ids = {
+            row.signal_id
+            for row in page + needs_attention + top_opportunities
+        }
+        selected = [row for row in rows if row.signal_id in selected_ids]
+        if stored_rows:
+            selected = self._hydrate_stored_signal_evidence(selected)
+        selected = self._with_signal_efficacy_batch(selected)
+        selected_by_id = {row.signal_id: row for row in selected}
+        items = [selected_by_id.get(row.signal_id, row) for row in page]
+        needs_attention = [selected_by_id.get(row.signal_id, row) for row in needs_attention]
+        top_opportunities = [selected_by_id.get(row.signal_id, row) for row in top_opportunities]
+        has_more = offset + len(items) < len(filtered)
         return SignalsSummaryResponse(
             items=items,
             total=len(filtered),
             limit=limit,
             offset=offset,
+            has_more=has_more,
+            next_offset=offset + len(items) if has_more else None,
             metrics=_signal_summary_metrics(rows),
             needs_attention=needs_attention,
             top_opportunities=top_opportunities,
             generated_at=generated_at,
             data_as_of=max(data_dates) if data_dates else None,
-            last_successful_computation_at=generated_at,
+            last_successful_computation_at=(
+                max(computation_dates) if computation_dates else generated_at
+            ),
             partial_provider_failures=_signal_provider_failures(rows),
             stale_cached_results=any(row.status == "expired" for row in rows),
             model_version=_SIGNALS_MODEL_VERSION,
@@ -3494,10 +3522,25 @@ class PortfolioApiService:
         )
 
     def signal_detail(self, signal_id: str) -> SignalDetailResponse:
-        row = next((item for item in self._current_signal_rows(include_retail_sentiment=True) if item.signal_id == signal_id), None)
+        stored_rows = self._stored_signal_rows(
+            include_retail_sentiment=True,
+            signal_id=signal_id,
+        )
+        row = stored_rows[0] if stored_rows else None
+        if row is None:
+            row = next(
+                (
+                    item
+                    for item in self._current_signal_rows(include_retail_sentiment=True)
+                    if item.signal_id == signal_id
+                ),
+                None,
+            )
         if row is None:
             raise LookupError(f"Signal not found: {signal_id}")
-        row = self._with_signal_efficacy(row)
+        if stored_rows:
+            row = self._hydrate_stored_signal_evidence([row])[0]
+        row = self._with_signal_efficacy_batch([row])[0]
         return SignalDetailResponse(
             **row.model_dump(),
             lifecycle=_signal_lifecycle(row),
@@ -3515,7 +3558,20 @@ class PortfolioApiService:
         )
 
     def update_signal_user_state(self, signal_id: str, payload: SignalUserStateRequest) -> SignalUserState:
-        row = next((item for item in self._current_signal_rows(include_retail_sentiment=True) if item.signal_id == signal_id), None)
+        stored_rows = self._stored_signal_rows(
+            include_retail_sentiment=True,
+            signal_id=signal_id,
+        )
+        row = stored_rows[0] if stored_rows else None
+        if row is None:
+            row = next(
+                (
+                    item
+                    for item in self._current_signal_rows(include_retail_sentiment=True)
+                    if item.signal_id == signal_id
+                ),
+                None,
+            )
         if row is None:
             raise LookupError(f"Signal not found: {signal_id}")
         reviewed_at = datetime.now() if payload.reviewed else None
@@ -3547,7 +3603,20 @@ class PortfolioApiService:
         return self._signal_user_state(signal_id)
 
     def create_signal_alert_rule(self, signal_id: str, payload: SignalAlertRuleRequest) -> SignalAlertRuleResponse:
-        row = next((item for item in self._current_signal_rows(include_retail_sentiment=True) if item.signal_id == signal_id), None)
+        stored_rows = self._stored_signal_rows(
+            include_retail_sentiment=True,
+            signal_id=signal_id,
+        )
+        row = stored_rows[0] if stored_rows else None
+        if row is None:
+            row = next(
+                (
+                    item
+                    for item in self._current_signal_rows(include_retail_sentiment=True)
+                    if item.signal_id == signal_id
+                ),
+                None,
+            )
         if row is None:
             raise LookupError(f"Signal not found: {signal_id}")
         result = self.conn.execute(
@@ -3571,6 +3640,229 @@ class PortfolioApiService:
             channel=payload.channel,
             is_active=True,
         )
+
+    def refresh_signal_snapshots(
+        self,
+        *,
+        include_retail_sentiment: bool = True,
+    ) -> SignalSnapshotRefreshResponse:
+        generated_at = datetime.now()
+        rows = self._current_signal_rows(
+            include_retail_sentiment=include_retail_sentiment
+        )
+        self.conn.execute("BEGIN TRANSACTION")
+        try:
+            self.conn.execute(
+                """
+                UPDATE signal_evaluation_current
+                SET is_active = FALSE, updated_at = now()
+                WHERE model_version = ?
+                """,
+                [_SIGNALS_MODEL_VERSION],
+            )
+            for row in rows:
+                self._persist_signal_evaluation(row)
+            stale = self.conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM signal_evaluation_current
+                WHERE model_version = ?
+                  AND is_active = FALSE
+                """,
+                [_SIGNALS_MODEL_VERSION],
+            ).fetchone()
+            pruned_count = int(stale[0] or 0) if stale else 0
+            self.conn.execute(
+                """
+                DELETE FROM signal_evidence
+                WHERE signal_id IN (
+                    SELECT signal_id
+                    FROM signal_evaluation_current
+                    WHERE model_version = ? AND is_active = FALSE
+                )
+                """,
+                [_SIGNALS_MODEL_VERSION],
+            )
+            self.conn.execute(
+                """
+                DELETE FROM signal_portfolio_impact
+                WHERE signal_id IN (
+                    SELECT signal_id
+                    FROM signal_evaluation_current
+                    WHERE model_version = ? AND is_active = FALSE
+                )
+                """,
+                [_SIGNALS_MODEL_VERSION],
+            )
+            self.conn.execute("COMMIT")
+        except Exception:
+            self.conn.execute("ROLLBACK")
+            raise
+        return SignalSnapshotRefreshResponse(
+            refreshed_count=len(rows),
+            pruned_count=pruned_count,
+            generated_at=generated_at,
+            model_version=_SIGNALS_MODEL_VERSION,
+        )
+
+    def _stored_signal_rows(
+        self,
+        *,
+        include_retail_sentiment: bool,
+        signal_id: str | None = None,
+    ) -> list[SignalRow]:
+        conditions = ["c.model_version = ?", "c.is_active = TRUE"]
+        parameters: list[Any] = [_SIGNALS_MODEL_VERSION]
+        if not include_retail_sentiment:
+            conditions.append("d.factor <> 'retail_sentiment'")
+        if signal_id is not None:
+            conditions.append("e.signal_id = ?")
+            parameters.append(signal_id)
+        rows = self.conn.execute(
+            f"""
+            SELECT
+                e.signal_id, e.definition_id, e.asset_id,
+                COALESCE(a.symbol, e.asset_id), a.name, a.exchange_code,
+                d.signal_name, c.summary, d.category,
+                c.direction, c.status, c.strength, c.confidence,
+                c.portfolio_priority, c.raw_observed_value, c.normalized_value,
+                c.trigger_threshold, d.lookback_period, c.first_detected_at,
+                c.confirmation_at, c.last_evaluated_at, c.data_as_of,
+                c.expires_at, c.resolved_at, c.resolution_reason,
+                c.model_version, c.source, c.missing_data_status,
+                u.reviewed_at, u.muted_until
+            FROM signal_evaluation e
+            JOIN signal_evaluation_current c ON c.signal_id = e.signal_id
+            JOIN signal_definition d ON d.definition_id = e.definition_id
+            LEFT JOIN asset a ON a.asset_id = e.asset_id
+            LEFT JOIN signal_user_state u ON u.signal_id = e.signal_id
+            WHERE {" AND ".join(conditions)}
+            """,
+            parameters,
+        ).fetchall()
+        if not rows:
+            return []
+        signal_ids = [str(row[0]) for row in rows]
+        placeholders = ", ".join("?" for _ in signal_ids)
+        impact_rows = self.conn.execute(
+            f"""
+            SELECT signal_id, portfolio_id, portfolio_name, weight,
+                   market_value, currency, concentration_note
+            FROM signal_portfolio_impact
+            WHERE signal_id IN ({placeholders})
+            ORDER BY signal_id, portfolio_id
+            """,
+            signal_ids,
+        ).fetchall()
+        impacts: dict[str, list[SignalPortfolioImpact]] = {}
+        for impact in impact_rows:
+            impacts.setdefault(str(impact[0]), []).append(
+                SignalPortfolioImpact(
+                    portfolio_id=int(impact[1]),
+                    portfolio_name=str(impact[2]),
+                    weight=_float_or_none(impact[3]),
+                    market_value=_float_or_none(impact[4]),
+                    currency=str(impact[5]),
+                    concentration_note=str(impact[6]),
+                )
+            )
+        now = datetime.now()
+        result: list[SignalRow] = []
+        for row in rows:
+            signal_impacts = impacts.get(str(row[0]), [])
+            result.append(
+                SignalRow(
+                    signal_id=str(row[0]),
+                    definition_id=str(row[1]),
+                    asset_id=str(row[2]),
+                    ticker=str(row[3]),
+                    company_name=row[4],
+                    exchange=row[5],
+                    signal_name=str(row[6]),
+                    summary=str(row[7]),
+                    category=str(row[8]),
+                    direction=str(row[9]),
+                    status=str(row[10]),
+                    strength=float(row[11]),
+                    confidence=float(row[12]),
+                    portfolio_priority=float(row[13]),
+                    raw_observed_value=_float_or_none(row[14]),
+                    normalized_value=_float_or_none(row[15]),
+                    trigger_threshold=_float_or_none(row[16]),
+                    lookback_period=str(row[17]),
+                    first_detected_at=row[18],
+                    confirmation_at=row[19],
+                    last_evaluated_at=row[20],
+                    data_as_of=row[21],
+                    expires_at=row[22],
+                    resolved_at=row[23],
+                    resolution_reason=row[24],
+                    methodology_version=str(row[25]),
+                    source=str(row[26]),
+                    missing_data_status=str(row[27]),
+                    supporting_evidence=[],
+                    contradicting_evidence=[],
+                    affected_portfolios=signal_impacts,
+                    current_portfolio_weight=(
+                        round(
+                            sum(impact.weight or 0.0 for impact in signal_impacts),
+                            4,
+                        )
+                        if signal_impacts
+                        else None
+                    ),
+                    historical_efficacy=_pending_signal_efficacy(),
+                    related_signal_ids=[],
+                    reviewed=row[28] is not None,
+                    muted=row[29] is not None and row[29] > now,
+                )
+            )
+        return result
+
+    def _hydrate_stored_signal_evidence(
+        self,
+        rows: list[SignalRow],
+    ) -> list[SignalRow]:
+        if not rows:
+            return []
+        signal_ids = list(dict.fromkeys(row.signal_id for row in rows))
+        placeholders = ", ".join("?" for _ in signal_ids)
+        evidence_rows = self.conn.execute(
+            f"""
+            SELECT signal_id, evidence_type, label, metric, value, score,
+                   detail, source, as_of
+            FROM signal_evidence
+            WHERE signal_id IN ({placeholders})
+            ORDER BY signal_id, evidence_id
+            """,
+            signal_ids,
+        ).fetchall()
+        supporting: dict[str, list[SignalEvidenceItem]] = {}
+        contradicting: dict[str, list[SignalEvidenceItem]] = {}
+        for evidence in evidence_rows:
+            item = SignalEvidenceItem(
+                label=str(evidence[2]),
+                metric=str(evidence[3]),
+                value=_float_or_none(evidence[4]),
+                score=_float_or_none(evidence[5]),
+                detail=str(evidence[6]),
+                source=str(evidence[7]),
+                as_of=evidence[8],
+            )
+            target = supporting if evidence[1] == "supporting" else contradicting
+            target.setdefault(str(evidence[0]), []).append(item)
+        return [
+            row.model_copy(
+                update={
+                    "supporting_evidence": supporting.get(row.signal_id, []),
+                    "contradicting_evidence": contradicting.get(
+                        row.signal_id,
+                        [],
+                    ),
+                }
+            )
+            for row in rows
+        ]
 
     def _current_signal_rows(self, *, include_retail_sentiment: bool = False) -> list[SignalRow]:
         universe_rows = self._stock_ranking_universe("tracked")
@@ -3657,6 +3949,78 @@ class PortfolioApiService:
         factor = row.definition_id.split(".")[1]
         return row.model_copy(update={"historical_efficacy": self._signal_efficacy(row.asset_id, factor, row.raw_observed_value or 0.0)})
 
+    def _with_signal_efficacy_batch(
+        self,
+        rows: list[SignalRow],
+    ) -> list[SignalRow]:
+        pending = [
+            row
+            for row in rows
+            if row.historical_efficacy.methodology_version
+            != _SIGNALS_MODEL_VERSION
+            or row.historical_efficacy.sample_size == 0
+        ]
+        if not pending:
+            return rows
+        asset_ids = list(dict.fromkeys(row.asset_id for row in pending))
+        placeholders = ", ".join("?" for _ in asset_ids)
+        snapshot_rows = self.conn.execute(
+            f"""
+            SELECT asset_id, factor, snapshot_date, score
+            FROM stock_ranking_snapshot
+            WHERE asset_id IN ({placeholders})
+              AND snapshot_date < current_date
+              AND ABS(score) >= 6
+            ORDER BY asset_id, factor, snapshot_date
+            """,
+            asset_ids,
+        ).fetchall()
+        price_rows = self.conn.execute(
+            f"""
+            SELECT asset_id, date, COALESCE(adj_close, close) AS price
+            FROM asset_quote_daily
+            WHERE asset_id IN ({placeholders})
+              AND COALESCE(adj_close, close) IS NOT NULL
+            ORDER BY asset_id, date
+            """,
+            asset_ids,
+        ).fetchall()
+        snapshots: dict[tuple[str, str], list[tuple[date, float]]] = {}
+        for asset_id, factor, snapshot_date, score in snapshot_rows:
+            snapshots.setdefault((str(asset_id), str(factor)), []).append(
+                (snapshot_date, float(score))
+            )
+        prices: dict[str, list[tuple[date, float]]] = {}
+        for asset_id, price_date, price in price_rows:
+            prices.setdefault(str(asset_id), []).append(
+                (price_date, float(price))
+            )
+        efficacy_by_id: dict[str, SignalEfficacyMetadata] = {}
+        for row in pending:
+            factor = row.definition_id.split(".")[1]
+            direction = 1 if (row.raw_observed_value or 0.0) >= 0 else -1
+            matching = [
+                (snapshot_date, score)
+                for snapshot_date, score in snapshots.get(
+                    (row.asset_id, factor),
+                    [],
+                )
+                if (score >= 6 if direction > 0 else score <= -6)
+            ]
+            efficacy_by_id[row.signal_id] = self._signal_efficacy_from_history(
+                matching,
+                prices.get(row.asset_id, []),
+                direction,
+            )
+        return [
+            row.model_copy(
+                update={"historical_efficacy": efficacy_by_id[row.signal_id]}
+            )
+            if row.signal_id in efficacy_by_id
+            else row
+            for row in rows
+        ]
+
     def _persist_signal_evaluation(self, row: SignalRow) -> None:
         factor = row.definition_id.split(".")[1]
         self.conn.execute(
@@ -3674,41 +4038,140 @@ class PortfolioApiService:
             """,
             [row.definition_id, row.signal_name, row.category, factor, row.summary, row.trigger_threshold, row.lookback_period, row.methodology_version],
         )
-        self.conn.execute("DELETE FROM signal_evidence WHERE signal_id = ?", [row.signal_id])
-        self.conn.execute("DELETE FROM signal_portfolio_impact WHERE signal_id = ?", [row.signal_id])
+        input_timestamps = json.dumps(
+            {"data_as_of": str(row.data_as_of) if row.data_as_of else None}
+        )
+        missing_inputs = json.dumps(
+            [
+                item.detail
+                for item in row.supporting_evidence
+                + row.contradicting_evidence
+                if "Needs" in item.detail
+            ]
+        )
+        exists = self.conn.execute(
+            "SELECT 1 FROM signal_evaluation WHERE signal_id = ?",
+            [row.signal_id],
+        ).fetchone()
+        if not exists:
+            self.conn.execute(
+                """
+                INSERT INTO signal_evaluation(
+                    signal_id, definition_id, asset_id, summary, status,
+                    direction, strength, confidence, portfolio_priority,
+                    raw_observed_value, normalized_value, trigger_threshold,
+                    first_detected_at, confirmation_at, last_evaluated_at,
+                    data_as_of, expires_at, resolved_at, resolution_reason,
+                    model_version, source, missing_data_status,
+                    input_data_timestamps_json, missing_inputs_json,
+                    created_at, updated_at
+                )
+                VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, now(), now()
+                )
+                """,
+                [
+                    row.signal_id,
+                    row.definition_id,
+                    row.asset_id,
+                    row.summary,
+                    row.status,
+                    row.direction,
+                    row.strength,
+                    row.confidence,
+                    row.portfolio_priority,
+                    row.raw_observed_value,
+                    row.normalized_value,
+                    row.trigger_threshold,
+                    row.first_detected_at,
+                    row.confirmation_at,
+                    row.last_evaluated_at,
+                    row.data_as_of,
+                    row.expires_at,
+                    row.resolved_at,
+                    row.resolution_reason,
+                    row.methodology_version,
+                    row.source,
+                    row.missing_data_status,
+                    input_timestamps,
+                    missing_inputs,
+                ],
+            )
         self.conn.execute(
             """
-            INSERT INTO signal_evaluation(
-                signal_id, definition_id, asset_id, status, direction, strength,
-                confidence, portfolio_priority, raw_observed_value, normalized_value,
-                trigger_threshold, first_detected_at, confirmation_at, last_evaluated_at,
-                data_as_of, expires_at, resolved_at, resolution_reason, model_version,
-                source, missing_data_status, input_data_timestamps_json, missing_inputs_json,
+            INSERT INTO signal_evaluation_current(
+                signal_id, summary, status, direction, strength, confidence,
+                portfolio_priority, raw_observed_value, normalized_value,
+                trigger_threshold, first_detected_at, confirmation_at,
+                last_evaluated_at, data_as_of, expires_at, resolved_at,
+                resolution_reason, model_version, source, missing_data_status,
+                input_data_timestamps_json, missing_inputs_json, is_active,
                 created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), now())
+            VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, TRUE, now(), now()
+            )
             ON CONFLICT (signal_id)
-            DO UPDATE SET status = EXCLUDED.status, direction = EXCLUDED.direction,
-                strength = EXCLUDED.strength, confidence = EXCLUDED.confidence,
+            DO UPDATE SET
+                summary = EXCLUDED.summary,
+                status = EXCLUDED.status,
+                direction = EXCLUDED.direction,
+                strength = EXCLUDED.strength,
+                confidence = EXCLUDED.confidence,
                 portfolio_priority = EXCLUDED.portfolio_priority,
                 raw_observed_value = EXCLUDED.raw_observed_value,
-                normalized_value = EXCLUDED.normalized_value, trigger_threshold = EXCLUDED.trigger_threshold,
-                confirmation_at = EXCLUDED.confirmation_at, last_evaluated_at = EXCLUDED.last_evaluated_at,
-                data_as_of = EXCLUDED.data_as_of, expires_at = EXCLUDED.expires_at,
-                model_version = EXCLUDED.model_version, source = EXCLUDED.source,
+                normalized_value = EXCLUDED.normalized_value,
+                trigger_threshold = EXCLUDED.trigger_threshold,
+                first_detected_at = EXCLUDED.first_detected_at,
+                confirmation_at = EXCLUDED.confirmation_at,
+                last_evaluated_at = EXCLUDED.last_evaluated_at,
+                data_as_of = EXCLUDED.data_as_of,
+                expires_at = EXCLUDED.expires_at,
+                resolved_at = EXCLUDED.resolved_at,
+                resolution_reason = EXCLUDED.resolution_reason,
+                model_version = EXCLUDED.model_version,
+                source = EXCLUDED.source,
                 missing_data_status = EXCLUDED.missing_data_status,
-                input_data_timestamps_json = EXCLUDED.input_data_timestamps_json,
-                missing_inputs_json = EXCLUDED.missing_inputs_json, updated_at = now()
+                input_data_timestamps_json =
+                    EXCLUDED.input_data_timestamps_json,
+                missing_inputs_json = EXCLUDED.missing_inputs_json,
+                is_active = TRUE,
+                updated_at = now()
             """,
             [
-                row.signal_id, row.definition_id, row.asset_id, row.status, row.direction,
-                row.strength, row.confidence, row.portfolio_priority, row.raw_observed_value,
-                row.normalized_value, row.trigger_threshold, row.first_detected_at,
-                row.confirmation_at, row.last_evaluated_at, row.data_as_of, row.expires_at,
-                row.resolved_at, row.resolution_reason, row.methodology_version, row.source,
-                row.missing_data_status, json.dumps({"data_as_of": str(row.data_as_of) if row.data_as_of else None}),
-                json.dumps([item.detail for item in row.supporting_evidence + row.contradicting_evidence if "Needs" in item.detail]),
+                row.signal_id,
+                row.summary,
+                row.status,
+                row.direction,
+                row.strength,
+                row.confidence,
+                row.portfolio_priority,
+                row.raw_observed_value,
+                row.normalized_value,
+                row.trigger_threshold,
+                row.first_detected_at,
+                row.confirmation_at,
+                row.last_evaluated_at,
+                row.data_as_of,
+                row.expires_at,
+                row.resolved_at,
+                row.resolution_reason,
+                row.methodology_version,
+                row.source,
+                row.missing_data_status,
+                input_timestamps,
+                missing_inputs,
             ],
+        )
+        self.conn.execute(
+            "DELETE FROM signal_evidence WHERE signal_id = ?",
+            [row.signal_id],
+        )
+        self.conn.execute(
+            "DELETE FROM signal_portfolio_impact WHERE signal_id = ?",
+            [row.signal_id],
         )
         for index, evidence in enumerate(row.supporting_evidence):
             self._insert_signal_evidence(row.signal_id, f"supporting-{index}", "supporting", evidence)
@@ -3861,6 +4324,18 @@ class PortfolioApiService:
             [asset_id, factor, direction],
         ).fetchall()
         prices = self._signal_efficacy_prices(asset_id)
+        return self._signal_efficacy_from_history(
+            [(snapshot_date, float(score)) for snapshot_date, score in snapshots],
+            prices,
+            direction,
+        )
+
+    def _signal_efficacy_from_history(
+        self,
+        snapshots: list[tuple[date, float]],
+        prices: list[tuple[date, float]],
+        direction: int,
+    ) -> SignalEfficacyMetadata:
         returns: list[float] = []
         adverse_moves: list[float] = []
         for snapshot_date, _score in snapshots:
@@ -3936,6 +4411,27 @@ class PortfolioApiService:
             for row in rows
         ]
 
+    def _signal_classifications(
+        self,
+        rows: list[SignalRow],
+    ) -> dict[str, tuple[str | None, str | None]]:
+        asset_ids = list(dict.fromkeys(row.asset_id for row in rows))
+        if not asset_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in asset_ids)
+        values = self.conn.execute(
+            f"""
+            SELECT asset_id, sector, industry
+            FROM asset
+            WHERE asset_id IN ({placeholders})
+            """,
+            asset_ids,
+        ).fetchall()
+        return {
+            str(asset_id): (sector, industry)
+            for asset_id, sector, industry in values
+        }
+
     def _signal_matches(
         self,
         row: SignalRow,
@@ -3955,6 +4451,7 @@ class PortfolioApiService:
         completeness: str | None,
         triggered_after: date | None,
         triggered_before: date | None,
+        classifications: dict[str, tuple[str | None, str | None]] | None = None,
     ) -> bool:
         if q and q.lower() not in f"{row.ticker} {row.company_name or ''} {row.signal_name} {row.summary}".lower():
             return False
@@ -3977,7 +4474,14 @@ class PortfolioApiService:
         if min_priority is not None and row.portfolio_priority < min_priority:
             return False
         if sector or industry:
-            asset = self.conn.execute("SELECT sector, industry FROM asset WHERE asset_id = ?", [row.asset_id]).fetchone()
+            asset = (
+                classifications.get(row.asset_id)
+                if classifications is not None
+                else self.conn.execute(
+                    "SELECT sector, industry FROM asset WHERE asset_id = ?",
+                    [row.asset_id],
+                ).fetchone()
+            )
             if sector and (asset is None or asset[0] != sector):
                 return False
             if industry and (asset is None or asset[1] != industry):

@@ -126,6 +126,7 @@ def main() -> int:
     args = parser.parse_args()
 
     client = ApiClient(args.api_base, timeout=45)
+    derived_data_client = ApiClient(args.api_base, timeout=180)
     findings: list[Finding] = []
     actions: list[dict[str, Any]] = []
 
@@ -207,6 +208,19 @@ def main() -> int:
         if args.sleep_seconds:
             time.sleep(args.sleep_seconds)
 
+    actions.append(
+        {
+            "action": "refresh_signal_snapshots",
+            "result": call_action(
+                client,
+                findings,
+                "POST /signals/snapshots/refresh",
+                lambda: derived_data_client.post(
+                    "/signals/snapshots/refresh?include_retail_sentiment=true"
+                ),
+            ),
+        }
+    )
     report = scan_api(client, findings)
     report["streaming"] = scan_streaming_api(client, findings)
     if args.external_audit:

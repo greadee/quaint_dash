@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bell, CheckCircle2, Info, Plus, RefreshCw, Save, SlidersHorizontal, X } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, type SignalDetailResponse, type SignalRow } from "../api";
@@ -20,11 +20,18 @@ export function StockRankingsPage({ notify }: { notify: (message: string, tone?:
   const showPriorityPanels = usePageFeature("signals", "signals.priorityPanels");
   const showMethodology = usePageFeature("signals", "signals.methodology");
   const filters = signalFiltersFromParams(params);
-  const signals = useQuery({
+  const signals = useInfiniteQuery({
     queryKey: ["signals", filters],
-    queryFn: () => api.signals(filters),
-    placeholderData: (previous) => previous,
+    queryFn: ({ pageParam }) => api.signals({
+      ...filters,
+      limit: 25,
+      offset: pageParam,
+    }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => lastPage.next_offset ?? undefined,
   });
+  const signalSummary = signals.data?.pages[0];
+  const signalItems = signals.data?.pages.flatMap((page) => page.items) ?? [];
   const detail = useQuery({
     queryKey: ["signal-detail", expandedId],
     queryFn: () => api.signalDetail(expandedId ?? ""),
@@ -95,9 +102,9 @@ export function StockRankingsPage({ notify }: { notify: (message: string, tone?:
         <p className="page-subtitle">Meaningful changes in stored market, sentiment, earnings, and portfolio data. Each signal separates strength, confidence, and portfolio priority so evidence is visible before action.</p>
         <div className="signals-meta" aria-live="polite">
           <span>Market status: local close-based data</span>
-          <span>Computed: {formatDateTime(signals.data?.last_successful_computation_at)}</span>
-          <span>Data as of: {formatDateTime(signals.data?.data_as_of)}</span>
-          <span>Model: {signals.data?.model_version ?? "loading"}</span>
+          <span>Computed: {formatDateTime(signalSummary?.last_successful_computation_at)}</span>
+          <span>Data as of: {formatDateTime(signalSummary?.data_as_of)}</span>
+          <span>Model: {signalSummary?.model_version ?? "loading"}</span>
         </div>
       </div>
       <div className="actions">
@@ -111,30 +118,30 @@ export function StockRankingsPage({ notify }: { notify: (message: string, tone?:
     <PageLayoutToolbar pageId="signals" />
     <OptionalFeaturesEmpty pageId="signals" />
     {showSummaryStrip ? <LayoutWidget pageId="signals" widgetId="signals.summaryStrip"><section className="signal-summary-strip" aria-label="Signal summary">
-      {signals.isLoading ? Array.from({ length: 6 }).map((_item, index) => <div className="signal-summary-tile skeleton" key={index} />) : signals.data?.metrics.map((metric) => (
+      {signals.isLoading ? Array.from({ length: 6 }).map((_item, index) => <div className="signal-summary-tile skeleton" key={index} />) : signalSummary?.metrics.map((metric) => (
         <button key={metric.key} className="signal-summary-tile" onClick={() => applyMetric(metric.filter_params)}>
           <span>{metric.label}</span>
           <strong>{metric.value}</strong>
         </button>
       ))}
     </section></LayoutWidget> : null}
-    {signals.data?.partial_provider_failures.length ? <div className="signal-degraded" role="status">Partial provider coverage: {signals.data.partial_provider_failures.join(", ")}. Valid cached signals remain visible.</div> : null}
+    {signalSummary?.partial_provider_failures.length ? <div className="signal-degraded" role="status">Partial provider coverage: {signalSummary.partial_provider_failures.join(", ")}. Valid cached signals remain visible.</div> : null}
     {signals.isError ? <ErrorPanel error={signals.error} /> : null}
     {showPriorityPanels ? <LayoutWidget pageId="signals" widgetId="signals.priorityPanels"><section className="signal-priority-grid">
-      <SignalPrioritySection title="Needs attention" items={signals.data?.needs_attention ?? []} empty="No high-priority risks currently meet the filters." onOpen={openSignal} />
-      <SignalPrioritySection title="Top opportunities" items={signals.data?.top_opportunities ?? []} empty="No high-confidence opportunities currently meet the filters." onOpen={openSignal} />
+      <SignalPrioritySection title="Needs attention" items={signalSummary?.needs_attention ?? []} empty="No high-priority risks currently meet the filters." onOpen={openSignal} />
+      <SignalPrioritySection title="Top opportunities" items={signalSummary?.top_opportunities ?? []} empty="No high-confidence opportunities currently meet the filters." onOpen={openSignal} />
     </section></LayoutWidget> : null}
     <section className="card signal-explorer">
       <div className="signal-explorer-toolbar">
         <div>
           <p className="eyebrow">Signal explorer</p>
-          <h2>{signals.isLoading ? "Loading signals" : `${signals.data?.total ?? 0} matching signals`}</h2>
+          <h2>{signals.isLoading ? "Loading signals" : `${signalSummary?.total ?? 0} matching signals`}</h2>
         </div>
         <button className="mobile-filter-button" onClick={() => setMobileFiltersOpen(true)}><SlidersHorizontal size={17}/>Filters</button>
       </div>
       <SignalFilterPanel filters={filters} updateFilter={updateFilter} mobileOpen={mobileFiltersOpen} onClose={() => setMobileFiltersOpen(false)} />
       <ActiveSignalFilters filters={filters} onClear={(key) => updateFilter(key, "")} onClearAll={() => setParams(new URLSearchParams())} />
-      {signals.isLoading ? <SignalTableSkeleton /> : signals.data?.items.length ? (
+      {signals.isLoading ? <SignalTableSkeleton /> : signalItems.length ? (
         <>
           <div className="signal-table-wrap">
             <table className="signal-table">
@@ -168,7 +175,7 @@ export function StockRankingsPage({ notify }: { notify: (message: string, tone?:
                 </tr>
               </thead>
               <tbody>
-                {signals.data.items.map((item) => (
+                {signalItems.map((item) => (
                   <SignalTableRow
                     key={item.signal_id}
                     item={item}
@@ -186,7 +193,7 @@ export function StockRankingsPage({ notify }: { notify: (message: string, tone?:
           </div>
           {columnDetail ? <SignalColumnDetailPanel column={columnDetail} onClose={() => setColumnDetail(null)} /> : null}
           <div className="signal-mobile-list">
-            {signals.data.items.map((item) => (
+            {signalItems.map((item) => (
               <SignalMobileCard
                 key={item.signal_id}
                 item={item}
@@ -199,10 +206,16 @@ export function StockRankingsPage({ notify }: { notify: (message: string, tone?:
               />
             ))}
           </div>
+          {signals.hasNextPage ? <div className="signal-load-more">
+            <button onClick={() => signals.fetchNextPage()} disabled={signals.isFetchingNextPage}>
+              {signals.isFetchingNextPage ? "Loading more signals…" : "Load 25 more signals"}
+            </button>
+            <span>{signalItems.length} of {signalSummary?.total ?? signalItems.length} loaded</span>
+          </div> : null}
         </>
       ) : <EmptyRow text={Object.keys(filters).length ? "No signals match the selected filters. Clear filters or broaden the confidence and priority thresholds." : "No active signals. Stored ranking inputs are not available for the tracked universe yet."} />}
-      {signals.isFetching && !signals.isLoading ? <p className="signal-refreshing" role="status">Refreshing signals while keeping current results visible.</p> : null}
-      {showMethodology ? <LayoutWidget pageId="signals" widgetId="signals.methodology"><p id="signal-methodology" className="signal-methodology">{signals.data?.methodology ?? "Signal methodology loads with the server-side signal response."}</p></LayoutWidget> : null}
+      {signals.isFetching && !signals.isLoading && !signals.isFetchingNextPage ? <p className="signal-refreshing" role="status">Refreshing signals while keeping current results visible.</p> : null}
+      {showMethodology ? <LayoutWidget pageId="signals" widgetId="signals.methodology"><p id="signal-methodology" className="signal-methodology">{signalSummary?.methodology ?? "Signal methodology loads with the server-side signal response."}</p></LayoutWidget> : null}
     </section>
   </div>;
 }
@@ -256,7 +269,7 @@ function SignalColumnDetailPanel({ column, onClose }: { column: string; onClose:
 }
 
 function signalFiltersFromParams(params: URLSearchParams) {
-  const keys = ["q", "portfolio_id", "owned", "category", "direction", "status", "min_strength", "min_confidence", "min_priority", "sector", "industry", "freshness", "completeness", "triggered_after", "triggered_before", "include_retail_sentiment", "sort", "limit", "offset"];
+  const keys = ["q", "portfolio_id", "owned", "category", "direction", "status", "min_strength", "min_confidence", "min_priority", "sector", "industry", "freshness", "completeness", "triggered_after", "triggered_before", "include_retail_sentiment", "sort"];
   return Object.fromEntries(keys.map((key) => [key, params.get(key) ?? undefined]).filter((entry) => entry[1])) as Record<string, string>;
 }
 
