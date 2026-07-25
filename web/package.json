@@ -14,9 +14,9 @@
     "perf:signals": "node ../tools/profile_signals_browser.mjs"
   },
   "dependencies": {
-    "@prool-ui/react": "file:../../Documents/UI-repo/shared-ui/packages/react",
-    "@prool-ui/themes": "file:../../Documents/UI-repo/shared-ui/packages/themes",
-    "@prool-ui/tokens": "file:../../Documents/UI-repo/shared-ui/packages/tokens",
+    "@prool-ui/react": "file:vendor/prool-ui/prool-ui-react-0.1.0.tgz",
+    "@prool-ui/themes": "file:vendor/prool-ui/prool-ui-themes-0.1.0.tgz",
+    "@prool-ui/tokens": "file:vendor/prool-ui/prool-ui-tokens-0.1.0.tgz",
     "@tanstack/react-query": "^5.66.0",
     "lucide-react": "^0.475.0",
     "react": "^19.0.0",

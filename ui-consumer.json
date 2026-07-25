@@ -3,6 +3,11 @@
   "application": "quaint_dash",
   "react": "19",
   "sharedUi": "0.1.0",
+  "transport": {
+    "kind": "vendored-tarballs",
+    "path": "web/vendor/prool-ui",
+    "upstreamCommit": "510c06e"
+  },
   "packages": {
     "@prool-ui/tokens": "0.1.0",
     "@prool-ui/themes": "0.1.0",

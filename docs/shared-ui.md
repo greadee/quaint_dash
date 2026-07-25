@@ -1,6 +1,6 @@
 # Shared UI integration
 
-The web application consumes version `0.1.0` of the canonical `@prool-ui/*` packages. Until a registry exists, npm `file:` dependencies point at the sibling `shared-ui` repository. The shared repository must be built first. `install-links=true` makes npm install the packed package shape instead of symlinking a second React runtime.
+The web application consumes version `0.1.0` of the canonical `@prool-ui/*` packages from immutable release tarballs committed under `web/vendor/prool-ui`. Installation and builds do not read the shared UI working repository, so later upstream changes cannot alter this application.
 
 ## Ownership
 
@@ -11,10 +11,11 @@ The shared repository owns design tokens, themes, generic React rendering, acces
 ## Upgrade
 
 1. Build and validate the target shared UI version.
-2. Update the three exact dependency versions or temporary `file:` paths together.
-3. Run `npm test`, `npm run lint`, and `npm run build`.
-4. Verify `/api/v1/health`, refresh the Vite app, inspect console state, and review visual diffs.
-5. Commit the app dependency update separately.
+2. Pack the three packages and copy the versioned tarballs into `web/vendor/prool-ui`.
+3. Update all three exact tarball paths together and regenerate `package-lock.json`.
+4. Run `npm ci`, `npm test`, `npm run lint`, and `npm run build`.
+5. Verify `/api/v1/health`, refresh the Vite app, inspect console state, and review visual diffs.
+6. Commit the app dependency update separately.
 
 ## Rollback and promotion
 
