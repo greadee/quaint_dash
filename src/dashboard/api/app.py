@@ -22,7 +22,7 @@ from dashboard.api.market_freshness_background import MarketFreshnessConfig, Mar
 from dashboard.api.models import ErrorResponse, HealthResponse
 from dashboard.api.routes import router
 from dashboard.brokers.snaptrade import SnapTradeError
-from dashboard.db.db_conn import DB, init_db
+from dashboard.db.db_conn import DB, DatabaseConnectionPool, init_db
 from dashboard.models.storage import DashboardManager
 
 API_VERSION = "phase5.api.v1"
@@ -43,6 +43,11 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        if app.state.db_connection_pool is None:
+            app.state.db_connection_pool = DatabaseConnectionPool(
+                app.state.db_path,
+                app.state.db_pool_size,
+            )
         try:
             _run_startup_broker_sync_if_enabled(app.state.db_path)
         except Exception as exc:
@@ -62,6 +67,8 @@ def create_app(
             await data_worker.stop()
             await market_worker.stop()
             await worker.stop()
+            app.state.db_connection_pool.close()
+            app.state.db_connection_pool = None
 
     app = FastAPI(
         title="Quaint Dash API",
@@ -71,6 +78,11 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.db_path = resolved_db_path
+    app.state.db_pool_size = min(
+        64,
+        max(2, int(os.getenv("DASHBOARD_API_DB_POOL_SIZE", "16"))),
+    )
+    app.state.db_connection_pool = None
     app.state.write_lock = RLock()
     app.state.web_dist = Path(web_dist)
     app.state.ingestion_background_worker = IngestionBackgroundWorker(

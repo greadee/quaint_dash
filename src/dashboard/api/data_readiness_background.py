@@ -23,10 +23,10 @@ LOGGER = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class DataReadinessConfig:
     enabled: bool = True
-    poll_interval_seconds: int = 300
+    poll_interval_seconds: int = 900
     max_assets_per_tick: int = 50
-    max_jobs_per_batch: int = 10
-    max_run_batches_per_tick: int = 10
+    max_jobs_per_batch: int = 5
+    max_run_batches_per_tick: int = 1
     years: int = 10
     min_price_rows: int = 3
 
@@ -34,10 +34,10 @@ class DataReadinessConfig:
     def from_env(cls) -> "DataReadinessConfig":
         return cls(
             enabled=_truthy_env("DATA_READINESS_WORKER_ENABLED", default=False),
-            poll_interval_seconds=_int_env("DATA_READINESS_POLL_INTERVAL_SECONDS", 300),
+            poll_interval_seconds=_int_env("DATA_READINESS_POLL_INTERVAL_SECONDS", 900),
             max_assets_per_tick=_int_env("DATA_READINESS_MAX_ASSETS_PER_TICK", 50),
-            max_jobs_per_batch=_int_env("DATA_READINESS_MAX_JOBS_PER_BATCH", 10),
-            max_run_batches_per_tick=_int_env("DATA_READINESS_MAX_RUN_BATCHES_PER_TICK", 10),
+            max_jobs_per_batch=_int_env("DATA_READINESS_MAX_JOBS_PER_BATCH", 5),
+            max_run_batches_per_tick=_int_env("DATA_READINESS_MAX_RUN_BATCHES_PER_TICK", 1),
             years=_int_env("DATA_READINESS_YEARS", 10),
             min_price_rows=_int_env("DATA_READINESS_MIN_PRICE_ROWS", 3),
         )

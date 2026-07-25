@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 
-from dashboard.api.services import CommandApiService, PortfolioApiService
+from dashboard.api.services import CommandApiService
 from dashboard.db.db_conn import DB
 
 LOGGER = logging.getLogger(__name__)
@@ -19,11 +19,11 @@ LOGGER = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class IngestionBackgroundConfig:
     enabled: bool = True
-    schedule_interval_seconds: int = 900
-    run_interval_seconds: int = 30
-    max_jobs_per_tick: int = 10
-    max_run_batches_per_tick: int = 6
-    max_assets_per_schedule: int = 50
+    schedule_interval_seconds: int = 1800
+    run_interval_seconds: int = 60
+    max_jobs_per_tick: int = 5
+    max_run_batches_per_tick: int = 1
+    max_assets_per_schedule: int = 25
     years: int = 10
     prices_only: bool = False
 
@@ -31,11 +31,11 @@ class IngestionBackgroundConfig:
     def from_env(cls) -> "IngestionBackgroundConfig":
         return cls(
             enabled=_truthy_env("INGESTION_BACKGROUND_ENABLED", default=False),
-            schedule_interval_seconds=_int_env("INGESTION_BACKGROUND_SCHEDULE_INTERVAL_SECONDS", 900),
-            run_interval_seconds=_int_env("INGESTION_BACKGROUND_RUN_INTERVAL_SECONDS", 30),
-            max_jobs_per_tick=_int_env("INGESTION_BACKGROUND_MAX_JOBS_PER_TICK", 10),
-            max_run_batches_per_tick=_int_env("INGESTION_BACKGROUND_MAX_RUN_BATCHES_PER_TICK", 6),
-            max_assets_per_schedule=_int_env("INGESTION_BACKGROUND_MAX_ASSETS_PER_SCHEDULE", 50),
+            schedule_interval_seconds=_int_env("INGESTION_BACKGROUND_SCHEDULE_INTERVAL_SECONDS", 1800),
+            run_interval_seconds=_int_env("INGESTION_BACKGROUND_RUN_INTERVAL_SECONDS", 60),
+            max_jobs_per_tick=_int_env("INGESTION_BACKGROUND_MAX_JOBS_PER_TICK", 5),
+            max_run_batches_per_tick=_int_env("INGESTION_BACKGROUND_MAX_RUN_BATCHES_PER_TICK", 1),
+            max_assets_per_schedule=_int_env("INGESTION_BACKGROUND_MAX_ASSETS_PER_SCHEDULE", 25),
             years=_int_env("INGESTION_BACKGROUND_YEARS", 10),
             prices_only=_truthy_env("INGESTION_BACKGROUND_PRICES_ONLY", default=False),
         )
@@ -153,18 +153,6 @@ class IngestionBackgroundWorker:
                     years=self.config.years,
                     prices_only=self.config.prices_only,
                 )
-                try:
-                    PortfolioApiService(db.conn).stock_rankings(
-                        factor="aggregate",
-                        universe="tracked",
-                        direction="buy",
-                        timeframe="monthly",
-                        include_retail_sentiment=False,
-                        limit=self.config.max_assets_per_schedule,
-                        offset=0,
-                    )
-                except Exception as exc:
-                    LOGGER.debug("Ingestion background ranking warm-up skipped: %s", exc)
                 return count
             finally:
                 db.conn.close()

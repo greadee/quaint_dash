@@ -181,6 +181,7 @@ describe("OperationsPage", () => {
     renderOperations();
 
     expect(await screen.findByRole("heading", { name: "Operations" })).toBeInTheDocument();
+    expect(apiMock.ingestionJobs).toHaveBeenCalledWith("", "", 25);
     expect(await screen.findByText("Routine ingestion worker")).toBeInTheDocument();
     expect(await screen.findByText("Social sentiment ingestion")).toBeInTheDocument();
     expect(screen.getByText("Projection input readiness")).toBeInTheDocument();

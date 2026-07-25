@@ -7,10 +7,39 @@ DuckDB connection class
 """
 
 from pathlib import Path
+from queue import LifoQueue
+from threading import Lock
 
 import duckdb
 
 from dashboard.ingestion.stock_catalog import seed_stock_catalog
+
+_CONNECT_LOCK = Lock()
+
+
+class DatabaseConnectionPool:
+    """Bounded pool of reusable DuckDB connections for concurrent API requests."""
+
+    def __init__(
+        self,
+        path: str | Path,
+        size: int,
+    ):
+        self.path = Path(path)
+        self.size = max(1, size)
+        self._available: LifoQueue[duckdb.DuckDBPyConnection] = LifoQueue(self.size)
+        for _ in range(self.size):
+            self._available.put(connect_database(self.path))
+
+    def acquire(self) -> duckdb.DuckDBPyConnection:
+        return self._available.get()
+
+    def release(self, connection: duckdb.DuckDBPyConnection) -> None:
+        self._available.put(connection)
+
+    def close(self) -> None:
+        for _ in range(self.size):
+            self._available.get().close()
 
 
 class DB:
@@ -20,7 +49,13 @@ class DB:
 
     def connect(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        return duckdb.connect(str(self.path))
+        return connect_database(self.path)
+
+
+def connect_database(path: str | Path) -> duckdb.DuckDBPyConnection:
+    """Open a DuckDB connection without racing another in-process open call."""
+    with _CONNECT_LOCK:
+        return duckdb.connect(str(path))
 
 
 def init_db(db: DB):

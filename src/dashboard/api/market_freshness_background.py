@@ -28,7 +28,7 @@ class MarketFreshnessConfig:
     poll_interval_seconds: int = 900
     include_watchlist: bool = False
     lookback_days: int = 7
-    max_symbols_per_tick: int = 10
+    max_symbols_per_tick: int = 5
 
     @classmethod
     def from_env(cls) -> "MarketFreshnessConfig":
@@ -37,7 +37,7 @@ class MarketFreshnessConfig:
             poll_interval_seconds=_int_env("MARKET_FRESHNESS_POLL_INTERVAL_SECONDS", 900),
             include_watchlist=_truthy_env("MARKET_FRESHNESS_INCLUDE_WATCHLIST", default=False),
             lookback_days=_int_env("MARKET_FRESHNESS_LOOKBACK_DAYS", 7),
-            max_symbols_per_tick=_int_env("MARKET_FRESHNESS_MAX_SYMBOLS_PER_TICK", 10),
+            max_symbols_per_tick=_int_env("MARKET_FRESHNESS_MAX_SYMBOLS_PER_TICK", 5),
         )
 
 

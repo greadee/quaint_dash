@@ -1,6 +1,11 @@
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event, Thread
+from time import perf_counter
+
 from fastapi.testclient import TestClient
 
 from dashboard.api.app import API_VERSION, create_app, _run_startup_broker_sync_if_enabled
+from dashboard.db.db_conn import connect_database
 
 
 def test_health_reports_api_and_database_status(tmp_path):
@@ -15,6 +20,55 @@ def test_health_reports_api_and_database_status(tmp_path):
         "api_version": API_VERSION,
         "database": "connected",
     }
+
+
+def test_health_does_not_wait_for_active_writer_lock(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    writer_started = Event()
+    release_writer = Event()
+
+    def hold_writer_transaction() -> None:
+        with app.state.write_lock:
+            conn = connect_database(db_path)
+            try:
+                conn.execute("BEGIN TRANSACTION")
+                conn.execute(
+                    """
+                    UPDATE asset
+                    SET updated_at = updated_at
+                    WHERE asset_id = 'not-present'
+                    """
+                )
+                writer_started.set()
+                release_writer.wait(timeout=5)
+                conn.execute("ROLLBACK")
+            finally:
+                conn.close()
+
+    with TestClient(app) as client:
+        writer = Thread(target=hold_writer_transaction)
+        writer.start()
+        assert writer_started.wait(timeout=1)
+        started = perf_counter()
+        try:
+            response = client.get("/api/v1/health")
+        finally:
+            release_writer.set()
+            writer.join(timeout=2)
+
+    assert response.status_code == 200
+    assert perf_counter() - started < 1
+
+
+def test_health_supports_parallel_database_requests(tmp_path):
+    app = create_app(tmp_path / "api.db")
+
+    with TestClient(app) as client:
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            responses = list(executor.map(lambda _index: client.get("/api/v1/health"), range(40)))
+
+    assert all(response.status_code == 200 for response in responses)
 
 
 def test_openapi_document_is_available(tmp_path):

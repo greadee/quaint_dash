@@ -20,6 +20,8 @@ const stockRankingFactors: { value: StockRankingFactor; label: string }[] = [
   { value: "institutional_buying", label: "Institutions" },
 ];
 
+const WORKER_STATUS_REFETCH_MS = 30_000;
+
 const dataReadinessHelp: HelpItem[] = [
   { term: "Ready", detail: "The model has enough inputs to produce that section's analytics." },
   { term: "Missing inputs", detail: "Data the model wanted but could not find, such as price history, fundamentals, cash flow, or dividend data." },
@@ -36,7 +38,7 @@ export function OperationsPage() {
   const client = useQueryClient();
   const [status, setStatus] = useState("");
   const [domain, setDomain] = useState("");
-  const [jobLimit, setJobLimit] = useState("100");
+  const [jobLimit, setJobLimit] = useState("25");
   const [pipeline, setPipeline] = useState("all");
   const [assetId, setAssetId] = useState("");
   const [maxAssets, setMaxAssets] = useState("25");
@@ -70,38 +72,35 @@ export function OperationsPage() {
   type RunOverride = { domain?: string; maxJobs?: string };
   const jobs = useQuery({
     queryKey: ["jobs", status, domain, jobLimit],
-    queryFn: () => api.ingestionJobs(status, domain, boundedInt(jobLimit, 100, 1, 500)),
-    refetchInterval: 10000,
+    queryFn: () => api.ingestionJobs(status, domain, boundedInt(jobLimit, 25, 1, 500)),
   });
   const background = useQuery({
     queryKey: ["ingestion-background-status"],
     queryFn: api.ingestionBackgroundStatus,
     enabled: showRoutineWorker,
-    refetchInterval: showRoutineWorker ? 10000 : false,
+    refetchInterval: showRoutineWorker ? WORKER_STATUS_REFETCH_MS : false,
   });
   const marketFreshness = useQuery({
     queryKey: ["market-freshness-status"],
     queryFn: api.marketFreshnessStatus ?? (() => Promise.resolve(undefined)),
     enabled: showMarketFreshness && typeof api.marketFreshnessStatus === "function",
-    refetchInterval: showMarketFreshness ? 10000 : false,
+    refetchInterval: showMarketFreshness ? WORKER_STATUS_REFETCH_MS : false,
   });
   const dataReadiness = useQuery({
     queryKey: ["data-readiness-status"],
     queryFn: api.dataReadinessStatus ?? (() => Promise.resolve(undefined)),
     enabled: showDataReadiness && typeof api.dataReadinessStatus === "function",
-    refetchInterval: showDataReadiness ? 10000 : false,
+    refetchInterval: showDataReadiness ? WORKER_STATUS_REFETCH_MS : false,
   });
   const retailSentiment = useQuery({
     queryKey: ["retail-sentiment-status"],
     queryFn: () => api.retailSentimentStatus(10),
     enabled: showRetailSentiment,
-    refetchInterval: showRetailSentiment ? 10000 : false,
   });
   const readiness = useQuery({
     queryKey: ["ingestion-readiness"],
     queryFn: api.ingestionReadiness,
     enabled: showProjectionReadiness,
-    refetchInterval: showProjectionReadiness ? 10000 : false,
   });
   const rankingReadiness = useQuery({
     queryKey: ["ranking-readiness", scheduleRankingUniverse],
@@ -110,7 +109,6 @@ export function OperationsPage() {
       limit: boundedInt(maxAssets, 25, 1, 100),
     }),
     enabled: showRankingReadiness,
-    refetchInterval: showRankingReadiness ? 10000 : false,
   });
   const schedule = useMutation({
     mutationFn: (override?: ScheduleOverride) => api.scheduleIngestion({
@@ -322,12 +320,12 @@ export function OperationsPage() {
       <div className="card-heading">
         <h2>Ingestion jobs</h2>
         <div className="card-tools">
-          <label>Rows<select value={jobLimit} onChange={(event) => setJobLimit(event.target.value)}><option value="25">25</option><option value="100">100</option><option value="250">250</option><option value="500">500</option></select></label>
+          <label>Show<select value={jobLimit} onChange={(event) => setJobLimit(event.target.value)}><option value="25">25 jobs</option><option value="100">100 jobs</option><option value="250">250 jobs</option><option value="500">500 jobs</option></select></label>
           <span>{jobs.data?.length ?? 0} shown</span>
         </div>
       </div>
       <div className="filter-row">
-        <label>Status<select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">Any</option><option value="pending">Pending</option><option value="running">Running</option><option value="done">Done</option><option value="failed">Failed</option></select></label>
+        <label>Status<select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">Any</option><option value="pending">Pending</option><option value="running">Running</option><option value="done">Done</option><option value="failed">Failed</option><option value="superseded">Superseded</option><option value="unsupported">Unsupported</option><option value="dead_letter">Dead letter</option></select></label>
         <label>Domain<select value={domain} onChange={(event) => setDomain(event.target.value)}><option value="">Any</option><option value="market">Market</option><option value="corporate">Corporate</option><option value="sentiment">Sentiment</option></select></label>
       </div>
       {jobs.error ? <ErrorPanel error={jobs.error} /> : jobs.isLoading ? <Loading compact /> : (

@@ -726,11 +726,11 @@ def test_ingestion_background_status_defaults_disabled(tmp_path):
         "last_completed_count": None,
         "last_pending_count": None,
         "last_error": None,
-        "schedule_interval_seconds": 900,
-        "run_interval_seconds": 30,
-        "max_jobs_per_tick": 10,
-        "max_run_batches_per_tick": 6,
-        "max_assets_per_schedule": 50,
+        "schedule_interval_seconds": 1800,
+        "run_interval_seconds": 60,
+        "max_jobs_per_tick": 5,
+        "max_run_batches_per_tick": 1,
+        "max_assets_per_schedule": 25,
         "years": 10,
         "prices_only": False,
     }
@@ -848,9 +848,9 @@ def test_ingestion_background_tick_endpoint_runs_one_bounded_cycle(tmp_path, mon
     assert calls == [
             (
                 "schedule",
-                {"max_assets": 50, "years": 10, "prices_only": False},
+                {"max_assets": 25, "years": 10, "prices_only": False},
             ),
-        ("run", {"domain": "all", "max_jobs": 10}),
+        ("run", {"domain": "all", "max_jobs": 5}),
     ]
     assert status.json()["last_schedule_count"] == 3
     assert status.json()["last_completed_count"] == 2
@@ -897,7 +897,7 @@ def test_market_freshness_status_defaults_disabled(tmp_path):
         "poll_interval_seconds": 900,
         "include_watchlist": False,
         "lookback_days": 7,
-        "max_symbols_per_tick": 10,
+        "max_symbols_per_tick": 5,
     }
 
 
@@ -1036,10 +1036,10 @@ def test_data_readiness_status_defaults_disabled(tmp_path):
         "last_pending_count": None,
         "last_missing": [],
         "last_error": None,
-        "poll_interval_seconds": 300,
+        "poll_interval_seconds": 900,
         "max_assets_per_tick": 50,
-        "max_jobs_per_batch": 10,
-        "max_run_batches_per_tick": 10,
+        "max_jobs_per_batch": 5,
+        "max_run_batches_per_tick": 1,
         "years": 10,
         "min_price_rows": 3,
     }
