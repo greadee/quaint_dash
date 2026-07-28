@@ -718,6 +718,13 @@ def aggregate_portfolio_overview(conn=Depends(get_connection)):
     return PortfolioApiService(conn).aggregate_portfolio()
 
 
+@router.post("/portfolios/snapshots/refresh", response_model=ActionResult)
+def refresh_portfolio_snapshots(request: Request, conn=Depends(get_connection)):
+    with request.app.state.write_lock:
+        result = PortfolioApiService(conn).refresh_portfolio_snapshots()
+    return ActionResult(result=result)
+
+
 @router.get("/portfolios/aggregate/positions", response_model=list[PositionSummary])
 def aggregate_portfolio_positions(conn=Depends(get_connection)):
     return PortfolioApiService(conn).list_positions()

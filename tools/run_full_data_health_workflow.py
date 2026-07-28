@@ -141,9 +141,9 @@ def main() -> int:
         actions.append({"action": "clear_ingestion_history", "result": client.delete("/ingestion/jobs")})
 
     for worker_path in (
-        "/ingestion/background/start",
-        "/data/readiness/start",
-        "/market/freshness/start",
+        "/ingestion/background/stop",
+        "/data/readiness/stop",
+        "/market/freshness/stop",
     ):
         actions.append({"action": worker_path, "result": client.post(worker_path)})
 
@@ -195,7 +195,10 @@ def main() -> int:
                 client,
                 findings,
                 "POST /ingestion/run",
-                lambda: client.post("/ingestion/run", {"domain": "all", "max_jobs": args.max_jobs}),
+                lambda: derived_data_client.post(
+                    "/ingestion/run",
+                    {"domain": "all", "max_jobs": args.max_jobs},
+                ),
             )
             if result.get("error"):
                 break
@@ -208,6 +211,17 @@ def main() -> int:
         if args.sleep_seconds:
             time.sleep(args.sleep_seconds)
 
+    actions.append(
+        {
+            "action": "refresh_portfolio_snapshots",
+            "result": call_action(
+                client,
+                findings,
+                "POST /portfolios/snapshots/refresh",
+                lambda: derived_data_client.post("/portfolios/snapshots/refresh"),
+            ),
+        }
+    )
     actions.append(
         {
             "action": "refresh_signal_snapshots",

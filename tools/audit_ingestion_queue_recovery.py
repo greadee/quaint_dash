@@ -172,12 +172,6 @@ def apply_queue_recovery(
                 | set(actions.get("requeue_failed", []))
             ),
         )
-        conn.execute(
-            """
-            CREATE INDEX ingestion_job_pending_idx
-            ON ingestion_job(domain, status, priority, created_at)
-            """
-        )
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")

@@ -17,6 +17,26 @@ CREATE TABLE IF NOT EXISTS portfolio (
     base_ccy TEXT DEFAULT 'CAD'
 );
 
+CREATE TABLE IF NOT EXISTS portfolio_analytics_snapshot (
+    portfolio_id BIGINT NOT NULL,
+    snapshot_date DATE NOT NULL,
+    market_value DOUBLE PRECISION,
+    cagr DOUBLE PRECISION,
+    sharpe_ratio DOUBLE PRECISION,
+    sortino_ratio DOUBLE PRECISION,
+    beta DOUBLE PRECISION,
+    alpha_annualized DOUBLE PRECISION,
+    position_count INTEGER NOT NULL DEFAULT 0,
+    state_signature TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    missing_inputs_json TEXT,
+    refreshed_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (portfolio_id, snapshot_date)
+);
+
+DROP INDEX IF EXISTS idx_portfolio_analytics_snapshot_latest;
+
 CREATE TABLE IF NOT EXISTS fx_rate (
     from_ccy TEXT NOT NULL,
     to_ccy TEXT NOT NULL,
@@ -639,8 +659,10 @@ CREATE TABLE IF NOT EXISTS ingestion_job (
     FOREIGN KEY(asset_id) REFERENCES asset(asset_id)
 );
 
-CREATE INDEX IF NOT EXISTS ingestion_job_pending_idx
-ON ingestion_job(domain, status, priority, created_at);
+-- DuckDB can invalidate the database when an indexed mutable status column is
+-- updated under sustained queue processing. The queue is small enough for a
+-- bounded status scan, so keep this mutable-column index retired.
+DROP INDEX IF EXISTS ingestion_job_pending_idx;
 
 CREATE TABLE IF NOT EXISTS asset_sync_state (
     asset_id TEXT NOT NULL,

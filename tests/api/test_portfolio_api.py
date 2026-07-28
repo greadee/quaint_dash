@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from dashboard.api.app import create_app
+from dashboard.api.services import PortfolioApiService
 from dashboard.db.db_conn import DB
 
 
@@ -344,6 +345,28 @@ def test_portfolio_overview_positions_and_transactions(tmp_path):
         FROM range(0, 366) AS prices(i)
         """
     )
+    db.conn.execute(
+        """
+        INSERT INTO portfolio_analytics_snapshot(
+            portfolio_id,
+            snapshot_date,
+            market_value,
+            position_count,
+            state_signature,
+            payload_json,
+            missing_inputs_json
+        )
+        VALUES (
+            1,
+            DATE '2026-01-01',
+            236.30,
+            1,
+            'test-signature',
+            '{"forecast":{"simulation":{"horizon_years":5,"expected_value":295,"p10_value":250,"p50_value":300,"p90_value":350}}}',
+            '[]'
+        )
+        """
+    )
     db.conn.close()
 
     with TestClient(app) as client:
@@ -355,7 +378,7 @@ def test_portfolio_overview_positions_and_transactions(tmp_path):
     assert overview.status_code == 200
     assert round(overview.json()["market_value"], 2) == 236.30
     assert round(overview.json()["unrealized_gain"], 2) == 36.30
-    assert overview.json()["projected_value"] is not None
+    assert overview.json()["projected_value"] == 300
     assert overview.json()["projected_horizon_years"] == 5
     assert positions.json()[0]["weight"] == 1
     assert positions.json()[0]["name"] == "Apple Inc."
@@ -365,6 +388,92 @@ def test_portfolio_overview_positions_and_transactions(tmp_path):
     assert transactions.json()["total"] == 1
     assert transactions.json()["items"][0]["transaction_type"] == "buy"
     assert missing.status_code == 404
+
+
+class _CountingConnection:
+    def __init__(self, conn):
+        self._conn = conn
+        self.query_count = 0
+
+    def execute(self, sql, parameters=None):
+        self.query_count += 1
+        if parameters is None:
+            return self._conn.execute(sql)
+        return self._conn.execute(sql, parameters)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def test_portfolio_list_uses_batched_gain_and_projection_reads(tmp_path):
+    db_path = tmp_path / "portfolio_query_budget.db"
+    create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        """
+        INSERT INTO portfolio(portfolio_id, portfolio_name, base_ccy)
+        VALUES (1, 'Core', 'CAD'), (2, 'Growth', 'USD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO portfolio_analytics_snapshot(
+            portfolio_id,
+            snapshot_date,
+            market_value,
+            position_count,
+            state_signature,
+            payload_json,
+            missing_inputs_json
+        )
+        VALUES
+            (1, DATE '2026-01-01', 100, 0, 'core-v1',
+             '{"forecast":{"simulation":{"horizon_years":5,"expected_value":140,"p10_value":110,"p50_value":150,"p90_value":190}}}',
+             '[]'),
+            (2, DATE '2026-01-01', 200, 0, 'growth-v1',
+             '{"forecast":{"simulation":{"horizon_years":10,"expected_value":350,"p10_value":250,"p50_value":400,"p90_value":500}}}',
+             '[]')
+        """
+    )
+
+    counting = _CountingConnection(db.conn)
+    summaries = PortfolioApiService(counting).list_portfolios()
+
+    assert [item.portfolio_id for item in summaries] == [1, 2]
+    assert [item.projected_value for item in summaries] == [150, 400]
+    assert [item.projected_horizon_years for item in summaries] == [5, 10]
+    assert counting.query_count <= 3
+    db.conn.close()
+
+
+def test_portfolio_snapshot_refresh_materializes_current_reports(tmp_path):
+    db_path = tmp_path / "portfolio_snapshot_refresh.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        """
+        INSERT INTO portfolio(portfolio_id, portfolio_name, base_ccy)
+        VALUES (1, 'Core', 'CAD')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.post("/api/v1/portfolios/snapshots/refresh")
+
+    assert response.status_code == 200
+    assert response.json()["result"]["refreshed_count"] == 1
+    assert response.json()["result"]["failed_count"] == 0
+    db = DB(db_path)
+    stored = db.conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM portfolio_analytics_snapshot
+        WHERE portfolio_id = 1
+        """
+    ).fetchone()
+    assert stored[0] == 1
+    db.conn.close()
 
 
 def test_portfolio_positions_use_underlying_metadata_for_cdrs(tmp_path):

@@ -109,7 +109,12 @@ from dashboard.api.models import (
     ValuationContext,
     WatchlistAssetResponse,
 )
-from dashboard.analytics import AnalyticsEngine, AnalyticsRepository, analytics_report_payload
+from dashboard.analytics import (
+    AnalyticsEngine,
+    AnalyticsRepository,
+    AnalyticsStorageService,
+    analytics_report_payload,
+)
 from dashboard.analytics.calculations import (
     allocation_class,
     dimension_exposure,
@@ -1588,7 +1593,17 @@ class PortfolioApiService:
             """,
             params,
         ).fetchall()
-        return [self._portfolio_summary(row) for row in rows]
+        portfolio_ids = [int(row[0]) for row in rows]
+        gain_overrides = self._portfolio_gain_overrides(portfolio_ids)
+        projections = self._stored_portfolio_projections(portfolio_ids)
+        return [
+            self._portfolio_summary(
+                row,
+                gain_override_rows=gain_overrides.get(int(row[0]), []),
+                projection=projections.get(int(row[0]), {}),
+            )
+            for row in rows
+        ]
 
     def aggregate_portfolio(self) -> PortfolioSummary:
         portfolios = self.list_portfolios()
@@ -1643,6 +1658,45 @@ class PortfolioApiService:
                 default=None,
             ),
         )
+
+    def refresh_portfolio_snapshots(self) -> dict[str, Any]:
+        storage = AnalyticsStorageService(self.conn, enabled=True)
+        storage.ensure_schema()
+        portfolio_ids = storage.repo.portfolio_ids()
+        reports: list[tuple[Any, str]] = []
+        failures: dict[str, str] = {}
+        for portfolio_id in portfolio_ids:
+            try:
+                signature = storage.portfolio_signature(portfolio_id)
+                report = storage.engine.portfolio_report(
+                    portfolio_id,
+                    benchmark_index_id=storage.benchmark_index_id,
+                    risk_free_rate=storage.risk_free_rate,
+                )
+                reports.append((report, signature))
+            except Exception as exc:
+                failures[str(portfolio_id)] = str(exc)
+
+        snapshot_date = date.today()
+        self.conn.execute("BEGIN TRANSACTION")
+        try:
+            for report, signature in reports:
+                storage.store_portfolio_report(
+                    report,
+                    snapshot_date,
+                    signature,
+                )
+            self.conn.execute("COMMIT")
+        except Exception:
+            self.conn.execute("ROLLBACK")
+            raise
+        self._invalidate_read_caches()
+        return {
+            "refreshed_count": len(reports),
+            "failed_count": len(failures),
+            "failed_portfolios": failures,
+            "snapshot_date": snapshot_date.isoformat(),
+        }
 
     def get_portfolio(self, portfolio_id: int) -> PortfolioSummary:
         portfolios = (
@@ -5772,16 +5826,21 @@ class PortfolioApiService:
             ],
         }
 
-    def _portfolio_summary(self, row) -> PortfolioSummary:
+    def _portfolio_summary(
+        self,
+        row,
+        *,
+        gain_override_rows: list[tuple[float | None, float | None]],
+        projection: dict[str, float | int | None],
+    ) -> PortfolioSummary:
         market_value = float(row[6])
         book_cost = float(row[7])
         unrealized_gain = market_value - book_cost if market_value else None
         total_gain, total_return_percent, total_gain_source = self._portfolio_total_gain_metrics(
-            int(row[0]),
             market_value,
             unrealized_gain,
+            gain_override_rows,
         )
-        projection = self._portfolio_projection(int(row[0]))
         return PortfolioSummary(
             portfolio_id=int(row[0]),
             name=row[1],
@@ -5804,10 +5863,38 @@ class PortfolioApiService:
 
     def _portfolio_total_gain_metrics(
         self,
-        portfolio_id: int,
         market_value: float,
         unrealized_gain: float | None,
+        override_rows: list[tuple[float | None, float | None]],
     ) -> tuple[float | None, float | None, str]:
+        if not override_rows:
+            basis = market_value - unrealized_gain if unrealized_gain is not None else None
+            return unrealized_gain, _ratio_or_none(unrealized_gain, basis), "unrealized"
+
+        override_market_value = 0.0
+        override_gain = 0.0
+        for account_value, target_return in override_rows:
+            if account_value is None or target_return is None or target_return <= -1:
+                continue
+            override_market_value += account_value
+            override_basis = account_value / (1 + target_return)
+            override_gain += account_value - override_basis
+
+        remaining_gain = 0.0
+        if unrealized_gain is not None and market_value > override_market_value:
+            remaining_share = max(market_value - override_market_value, 0.0) / market_value
+            remaining_gain = unrealized_gain * remaining_share
+        total_gain = override_gain + remaining_gain
+        basis = market_value - total_gain
+        return total_gain, _ratio_or_none(total_gain, basis), "manual_override"
+
+    def _portfolio_gain_overrides(
+        self,
+        portfolio_ids: list[int],
+    ) -> dict[int, list[tuple[float | None, float | None]]]:
+        if not portfolio_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in portfolio_ids)
         rows = self.conn.execute(
             """
             WITH latest_positions AS (
@@ -5820,6 +5907,7 @@ class PortfolioApiService:
                 GROUP BY provider, provider_account_id, provider_position_id
             )
             SELECT
+                pm.portfolio_id,
                 pm.provider_account_id,
                 SUM(ps.market_value) FILTER (WHERE ps.market_value IS NOT NULL) AS market_value,
                 MAX(o.total_return_percent)
@@ -5836,49 +5924,59 @@ class PortfolioApiService:
              AND ps.provider_account_id = latest.provider_account_id
              AND ps.provider_position_id = latest.provider_position_id
              AND ps.as_of_date = latest.as_of_date
-            WHERE pm.portfolio_id = ?
-            GROUP BY pm.provider_account_id
+            WHERE pm.portfolio_id IN ("""
+            + placeholders
+            + """)
+            GROUP BY pm.portfolio_id, pm.provider_account_id
             """,
-            [portfolio_id],
+            portfolio_ids,
         ).fetchall()
-        if not rows:
-            basis = market_value - unrealized_gain if unrealized_gain is not None else None
-            return unrealized_gain, _ratio_or_none(unrealized_gain, basis), "unrealized"
-
-        override_market_value = 0.0
-        override_gain = 0.0
+        overrides: dict[int, list[tuple[float | None, float | None]]] = {}
         for row in rows:
-            account_value = _float_or_none(row[1])
-            target_return = _float_or_none(row[2])
-            if account_value is None or target_return is None or target_return <= -1:
+            overrides.setdefault(int(row[0]), []).append(
+                (_float_or_none(row[2]), _float_or_none(row[3]))
+            )
+        return overrides
+
+    def _stored_portfolio_projections(
+        self,
+        portfolio_ids: list[int],
+    ) -> dict[int, dict[str, float | int | None]]:
+        if not portfolio_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in portfolio_ids)
+        rows = self.conn.execute(
+            """
+            SELECT portfolio_id, payload_json
+            FROM portfolio_analytics_snapshot
+            WHERE portfolio_id IN ("""
+            + placeholders
+            + """)
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY portfolio_id
+                ORDER BY snapshot_date DESC, refreshed_at DESC
+            ) = 1
+            """,
+            portfolio_ids,
+        ).fetchall()
+        projections: dict[int, dict[str, float | int | None]] = {}
+        for portfolio_id, payload_json in rows:
+            payload = _json_dict(payload_json)
+            forecast = _json_dict(payload.get("forecast"))
+            simulation = _json_dict(forecast.get("simulation"))
+            if not simulation:
                 continue
-            override_market_value += account_value
-            override_basis = account_value / (1 + target_return)
-            override_gain += account_value - override_basis
-
-        remaining_gain = 0.0
-        if unrealized_gain is not None and market_value > override_market_value:
-            remaining_share = max(market_value - override_market_value, 0.0) / market_value
-            remaining_gain = unrealized_gain * remaining_share
-        total_gain = override_gain + remaining_gain
-        basis = market_value - total_gain
-        return total_gain, _ratio_or_none(total_gain, basis), "manual_override"
-
-    def _portfolio_projection(self, portfolio_id: int) -> dict[str, float | int | None]:
-        try:
-            report = AnalyticsEngine(AnalyticsRepository(self.conn)).portfolio_report(portfolio_id)
-        except Exception:
-            return {}
-        simulation = report.forecast.simulation
-        if simulation is None:
-            return {}
-        return {
-            "projected_value": _float_or_none(simulation.p50_value)
-            or _float_or_none(simulation.expected_value),
-            "projected_value_low": _float_or_none(simulation.p10_value),
-            "projected_value_high": _float_or_none(simulation.p90_value),
-            "projected_horizon_years": simulation.horizon_years,
-        }
+            p50_value = _float_or_none(simulation.get("p50_value"))
+            expected_value = _float_or_none(simulation.get("expected_value"))
+            projections[int(portfolio_id)] = {
+                "projected_value": p50_value or expected_value,
+                "projected_value_low": _float_or_none(simulation.get("p10_value")),
+                "projected_value_high": _float_or_none(simulation.get("p90_value")),
+                "projected_horizon_years": _int_or_none(
+                    simulation.get("horizon_years")
+                ),
+            }
+        return projections
 
 
 class AssetApiService:
