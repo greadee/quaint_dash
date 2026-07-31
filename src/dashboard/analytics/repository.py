@@ -36,6 +36,7 @@ _KNOWN_CDR_BASE_SYMBOLS = {
     "ANET",
     "ASML",
     "AVGO",
+    "BKNG",
     "CEG",
     "GEV",
     "GOOG",
@@ -399,6 +400,57 @@ class AnalyticsRepository:
             if fcf is not None and fcf > 0:
                 return fcf
         return None
+
+    def latest_free_cash_flow_is_nonpositive(self, asset_id: str) -> bool:
+        rows = self.conn.execute(
+            """
+            SELECT data_json
+            FROM financial_statement
+            WHERE asset_id = ?
+              AND statement_type = 'cashflow'
+            ORDER BY year DESC, quarter DESC
+            LIMIT 8
+            """,
+            [asset_id.upper().strip()],
+        ).fetchall()
+        for row in rows:
+            data = _json_object(row[0])
+            fcf = _extract_number(
+                data,
+                ("freeCashFlow", "free_cash_flow", "free_cashflow"),
+            )
+            if fcf is None:
+                operating = _extract_number(
+                    data,
+                    (
+                        "operatingCashFlow",
+                        "cashFlowFromOperations",
+                        "netCashProvidedByOperatingActivities",
+                    ),
+                )
+                capex = _extract_number(
+                    data,
+                    ("capitalExpenditure", "capital_expenditure", "capex"),
+                )
+                if operating is not None and capex is not None:
+                    fcf = operating - abs(capex)
+            if fcf is not None:
+                return fcf <= 0
+        return False
+
+    def current_price_uses_stored_fallback(self, asset_id: str) -> bool:
+        row = self.conn.execute(
+            """
+            SELECT provider
+            FROM current_asset_price
+            WHERE asset_id = ?
+            """,
+            [asset_id.upper().strip()],
+        ).fetchone()
+        return bool(
+            row
+            and str(row[0] or "").lower() == "stored_close_fallback"
+        )
 
     def financial_statement_history(
         self, asset_id: str, statement_type: str

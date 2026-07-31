@@ -122,6 +122,10 @@ def test_portfolio_management_endpoints_are_backend_driven_and_deterministic(tmp
             "/api/v1/portfolios/1/optimization/preview",
             json={"objective": "max_risk_adjusted_return", "constraints": {"max_weight": 0.75}},
         )
+        default_constraints = client.post(
+            "/api/v1/portfolios/1/optimization/preview",
+            json={"objective": "max_expected_cagr", "constraints": {}},
+        )
 
     assert performance.status_code == 200
     assert performance.json()["methodology"].startswith("actual daily transaction-aware")
@@ -144,10 +148,18 @@ def test_portfolio_management_endpoints_are_backend_driven_and_deterministic(tmp
     assert expected_cagr_insight["contributors"]
     assert max_cagr.status_code == 200
     assert max_risk_adjusted.status_code == 200
-    for payload in [max_cagr.json(), max_risk_adjusted.json()]:
+    assert default_constraints.status_code == 200
+    for payload in [
+        max_cagr.json(),
+        max_risk_adjusted.json(),
+        default_constraints.json(),
+    ]:
         assert payload["status"] == "success"
         assert abs(sum(payload["current_weights"].values()) - 1.0) < 0.0001
         assert abs(sum(payload["optimized_weights"].values()) - 1.0) < 0.0001
+        assert payload["before"]["expected_volatility"] is not None
+        assert payload["before"]["expected_sharpe"] is not None
+        assert payload["before"]["beta"] is not None
         assert payload["calculation_timestamp"]
 
 
@@ -188,11 +200,62 @@ def test_portfolio_performance_skips_incomplete_valuation_dates(tmp_path):
 
     assert response.status_code == 200
     payload = response.json()
-    assert [point["date"] for point in payload["points"]] == ["2025-01-01", "2025-01-03"]
+    assert [point["date"] for point in payload["points"]] == [
+        "2025-01-01",
+        "2025-01-02",
+        "2025-01-03",
+    ]
     assert payload["points"][0]["portfolio_return_index"] == 100
-    assert abs(payload["points"][1]["portfolio_return_index"] - 110) < 0.0001
+    assert abs(payload["points"][2]["portfolio_return_index"] - 110) < 0.0001
     assert payload["coverage"] == 1
-    assert any("BBB: daily close on 2025-01-02" in item for item in payload["missing_inputs"])
+    assert payload["missing_inputs"] == []
+
+
+def test_broker_only_portfolio_performance_uses_current_position_proxy(tmp_path):
+    db_path = tmp_path / "broker_performance.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        "INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Broker')"
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy)
+        VALUES ('AAPL', 'AAPL', 'stock', 'USD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO broker_portfolio_position_map(
+            provider, provider_account_id, provider_position_id,
+            portfolio_id, asset_id, quantity, book_cost, currency
+        )
+        VALUES ('snaptrade', 'acct-1', 'pos-1', 1, 'AAPL', 2, 200, 'USD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset_quote_daily(
+            asset_id, date, close, adj_close, ing_source
+        )
+        VALUES
+            ('AAPL', DATE '2025-01-01', 100, 100, 'test'),
+            ('AAPL', DATE '2025-01-02', 105, 105, 'test'),
+            ('AAPL', DATE '2025-01-03', 110, 110, 'test')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/portfolios/1/performance?range=MAX")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["observation_count"] == 3
+    assert payload["missing_inputs"] == []
+    assert payload["methodology"].startswith(
+        "current-position historical valuation proxy"
+    )
 
 
 def test_portfolio_rename_conflicts_with_existing_name(tmp_path):
@@ -295,15 +358,16 @@ def test_mapped_broker_portfolio_summary_uses_broker_positions_only(tmp_path):
     assert portfolios.status_code == 200
     summary = portfolios.json()[0]
     assert summary["position_count"] == 1
-    assert summary["market_value"] == 1200
+    assert summary["market_value"] == 4250
     assert summary["book_cost"] == 464.1
-    assert round(summary["unrealized_gain"] / summary["book_cost"], 4) == 1.5856
+    assert round(summary["unrealized_gain"] / summary["book_cost"], 4) == 8.1575
 
     assert positions.status_code == 200
     payload = positions.json()
     assert [item["asset_id"] for item in payload] == ["MU.TO"]
-    assert payload[0]["market_value"] == 1200
-    assert payload[0]["latest_price"] == 1200 / 85
+    assert payload[0]["market_value"] == 4250
+    assert payload[0]["latest_price"] == 50
+    assert payload[0]["price_source"] == "asset_quote_daily"
     assert payload[0]["broker_linked"] is True
 
 

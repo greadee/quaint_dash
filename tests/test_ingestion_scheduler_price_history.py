@@ -646,6 +646,85 @@ def test_price_history_scheduler_ignores_completed_asset(manager):
     assert n_jobs == 0
 
 
+def test_price_history_scheduler_respects_successful_zero_row_backfill(manager):
+    insert_asset(manager, "BN.TO")
+    manager.conn.execute(
+        """
+        INSERT INTO asset_sync_state(
+            asset_id,
+            domain,
+            dataset,
+            backfill_status,
+            backfill_start_date,
+            backfill_end_date,
+            last_successful_date,
+            last_attempted_at,
+            last_successful_at,
+            needs_repair
+        )
+        VALUES (
+            'BN.TO', 'market', 'price_daily', 'done',
+            DATE '2025-01-01', DATE '2026-01-01', NULL,
+            now(), now(), FALSE
+        )
+        """
+    )
+
+    n_jobs = manager.schedule_due_price_history_backfills(
+        max_assets=1,
+        years=1,
+    )
+
+    assert n_jobs == 0
+
+
+def test_market_refresh_uses_successful_empty_dataset_coverage(manager):
+    insert_asset(manager, "BN.TO")
+    today = date.today()
+    manager.conn.execute(
+        """
+        INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+        VALUES ('BN.TO', ?, 50, 50, 'test')
+        """,
+        [today],
+    )
+    manager.conn.execute(
+        """
+        INSERT INTO asset_sync_state(
+            asset_id,
+            domain,
+            dataset,
+            backfill_status,
+            backfill_start_date,
+            backfill_end_date,
+            last_successful_date,
+            last_attempted_at,
+            last_successful_at,
+            needs_repair
+        )
+        VALUES
+            (
+                'BN.TO', 'market', 'dividends', 'done',
+                ? - INTERVAL 365 DAY, ?, ? - INTERVAL 1 DAY,
+                now(), now(), FALSE
+            ),
+            (
+                'BN.TO', 'market', 'splits', 'done',
+                ? - INTERVAL 365 DAY, ?, NULL, now(), now(), FALSE
+            )
+        """,
+        [today, today, today, today, today],
+    )
+
+    job_ids = PriceHistoryIngestionService(manager.conn).enqueue_refresh_one(
+        "BN.TO",
+        include_dividends=True,
+        include_splits=True,
+    )
+
+    assert job_ids == []
+
+
 def test_price_history_enqueue_all_uses_portfolio_and_watchlist_ticker_universe(manager):
     """
     Bulk enqueueing should target explicit portfolio/watchlist ticker tables,

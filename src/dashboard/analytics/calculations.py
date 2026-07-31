@@ -544,6 +544,7 @@ def allocation_class(
         "ANET",
         "ASML",
         "AVGO",
+        "BKNG",
         "CEG",
         "CEGS",
         "GEV",
@@ -586,6 +587,12 @@ def allocation_class(
         return "ETF"
     if asset_type_key in {"etf", "fund", "mutual_fund", "mutual fund"}:
         return "ETF"
+    if asset_subtype_key in {
+        "delisted",
+        "inactive_listing",
+        "inactive listing",
+    }:
+        return "Other"
     if asset_type_key in {"stock", "equity", "adr"}:
         return "Stock"
     return asset_type_key.replace("_", " ").title() if asset_type_key else "Other"

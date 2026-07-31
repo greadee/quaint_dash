@@ -117,8 +117,10 @@ from dashboard.analytics import (
 )
 from dashboard.analytics.calculations import (
     allocation_class,
+    beta,
     dimension_exposure,
     portfolio_annualized_volatility,
+    portfolio_returns_from_components,
     risk_return_metrics,
 )
 from dashboard.analytics.models import (
@@ -1409,6 +1411,7 @@ _CDR_CLASSIFICATION_OVERRIDES = {
     "ANET": {"sector": "Technology", "industry": "Computer Hardware", "country": "US"},
     "ASML": {"sector": "Technology", "industry": "Semiconductors", "country": "NL"},
     "AVGO": {"sector": "Technology", "industry": "Semiconductors", "country": "US"},
+    "BKNG": {"sector": "Consumer Cyclical", "industry": "Travel Services", "country": "US"},
     "CEG": {"sector": "Utilities", "industry": "Utilities - Renewable", "country": "US"},
     "GEV": {"sector": "Industrials", "industry": "Electrical Equipment & Parts", "country": "US"},
     "GOOG": {"sector": "Communication Services", "industry": "Internet Content & Information", "country": "US"},
@@ -1434,6 +1437,7 @@ _KNOWN_CDR_UNDERLYING_NAMES = {
     "ANET": "Arista Networks, Inc.",
     "ASML": "ASML Holding N.V.",
     "AVGO": "Broadcom Inc.",
+    "BKNG": "Booking Holdings Inc.",
     "CEG": "Constellation Energy Corporation",
     "GEV": "GE Vernova Inc.",
     "GOOG": "Alphabet Inc.",
@@ -1583,7 +1587,7 @@ class PortfolioApiService:
                     COUNT(*) FILTER (WHERE h.quantity <> 0) AS position_count,
                     COALESCE(SUM(h.book_cost) FILTER (WHERE h.quantity <> 0), 0) AS book_cost,
                     COALESCE(
-                        SUM(COALESCE(h.quantity * bp.price, h.quantity * cp.price, h.quantity * lp.price, h.book_cost))
+                        SUM(COALESCE(h.quantity * cp.price, h.quantity * lp.price, h.quantity * bp.price, h.book_cost))
                             FILTER (WHERE h.quantity <> 0),
                         0
                     ) AS market_value
@@ -1961,9 +1965,14 @@ class PortfolioApiService:
                 END AS country,
                 a.ccy,
                 COALESCE(bl.broker_account_count, 0) AS broker_account_count,
-                COALESCE(bp.price, cp.price, lp.price) AS price,
-                COALESCE(h.quantity * bp.price, h.quantity * cp.price, h.quantity * lp.price, h.book_cost) AS market_value,
-                cp.provider AS live_price_provider,
+                COALESCE(cp.price, lp.price, bp.price) AS price,
+                COALESCE(h.quantity * cp.price, h.quantity * lp.price, h.quantity * bp.price, h.book_cost) AS market_value,
+                CASE
+                    WHEN cp.price IS NOT NULL THEN cp.provider
+                    WHEN lp.price IS NOT NULL THEN 'asset_quote_daily'
+                    WHEN bp.price IS NOT NULL THEN 'broker'
+                    ELSE NULL
+                END AS live_price_provider,
                 cp.market_session AS live_price_session,
                 cp.updated_at AS live_price_updated_at
                 FROM holdings h
@@ -2211,8 +2220,8 @@ class PortfolioApiService:
                     END AS country,
                     a.ccy,
                     COALESCE(bl.broker_account_count, 0) AS broker_account_count,
-                    COALESCE(bp.price, cp.price, lp.price) AS price,
-                    COALESCE(h.quantity * bp.price, h.quantity * cp.price, h.quantity * lp.price, h.book_cost) AS market_value
+                    COALESCE(cp.price, lp.price, bp.price) AS price,
+                    COALESCE(h.quantity * cp.price, h.quantity * lp.price, h.quantity * bp.price, h.book_cost) AS market_value
                 FROM holdings h
                 JOIN asset a ON a.asset_id = h.asset_id
                 {_ENRICHED_ASSET_JOIN}
@@ -2468,7 +2477,10 @@ class PortfolioApiService:
                 for item in self.list_positions(portfolio_id)
             ]
         )
-        values, missing = self._actual_daily_portfolio_values(portfolio_id, normalized_range)
+        values, missing, performance_basis = self._actual_daily_portfolio_values(
+            portfolio_id,
+            normalized_range,
+        )
         benchmark_prices = (
             AnalyticsRepository(self.conn).benchmark_price_history(benchmark_index_id)
             if benchmark_index_id
@@ -2521,10 +2533,7 @@ class PortfolioApiService:
             start_date=points[0].date if points else None,
             end_date=points[-1].date if points else None,
             range=normalized_range,
-            methodology=(
-                "actual daily transaction-aware time-weighted return; external cash flows "
-                "break return subperiods; current-weight backtests are not used"
-            ),
+            methodology=performance_basis,
             calendar_alignment="portfolio valuation dates with same-date benchmark observations",
             normalized_initial_value=100.0,
             actual_twr_cagr=risk.cagr if risk else None,
@@ -3256,7 +3265,7 @@ class PortfolioApiService:
         self,
         portfolio_id: int,
         range_key: str,
-    ) -> tuple[list[dict[str, Any]], list[str]]:
+    ) -> tuple[list[dict[str, Any]], list[str], str]:
         txns = self.conn.execute(
             """
             SELECT time_stamp::DATE, LOWER(txn_type), asset_id, qty, price, ccy, cash_amt, fee_amt
@@ -3267,10 +3276,16 @@ class PortfolioApiService:
             [portfolio_id],
         ).fetchall()
         if not txns:
-            return [], ["portfolio transactions"]
+            return self._position_based_daily_portfolio_values(
+                portfolio_id,
+                range_key,
+            )
         asset_ids = sorted({row[2] for row in txns if row[2]})
         if not asset_ids:
-            return [], ["asset transactions"]
+            return [], ["asset transactions"], (
+                "actual daily transaction-aware time-weighted return; external cash "
+                "flows break return subperiods"
+            )
         first_date = min(row[0] for row in txns)
         placeholders = ", ".join("?" for _ in asset_ids)
         latest_price_date = self.conn.execute(
@@ -3283,7 +3298,10 @@ class PortfolioApiService:
             asset_ids,
         ).fetchone()[0]
         if latest_price_date is None:
-            return [], ["daily close prices"]
+            return [], ["daily close prices"], (
+                "actual daily transaction-aware time-weighted return; external cash "
+                "flows break return subperiods"
+            )
         range_start = _range_start_date(range_key, latest_price_date)
         if range_start is not None:
             first_date = max(first_date, range_start)
@@ -3327,18 +3345,31 @@ class PortfolioApiService:
                     [*asset_ids, first_date],
                 ).fetchall()
         if not price_rows:
-            return [], ["daily close prices"]
+            return [], ["daily close prices"], (
+                "actual daily transaction-aware time-weighted return; external cash "
+                "flows break return subperiods"
+            )
         prices: dict[str, dict[date, float]] = {}
         dates = set()
         for asset_id, price_date, close in price_rows:
             prices.setdefault(asset_id, {})[price_date] = float(close)
             dates.add(price_date)
+        first_price_dates = {
+            asset_id: min(asset_prices)
+            for asset_id, asset_prices in prices.items()
+            if asset_prices
+        }
         positions = {asset_id: 0.0 for asset_id in asset_ids}
         rows: list[dict[str, Any]] = []
         tx_index = 0
         missing: set[str] = set()
+        last_prices: dict[str, float] = {}
         txns = [row for row in txns if row[0] <= max(dates)]
         for value_date in sorted(dates):
+            for asset_id, asset_prices in prices.items():
+                close = asset_prices.get(value_date)
+                if close is not None:
+                    last_prices[asset_id] = close
             external_flow = 0.0
             while tx_index < len(txns) and txns[tx_index][0] <= value_date:
                 _txn_date, txn_type, asset_id, qty, _price, _ccy, cash_amt, fee_amt = txns[tx_index]
@@ -3357,9 +3388,15 @@ class PortfolioApiService:
             for asset_id, qty in positions.items():
                 if not qty:
                     continue
-                close = prices.get(asset_id, {}).get(value_date)
+                close = last_prices.get(asset_id)
                 if close is None:
-                    missing.add(f"{asset_id}: daily close on {value_date.isoformat()}")
+                    if (
+                        asset_id not in first_price_dates
+                        or value_date >= first_price_dates[asset_id]
+                    ):
+                        missing.add(
+                            f"{asset_id}: daily close on {value_date.isoformat()}"
+                        )
                     continue
                 value += qty * close
                 valued_count += 1
@@ -3373,7 +3410,110 @@ class PortfolioApiService:
                         "coverage": min(1.0, coverage),
                     }
                 )
-        return rows, sorted(missing)[:25]
+        return rows, sorted(missing)[:25], (
+            "actual daily transaction-aware time-weighted return; external cash flows "
+            "break return subperiods; non-trading days carry forward the latest close"
+        )
+
+    def _position_based_daily_portfolio_values(
+        self,
+        portfolio_id: int,
+        range_key: str,
+    ) -> tuple[list[dict[str, Any]], list[str], str]:
+        holdings = self.conn.execute(
+            f"""
+            SELECT asset_id, quantity
+            FROM ({_HOLDINGS_SQL}) holdings
+            WHERE portfolio_id = ?
+              AND quantity <> 0
+            ORDER BY asset_id
+            """,
+            [portfolio_id],
+        ).fetchall()
+        if not holdings:
+            return [], ["portfolio holdings"], (
+                "current-position historical valuation proxy"
+            )
+        asset_ids = [str(row[0]) for row in holdings]
+        quantities = {str(row[0]): float(row[1]) for row in holdings}
+        placeholders = ", ".join("?" for _ in asset_ids)
+        latest_price_date = self.conn.execute(
+            f"""
+            SELECT MAX(date)
+            FROM asset_quote_daily
+            WHERE asset_id IN ({placeholders})
+              AND COALESCE(adj_close, close) IS NOT NULL
+            """,
+            asset_ids,
+        ).fetchone()[0]
+        if latest_price_date is None:
+            return [], ["daily close prices"], (
+                "current-position historical valuation proxy"
+            )
+        range_start = _range_start_date(range_key, latest_price_date)
+        where_start = "AND date >= ?" if range_start is not None else ""
+        params: list[Any] = [*asset_ids]
+        if range_start is not None:
+            params.append(range_start)
+        price_rows = self.conn.execute(
+            f"""
+            SELECT asset_id, date, COALESCE(adj_close, close)
+            FROM asset_quote_daily
+            WHERE asset_id IN ({placeholders})
+              AND COALESCE(adj_close, close) IS NOT NULL
+              {where_start}
+            ORDER BY date, asset_id
+            """,
+            params,
+        ).fetchall()
+        prices: dict[str, dict[date, float]] = {}
+        dates: set[date] = set()
+        for asset_id, price_date, close in price_rows:
+            prices.setdefault(str(asset_id), {})[price_date] = float(close)
+            dates.add(price_date)
+        first_price_dates = {
+            asset_id: min(asset_prices)
+            for asset_id, asset_prices in prices.items()
+            if asset_prices
+        }
+        rows: list[dict[str, Any]] = []
+        missing: set[str] = set()
+        last_prices: dict[str, float] = {}
+        for value_date in sorted(dates):
+            for asset_id, asset_prices in prices.items():
+                close = asset_prices.get(value_date)
+                if close is not None:
+                    last_prices[asset_id] = close
+            value = 0.0
+            valued_count = 0
+            for asset_id, quantity in quantities.items():
+                close = last_prices.get(asset_id)
+                if close is None:
+                    if (
+                        asset_id not in first_price_dates
+                        or value_date >= first_price_dates[asset_id]
+                    ):
+                        missing.add(
+                            f"{asset_id}: daily close on or before "
+                            f"{value_date.isoformat()}"
+                        )
+                    continue
+                value += quantity * close
+                valued_count += 1
+            coverage = valued_count / len(quantities)
+            if value > 0 and coverage >= 0.95:
+                rows.append(
+                    {
+                        "date": value_date,
+                        "value": value,
+                        "external_flow": 0.0,
+                        "coverage": coverage,
+                    }
+                )
+        return rows, sorted(missing)[:25], (
+            "current-position historical valuation proxy for broker-sourced holdings "
+            "without transaction history; non-trading days carry forward the latest close"
+        )
 
     def _deterministic_weights(
         self,
@@ -3440,16 +3580,47 @@ class PortfolioApiService:
             if expected_return is not None
         ]
         expected_cagr = sum(present_returns) if present_returns else None
-        returns_by_asset = {
-            asset_id: [
-                history[index].close / history[index - 1].close - 1.0
-                for index in range(1, len(history))
-                if history[index - 1].close > 0
-            ]
-            for asset_id, history in histories.items()
-            if len(history) >= 2
+        returns_by_asset, return_dates, aligned_weights = (
+            self._aligned_optimization_returns(histories, weights)
+        )
+        volatility = portfolio_annualized_volatility(
+            returns_by_asset,
+            aligned_weights,
+        )
+        portfolio_returns = portfolio_returns_from_components(
+            returns_by_asset,
+            aligned_weights,
+        )
+        benchmark_prices = AnalyticsRepository(
+            self.conn
+        ).benchmark_price_history("SP500")
+        benchmark_returns_by_date = {
+            benchmark_prices[index].date: (
+                benchmark_prices[index].close
+                / benchmark_prices[index - 1].close
+                - 1.0
+            )
+            for index in range(1, len(benchmark_prices))
+            if benchmark_prices[index - 1].close > 0
         }
-        volatility = portfolio_annualized_volatility(returns_by_asset, weights)
+        paired = [
+            (portfolio_return, benchmark_returns_by_date[return_date])
+            for return_date, portfolio_return in zip(
+                return_dates,
+                portfolio_returns,
+            )
+            if return_date in benchmark_returns_by_date
+        ]
+        beta_value = (
+            beta(
+                [row[0] for row in paired],
+                [row[1] for row in paired],
+            )
+            if len(paired) >= 2
+            else None
+        )
+        if beta_value is None:
+            beta_value = self._weighted_metadata_beta(aligned_weights)
         sharpe = (
             (expected_cagr - risk_free_rate) / volatility
             if expected_cagr is not None and volatility and volatility > 0
@@ -3460,8 +3631,98 @@ class PortfolioApiService:
             expected_cagr=expected_cagr,
             expected_volatility=volatility,
             expected_sharpe=sharpe,
+            beta=beta_value,
             concentration_hhi=hhi if hhi > 0 else None,
         )
+
+    def _aligned_optimization_returns(
+        self,
+        histories: dict[str, list[PricePoint]],
+        weights: dict[str, float],
+    ) -> tuple[dict[str, list[float]], list[date], dict[str, float]]:
+        included = {
+            asset_id: sorted(
+                [point for point in history if point.close > 0],
+                key=lambda point: point.date,
+            )
+            for asset_id, history in histories.items()
+            if weights.get(asset_id, 0.0) > 0 and len(history) >= 2
+        }
+        included = {
+            asset_id: history
+            for asset_id, history in included.items()
+            if len(history) >= 2
+        }
+        total_weight = sum(weights.get(asset_id, 0.0) for asset_id in included)
+        if not included or total_weight <= 0:
+            return {}, [], {}
+        aligned_weights = {
+            asset_id: weights.get(asset_id, 0.0) / total_weight
+            for asset_id in included
+        }
+        by_asset = {
+            asset_id: {point.date: point.close for point in history}
+            for asset_id, history in included.items()
+        }
+        dates = sorted(
+            {
+                point_date
+                for asset_prices in by_asset.values()
+                for point_date in asset_prices
+            }
+        )
+        last_prices: dict[str, float] = {}
+        previous_prices: dict[str, float] | None = None
+        returns_by_asset = {asset_id: [] for asset_id in included}
+        return_dates: list[date] = []
+        for point_date in dates:
+            for asset_id, asset_prices in by_asset.items():
+                close = asset_prices.get(point_date)
+                if close is not None:
+                    last_prices[asset_id] = close
+            if len(last_prices) != len(included):
+                continue
+            if previous_prices is None:
+                previous_prices = dict(last_prices)
+                continue
+            for asset_id in included:
+                previous = previous_prices[asset_id]
+                current = last_prices[asset_id]
+                returns_by_asset[asset_id].append(
+                    current / previous - 1.0
+                    if previous > 0
+                    else 0.0
+                )
+            return_dates.append(point_date)
+            previous_prices = dict(last_prices)
+        return returns_by_asset, return_dates, aligned_weights
+
+    def _weighted_metadata_beta(
+        self,
+        weights: dict[str, float],
+    ) -> float | None:
+        if not weights:
+            return None
+        asset_ids = list(weights)
+        placeholders = ", ".join("?" for _ in asset_ids)
+        rows = self.conn.execute(
+            f"""
+            SELECT asset_id, market_beta
+            FROM asset
+            WHERE asset_id IN ({placeholders})
+              AND market_beta IS NOT NULL
+            """,
+            asset_ids,
+        ).fetchall()
+        covered = [
+            (weights.get(str(asset_id), 0.0), float(beta_value))
+            for asset_id, beta_value in rows
+            if weights.get(str(asset_id), 0.0) > 0
+        ]
+        covered_weight = sum(row[0] for row in covered)
+        if covered_weight <= 0:
+            return None
+        return sum(weight * beta_value for weight, beta_value in covered) / covered_weight
 
     def overview_updates(self) -> OverviewUpdatesResponse:
         portfolios = self.list_portfolios()
@@ -8522,19 +8783,60 @@ class CommandApiService(BrokerCommands, IngestionCommands):
     def _shares_outstanding_requirement(self, asset_id: str) -> IngestionRequirementStatus:
         row = self.conn.execute(
             """
-            SELECT shares_outstanding
+            SELECT
+                shares_outstanding,
+                asset_type,
+                asset_subtype,
+                symbol,
+                name
             FROM asset
             WHERE asset_id = ?
             """,
             [asset_id],
         ).fetchone()
         value = _float_or_none(row[0]) if row else None
+        asset_type = str(row[1] or "").lower() if row else ""
+        if asset_type in {"etf", "fund", "index"}:
+            return IngestionRequirementStatus(
+                key="shares_outstanding",
+                label="Shares outstanding",
+                ready=True,
+                detail="not applicable to fund projection inputs",
+                row_count=0,
+            )
+        valuation_asset_id = AnalyticsRepository(self.conn).valuation_asset_id(asset_id)
+        if valuation_asset_id != asset_id:
+            underlying = self.conn.execute(
+                """
+                SELECT shares_outstanding
+                FROM asset
+                WHERE asset_id = ?
+                """,
+                [valuation_asset_id],
+            ).fetchone()
+            value = _float_or_none(underlying[0]) if underlying else None
+            ready = value is not None and value > 0
+            return IngestionRequirementStatus(
+                key="shares_outstanding",
+                label="Shares outstanding",
+                ready=ready,
+                detail=(
+                    f"{value:,.0f} underlying-company shares"
+                    if ready
+                    else "underlying-company metadata queued for enrichment"
+                ),
+                row_count=1 if ready else 0,
+            )
         ready = value is not None and value > 0
         return IngestionRequirementStatus(
             key="shares_outstanding",
             label="Shares outstanding",
             ready=ready,
-            detail=f"{value:,.0f} shares" if ready else "missing from asset metadata",
+            detail=(
+                f"{value:,.0f} shares"
+                if ready
+                else "company metadata queued for enrichment"
+            ),
             row_count=1 if ready else 0,
         )
 

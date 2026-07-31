@@ -11,7 +11,10 @@ from dashboard.ingestion.corporate_calendar.provider_fmp import FmpCorporateCale
 from dashboard.ingestion.corporate_calendar.provider_fmp import FmpEntitlementError
 from dashboard.ingestion.indices.fmp_index_provider import FMPIndexProvider
 from dashboard.ingestion.indices.yfinance_index_provider import YFinanceIndexProvider
-from dashboard.ingestion.price_history.provider_yahoo import YahooPriceProvider
+from dashboard.ingestion.price_history.provider_yahoo import (
+    YahooPriceProvider,
+    yahoo_symbol_for_asset_id,
+)
 from dashboard.ingestion.rate_limits import (
     InMemoryRateLimiter,
     RateLimitExceeded,
@@ -27,6 +30,12 @@ class FakeLimiter:
 
     def acquire(self, policy) -> None:
         self.calls.append(policy)
+
+
+def test_yahoo_symbol_normalizes_canadian_venture_and_unit_listings():
+    assert yahoo_symbol_for_asset_id("TOI.VN") == "TOI.V"
+    assert yahoo_symbol_for_asset_id("BEP.UN.TO") == "BEP-UN.TO"
+    assert yahoo_symbol_for_asset_id("MSFT.TO") == "MSFT.TO"
 
 
 class FakeUrlResponse:

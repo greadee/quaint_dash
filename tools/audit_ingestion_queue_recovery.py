@@ -201,7 +201,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     database = args.database.resolve()
-    stale_hours = max(1, args.stale_hours)
+    stale_hours = max(0, args.stale_hours)
     sample_limit = max(0, args.sample_limit)
 
     if args.apply:

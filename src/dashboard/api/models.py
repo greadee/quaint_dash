@@ -246,7 +246,7 @@ class PortfolioFundamentalsResponse(BaseModel):
 
 class OptimizationConstraints(BaseModel):
     min_weight: float = Field(default=0.0, ge=0.0, le=1.0)
-    max_weight: float = Field(default=0.15, gt=0.0, le=1.0)
+    max_weight: float = Field(default=1.0, gt=0.0, le=1.0)
     min_holding_weight: float | None = Field(default=None, ge=0.0, le=1.0)
     max_sector_exposure: float | None = Field(default=None, gt=0.0, le=1.0)
     max_country_exposure: float | None = Field(default=None, gt=0.0, le=1.0)

@@ -28,7 +28,7 @@ class MarketFreshnessConfig:
     poll_interval_seconds: int = 900
     include_watchlist: bool = False
     lookback_days: int = 7
-    max_symbols_per_tick: int = 5
+    max_symbols_per_tick: int = 25
 
     @classmethod
     def from_env(cls) -> "MarketFreshnessConfig":
@@ -37,7 +37,7 @@ class MarketFreshnessConfig:
             poll_interval_seconds=_int_env("MARKET_FRESHNESS_POLL_INTERVAL_SECONDS", 900),
             include_watchlist=_truthy_env("MARKET_FRESHNESS_INCLUDE_WATCHLIST", default=False),
             lookback_days=_int_env("MARKET_FRESHNESS_LOOKBACK_DAYS", 7),
-            max_symbols_per_tick=_int_env("MARKET_FRESHNESS_MAX_SYMBOLS_PER_TICK", 5),
+            max_symbols_per_tick=_int_env("MARKET_FRESHNESS_MAX_SYMBOLS_PER_TICK", 25),
         )
 
 
@@ -139,8 +139,17 @@ class MarketFreshnessWorker:
         start = today - timedelta(days=max(self.config.lookback_days, 1))
         refreshed: list[LivePriceTick] = []
         daily_rows: list[PriceDailyRow] = []
+        stored_fallbacks = self._stored_price_fallbacks(stale_subscriptions)
         for item in stale_subscriptions[: self.config.max_symbols_per_tick]:
-            rows = provider.fetch_price_daily(item.symbol, start, today)
+            try:
+                rows = provider.fetch_price_daily(item.symbol, start, today)
+            except Exception as exc:
+                LOGGER.warning(
+                    "Market price refresh failed for %s: %s",
+                    item.symbol,
+                    exc,
+                )
+                rows = []
             daily_rows.extend(
                 PriceDailyRow(
                     asset_id=item.asset_id,
@@ -157,6 +166,27 @@ class MarketFreshnessWorker:
             )
             latest = next((row for row in reversed(rows) if row.close_price is not None or row.adj_close_price is not None), None)
             if latest is None:
+                fallback = stored_fallbacks.get(item.asset_id)
+                if fallback is not None:
+                    fallback_date, fallback_price, fallback_volume = fallback
+                    refreshed.append(
+                        LivePriceTick(
+                            asset_id=item.asset_id,
+                            symbol=item.symbol,
+                            price=fallback_price,
+                            volume=fallback_volume,
+                            provider="stored_close_fallback",
+                            market_session="previous_close",
+                            trade_ts_utc=datetime.combine(
+                                fallback_date,
+                                datetime.min.time(),
+                            ),
+                            raw_json={
+                                "source": "market_freshness_worker",
+                                "fallback_reason": "live provider returned no rows",
+                            },
+                        )
+                    )
                 continue
             price = latest.close_price if latest.close_price is not None else latest.adj_close_price
             if price is None:
@@ -193,6 +223,49 @@ class MarketFreshnessWorker:
                 db.conn.close()
         return len(refreshed)
 
+    def _stored_price_fallbacks(
+        self,
+        subscriptions: list[TickerSubscription],
+    ) -> dict[str, tuple[date, float, float | None]]:
+        asset_ids = [item.asset_id for item in subscriptions if item.asset_id]
+        if not asset_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in asset_ids)
+        with self.write_lock:
+            db = DB(self.db_path)
+            try:
+                rows = db.conn.execute(
+                    f"""
+                    SELECT asset_id, date, price, volume
+                    FROM (
+                        SELECT
+                            asset_id,
+                            date,
+                            COALESCE(adj_close, close) AS price,
+                            volume,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY asset_id
+                                ORDER BY date DESC
+                            ) AS price_rank
+                        FROM asset_quote_daily
+                        WHERE asset_id IN ({placeholders})
+                          AND COALESCE(adj_close, close) IS NOT NULL
+                    ) ranked
+                    WHERE price_rank = 1
+                    """,
+                    asset_ids,
+                ).fetchall()
+            finally:
+                db.conn.close()
+        return {
+            str(asset_id): (
+                price_date,
+                float(price),
+                float(volume) if volume is not None else None,
+            )
+            for asset_id, price_date, price, volume in rows
+        }
+
     def _filter_stale_subscriptions(self, subscriptions: list[TickerSubscription]) -> list[TickerSubscription]:
         asset_ids = [item.asset_id for item in subscriptions if item.asset_id]
         if not asset_ids:
@@ -201,18 +274,53 @@ class MarketFreshnessWorker:
         with self.write_lock:
             db = DB(self.db_path)
             try:
-                fresh_rows = db.conn.execute(
+                candidate_rows = db.conn.execute(
                     f"""
-                    SELECT asset_id
-                    FROM current_asset_price
-                    WHERE asset_id IN ({placeholders})
-                      AND CAST(updated_at AS DATE) >= ?
+                    WITH latest_daily AS (
+                        SELECT
+                            asset_id,
+                            date,
+                            COALESCE(adj_close, close) AS price,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY asset_id
+                                ORDER BY date DESC
+                            ) AS price_rank
+                        FROM asset_quote_daily
+                        WHERE asset_id IN ({placeholders})
+                          AND COALESCE(adj_close, close) IS NOT NULL
+                    )
+                    SELECT
+                        current.asset_id,
+                        current.price,
+                        CAST(current.updated_at AS DATE),
+                        CAST(current.trade_ts_utc AS DATE),
+                        daily.date,
+                        daily.price
+                    FROM current_asset_price current
+                    LEFT JOIN latest_daily daily
+                      ON daily.asset_id = current.asset_id
+                     AND daily.price_rank = 1
+                    WHERE current.asset_id IN ({placeholders})
                     """,
-                    [*asset_ids, date.today()],
+                    [*asset_ids, *asset_ids],
                 ).fetchall()
             finally:
                 db.conn.close()
-        fresh_asset_ids = {str(row[0]) for row in fresh_rows}
+        today = date.today()
+        fresh_asset_ids = {
+            str(row[0])
+            for row in candidate_rows
+            if row[2] is not None
+            and row[2] >= today
+            and row[3] is not None
+            and row[4] is not None
+            and row[4] >= row[3]
+            and row[1] is not None
+            and row[5] is not None
+            and abs(float(row[5]) - float(row[1]))
+            / max(abs(float(row[1])), 0.000001)
+            <= 0.005
+        }
         return [item for item in subscriptions if not item.asset_id or item.asset_id not in fresh_asset_ids]
 
     def _resolve_subscriptions(self) -> list[TickerSubscription]:

@@ -608,7 +608,6 @@ class IngestionCommands:
         AND (
             s.asset_id IS NULL
             OR s.backfill_status IN ('not_started', 'failed')
-            OR s.last_successful_date IS NULL
         )
         AND NOT EXISTS (
             SELECT 1

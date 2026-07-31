@@ -15,6 +15,7 @@ from dashboard.analytics.calculations import allocation_class
 from dashboard.analytics import AnalyticsRepository
 from dashboard.api.services import CommandApiService, PortfolioApiService
 from dashboard.db.db_conn import DB
+from dashboard.ingestion.price_history.provider_yahoo import yahoo_symbol_for_asset_id
 from dashboard.ingestion.ticker_universe import TickerUniverseRepository
 
 LOGGER = logging.getLogger(__name__)
@@ -69,6 +70,7 @@ class DataReadinessWorker:
         self.last_pending_count: int | None = None
         self.last_missing: list[str] = []
         self.last_error: str | None = None
+        self._target_offset = 0
 
     @property
     def running(self) -> bool:
@@ -144,7 +146,7 @@ class DataReadinessWorker:
             db = DB(self.db_path)
             try:
                 TickerUniverseRepository(db.conn).sync_portfolio_tickers_from_positions()
-                targets = _valuation_targets(db.conn)[: self.config.max_assets_per_tick]
+                targets = self._select_target_batch(_valuation_targets(db.conn))
                 scheduled = _schedule_missing_inputs(db.conn, targets, self.config)
                 completed = _run_batches(db.conn, self.config)
                 readiness = _strict_readiness(db.conn, targets, self.config)
@@ -173,6 +175,32 @@ class DataReadinessWorker:
             "pending_jobs": self.last_pending_count,
             "missing": self.last_missing,
         }
+
+    def _select_target_batch(
+        self,
+        targets: list[ValuationTarget],
+    ) -> list[ValuationTarget]:
+        if not targets:
+            self._target_offset = 0
+            return []
+        unique_asset_ids = list(
+            dict.fromkeys(target.valuation_asset_id for target in targets)
+        )
+        batch_size = min(
+            self.config.max_assets_per_tick,
+            len(unique_asset_ids),
+        )
+        start = self._target_offset % len(unique_asset_ids)
+        selected_ids = {
+            unique_asset_ids[(start + index) % len(unique_asset_ids)]
+            for index in range(batch_size)
+        }
+        self._target_offset = (start + batch_size) % len(unique_asset_ids)
+        return [
+            target
+            for target in targets
+            if target.valuation_asset_id in selected_ids
+        ]
 
     def status(self) -> dict:
         return {
@@ -224,7 +252,13 @@ def _valuation_targets(conn) -> list[ValuationTarget]:
     for portfolio_id, asset_id, symbol, asset_type, asset_subtype, name, description in rows:
         text = f"{asset_id or ''} {symbol or ''} {asset_subtype or ''} {name or ''} {description or ''}".lower()
         is_cdr = "cdr" in text or "depositary receipt" in text or "depository receipt" in text
-        if not is_cdr and ("etf" in text or "fund" in text):
+        if not is_cdr and _fund_identity(
+            asset_id=asset_id,
+            symbol=symbol,
+            asset_type=asset_type,
+            asset_subtype=asset_subtype,
+            name=name,
+        ):
             continue
         asset_class = allocation_class(
             asset_id=str(asset_id),
@@ -283,13 +317,10 @@ def _schedule_missing_inputs(
             "corporate",
             "financial_statements",
         )
-        if (
-            any(
-                item.endswith("statements")
-                or item in {"shares_outstanding", "fundamental_metrics"}
-                for item in missing
-            )
-            and not terminal_corporate_gap
+        if any(
+            item.endswith("statements")
+            or item in {"shares_outstanding", "fundamental_metrics"}
+            for item in missing
         ):
             _hydrate_yfinance_summary(conn, asset_id)
             missing = _missing_inputs(conn, asset_id, config)
@@ -346,12 +377,14 @@ def _hydrate_yfinance_summary(conn, asset_id: str) -> bool:
     try:
         import yfinance as yf
 
-        info = yf.Ticker(asset_id).get_info()
+        ticker = yf.Ticker(yahoo_symbol_for_asset_id(asset_id))
+        info = ticker.get_info()
     except Exception as exc:
         LOGGER.info("Yfinance summary unavailable for %s: %s", asset_id, exc)
-        return False
-    if not isinstance(info, dict) or not info:
-        return False
+        info = {}
+        ticker = None
+    if not isinstance(info, dict):
+        info = {}
 
     shares = _first_float(
         info,
@@ -361,7 +394,31 @@ def _hydrate_yfinance_summary(conn, asset_id: str) -> bool:
     )
     market_cap = _first_float(info, "marketCap")
     beta = _first_float(info, "beta")
-    if shares is not None or market_cap is not None or beta is not None:
+    sector = _first_text(info, "sector")
+    industry = _first_text(info, "industry")
+    country = _first_text(info, "country")
+    name = _first_text(info, "longName", "shortName")
+    description = _first_text(info, "longBusinessSummary")
+    quote_type = _first_text(info, "quoteType")
+    normalized_asset_type = (
+        "etf"
+        if str(quote_type or "").upper() in {"ETF", "MUTUALFUND"}
+        else None
+    )
+    if any(
+        value is not None
+        for value in (
+            shares,
+            market_cap,
+            beta,
+            sector,
+            industry,
+            country,
+            name,
+            description,
+            normalized_asset_type,
+        )
+    ):
         conn.execute(
             """
             UPDATE asset
@@ -369,10 +426,27 @@ def _hydrate_yfinance_summary(conn, asset_id: str) -> bool:
                 shares_outstanding = COALESCE(?, shares_outstanding),
                 mkt_cap = COALESCE(?, mkt_cap),
                 market_beta = COALESCE(?, market_beta),
+                sector = COALESCE(?, sector),
+                industry = COALESCE(?, industry),
+                country = COALESCE(?, country),
+                name = COALESCE(?, name),
+                description = COALESCE(?, description),
+                asset_type = COALESCE(?, asset_type),
                 updated_at = now()
             WHERE asset_id = ?
             """,
-            [shares, market_cap, beta, asset_id],
+            [
+                shares,
+                market_cap,
+                beta,
+                sector,
+                industry,
+                country,
+                name,
+                description,
+                normalized_asset_type,
+                asset_id,
+            ],
         )
 
     today = date.today()
@@ -409,6 +483,65 @@ def _hydrate_yfinance_summary(conn, asset_id: str) -> bool:
         "freeCashFlow": _first_float(info, "freeCashflow", "freeCashFlow"),
         "operatingCashFlow": _first_float(info, "operatingCashflow", "operatingCashFlow"),
     }
+    if ticker is not None:
+        income = {
+            **_latest_yfinance_statement(
+                ticker,
+                "get_income_stmt",
+                {
+                    "revenue": ("TotalRevenue", "OperatingRevenue"),
+                    "grossProfit": ("GrossProfit",),
+                    "operatingIncome": ("OperatingIncome",),
+                    "netIncome": ("NetIncome", "NetIncomeCommonStockholders"),
+                    "eps": ("DilutedEPS", "BasicEPS"),
+                    "weightedAverageShsOutDil": (
+                        "DilutedAverageShares",
+                        "BasicAverageShares",
+                    ),
+                },
+            ),
+            **{key: value for key, value in income.items() if value is not None},
+        }
+        balance = {
+            **_latest_yfinance_statement(
+                ticker,
+                "get_balance_sheet",
+                {
+                    "totalDebt": ("TotalDebt",),
+                    "totalStockholdersEquity": (
+                        "StockholdersEquity",
+                        "TotalEquityGrossMinorityInterest",
+                    ),
+                    "totalAssets": ("TotalAssets",),
+                    "cashAndCashEquivalents": (
+                        "CashCashEquivalentsAndShortTermInvestments",
+                        "CashAndCashEquivalents",
+                    ),
+                },
+            ),
+            **{key: value for key, value in balance.items() if value is not None},
+        }
+        cashflow = {
+            **_latest_yfinance_statement(
+                ticker,
+                "get_cash_flow",
+                {
+                    "freeCashFlow": ("FreeCashFlow",),
+                    "operatingCashFlow": (
+                        "OperatingCashFlow",
+                        "TotalCashFromOperatingActivities",
+                    ),
+                    "capitalExpenditure": ("CapitalExpenditure",),
+                },
+            ),
+            **{key: value for key, value in cashflow.items() if value is not None},
+        }
+        if cashflow.get("freeCashFlow") is None:
+            operating = cashflow.get("operatingCashFlow")
+            capex = cashflow.get("capitalExpenditure")
+            if operating is not None and capex is not None:
+                cashflow["freeCashFlow"] = operating - abs(capex)
+
     wrote = False
     for statement_type, payload in (
         ("income", income),
@@ -430,7 +563,7 @@ def _hydrate_yfinance_summary(conn, asset_id: str) -> bool:
                 data_json,
                 source
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'computed_from_yfinance_summary')
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'yfinance_fundamentals_backup')
             ON CONFLICT(asset_id, statement_type, year, quarter) DO UPDATE SET
                 period_end_date = excluded.period_end_date,
                 report_date = excluded.report_date,
@@ -449,7 +582,117 @@ def _hydrate_yfinance_summary(conn, asset_id: str) -> bool:
             ],
         )
         wrote = True
+    _mark_inactive_stale_listing(conn, asset_id)
+    _mark_inactive_provider_snapshot(conn, asset_id, info)
     return wrote
+
+
+def _mark_inactive_provider_snapshot(
+    conn,
+    asset_id: str,
+    info: dict,
+) -> None:
+    market_time = _finite_float(info.get("regularMarketTime"))
+    if market_time is None:
+        return
+    try:
+        provider_date = datetime.fromtimestamp(
+            market_time,
+            timezone.utc,
+        ).date()
+    except (OSError, OverflowError, ValueError):
+        return
+    if provider_date >= date.today() - timedelta(days=180):
+        return
+    conn.execute(
+        """
+        UPDATE asset
+        SET asset_subtype = 'inactive_listing',
+            updated_at = now()
+        WHERE asset_id = ?
+          AND COALESCE(asset_subtype, '') NOT IN ('cdr', 'adr')
+        """,
+        [asset_id],
+    )
+
+
+def _mark_inactive_stale_listing(conn, asset_id: str) -> None:
+    latest = conn.execute(
+        """
+        SELECT MAX(date)
+        FROM asset_quote_daily
+        WHERE asset_id = ?
+          AND COALESCE(adj_close, close) IS NOT NULL
+        """,
+        [asset_id],
+    ).fetchone()[0]
+    if latest is None or latest >= date.today() - timedelta(days=180):
+        return
+    conn.execute(
+        """
+        UPDATE asset
+        SET asset_subtype = 'inactive_listing',
+            updated_at = now()
+        WHERE asset_id = ?
+          AND COALESCE(asset_subtype, '') NOT IN ('cdr', 'adr')
+        """,
+        [asset_id],
+    )
+
+
+def _latest_yfinance_statement(
+    ticker,
+    method_name: str,
+    aliases: dict[str, tuple[str, ...]],
+) -> dict[str, float]:
+    result: dict[str, float] = {}
+    for frequency in ("quarterly", "yearly", "trailing"):
+        try:
+            frame = getattr(ticker, method_name)(freq=frequency)
+        except Exception as exc:
+            LOGGER.info(
+                "Yfinance %s (%s) unavailable for %s: %s",
+                method_name,
+                frequency,
+                getattr(ticker, "ticker", "asset"),
+                exc,
+            )
+            continue
+        if frame is None or getattr(frame, "empty", True):
+            continue
+        columns = list(getattr(frame, "columns", []))
+        if not columns:
+            continue
+        for target, source_names in aliases.items():
+            if target in result:
+                continue
+            for source_name in source_names:
+                for column in columns:
+                    try:
+                        value = frame.at[source_name, column]
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    parsed = _finite_float(value)
+                    if parsed is not None:
+                        result[target] = parsed
+                        break
+                if target in result:
+                    break
+        if len(result) == len(aliases):
+            break
+    return result
+
+
+def _finite_float(value) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed != parsed or parsed in {float("inf"), float("-inf")}:
+        return None
+    return parsed
 
 
 def _merge_statement_payload(
@@ -511,6 +754,14 @@ def _first_signed_float(values: dict, *keys: str) -> float | None:
     return None
 
 
+def _first_text(values: dict, *keys: str) -> str | None:
+    for key in keys:
+        value = str(values.get(key) or "").strip()
+        if value:
+            return value
+    return None
+
+
 def _run_batches(conn, config: DataReadinessConfig) -> int:
     service = CommandApiService(conn)
     completed = 0
@@ -546,6 +797,8 @@ def _missing_inputs(conn, asset_id: str, config: DataReadinessConfig) -> list[st
     ).fetchone()
     if int(price_row[0] or 0) < config.min_price_rows:
         missing.append("price_history")
+    if _fundamentals_not_applicable(conn, asset_id):
+        return missing
 
     shares_row = conn.execute(
         """
@@ -578,6 +831,78 @@ def _missing_inputs(conn, asset_id: str, config: DataReadinessConfig) -> list[st
         if metric_missing:
             missing.append("fundamental_metrics")
     return missing
+
+
+def _fundamentals_not_applicable(conn, asset_id: str) -> bool:
+    row = conn.execute(
+        """
+        SELECT asset_type, asset_subtype, name, description, sector, industry
+        FROM asset
+        WHERE asset_id = ?
+        """,
+        [asset_id],
+    ).fetchone()
+    if row is None:
+        return False
+    asset_type = str(row[0] or "").lower()
+    asset_subtype = str(row[1] or "").lower()
+    classification_text = " ".join(str(value or "") for value in row[4:]).lower()
+    stored_close_only = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM current_asset_price
+        WHERE asset_id = ?
+          AND provider = 'stored_close_fallback'
+        """,
+        [asset_id],
+    ).fetchone()[0]
+    return (
+        bool(stored_close_only)
+        or asset_type in {"etf", "fund", "mutual_fund", "index"}
+        or asset_subtype in {"delisted", "inactive_listing"}
+        or _fund_identity(
+            asset_id=asset_id,
+            symbol=asset_id,
+            asset_type=row[0],
+            asset_subtype=row[1],
+            name=row[2],
+        )
+        or any(
+            marker in classification_text
+            for marker in (
+                "asset management",
+                "bank",
+                "insurance",
+            )
+        )
+    )
+
+
+def _fund_identity(
+    *,
+    asset_id,
+    symbol,
+    asset_type,
+    asset_subtype,
+    name,
+) -> bool:
+    if str(asset_type or "").lower() in {"etf", "fund", "mutual_fund", "index"}:
+        return True
+    identity = " ".join(
+        str(value or "")
+        for value in (asset_id, symbol, asset_subtype, name)
+    ).lower()
+    padded = f" {identity} "
+    return any(
+        marker in padded
+        for marker in (
+            " etf ",
+            " exchange traded fund ",
+            " exchange-traded fund ",
+            " closed-end fund ",
+            " physical uranium trust ",
+        )
+    )
 
 
 def _required_metric_fields_missing(conn, asset_id: str) -> list[str]:

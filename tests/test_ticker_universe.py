@@ -214,6 +214,30 @@ def test_stream_subscriptions_do_not_duplicate_underlying_when_it_is_held_direct
     ]
 
 
+def test_known_cdr_symbol_resolves_underlying_without_descriptive_metadata():
+    conn = make_new_universe_conn()
+    conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, exchange_code, asset_type, track)
+        VALUES ('BKNG.TO', 'BKNG.TO', 'XTSE', 'stock', TRUE)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'BKNG.TO', TRUE, 'position')
+        """
+    )
+
+    repo = TickerUniverseRepository(conn)
+
+    assert repo.earnings_asset_ids() == ["BKNG"]
+    assert [(item.symbol, item.source_scope) for item in repo.stream_subscriptions()] == [
+        ("BKNG", "portfolio_underlying"),
+        ("BKNG.TO", "portfolio"),
+    ]
+
+
 def test_sync_portfolio_tickers_from_positions_handles_qty_and_ignores_zero_positions():
     conn = make_new_universe_conn()
     conn.execute(

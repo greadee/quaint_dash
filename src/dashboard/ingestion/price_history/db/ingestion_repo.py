@@ -227,9 +227,30 @@ class PriceHistoryIngestionRepository:
 
     def get_latest_dataset_date(self, asset_id: str, dataset: str) -> Optional[date]:
         if dataset == DATASET_PRICE_DAILY:
-            return self.latest_price_date(asset_id)
-        if dataset == DATASET_DIVIDENDS:
-            return self.latest_dividend_date(asset_id)
-        if dataset == DATASET_SPLITS:
-            return self.latest_split_date(asset_id)
-        raise ValueError(f"unsupported dataset: {dataset}")
+            stored_date = self.latest_price_date(asset_id)
+        elif dataset == DATASET_DIVIDENDS:
+            stored_date = self.latest_dividend_date(asset_id)
+        elif dataset == DATASET_SPLITS:
+            stored_date = self.latest_split_date(asset_id)
+        else:
+            raise ValueError(f"unsupported dataset: {dataset}")
+
+        sync_row = self.conn.execute(
+            """
+            SELECT CASE
+                WHEN last_successful_date IS NULL THEN backfill_end_date
+                WHEN backfill_end_date IS NULL THEN last_successful_date
+                ELSE GREATEST(last_successful_date, backfill_end_date)
+            END
+            FROM asset_sync_state
+            WHERE asset_id = ?
+              AND domain = ?
+              AND dataset = ?
+              AND backfill_status = ?
+              AND needs_repair = FALSE
+            """,
+            [asset_id, DOMAIN_MARKET, dataset, BACKFILL_DONE],
+        ).fetchone()
+        covered_date = sync_row[0] if sync_row else None
+        dates = [value for value in (stored_date, covered_date) if value is not None]
+        return max(dates) if dates else None

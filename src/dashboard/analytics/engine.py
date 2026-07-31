@@ -305,6 +305,22 @@ class AnalyticsEngine:
             fcf_metrics_applicable = company_valuation_applicable and not _fcf_metrics_not_applicable(
                 self.repo.asset_profile(valuation_asset_id)
             )
+            if (
+                fcf_metrics_applicable
+                and (
+                    self.repo.latest_free_cash_flow_is_nonpositive(
+                        valuation_asset_id
+                    )
+                    or (
+                        self.repo.latest_free_cash_flow(valuation_asset_id)
+                        is None
+                        and self.repo.current_price_uses_stored_fallback(
+                            valuation_asset_id
+                        )
+                    )
+                )
+            ):
+                fcf_metrics_applicable = False
             latest_price = (
                 self.repo.latest_price(valuation_asset_id) or position.latest_price
                 if valuation_asset_id != asset_id

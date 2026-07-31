@@ -371,8 +371,26 @@ def scan_payload(source: str, data: Any, findings: list[Finding], path: str = "$
                 findings.append(Finding("error", source, "critical metric is null", {"path": next_path}))
             if key == "missing_inputs" and value and not _missing_inputs_are_not_applicable(data, value):
                 findings.append(Finding("error", source, "missing inputs reported", {"path": next_path, "value": value}))
-            if key in {"warnings", "assumptions"} and value:
-                findings.append(Finding("warning", source, f"{key} reported", {"path": next_path, "value": value}))
+            if key == "assumptions":
+                # Methodology assumptions are explanatory metadata, not health defects.
+                continue
+            if key == "warnings":
+                actionable = [
+                    item
+                    for item in (value if isinstance(value, list) else [value])
+                    if isinstance(item, str)
+                    and any(marker in item.lower() for marker in TEXT_FAILURE_MARKERS)
+                ]
+                if actionable:
+                    findings.append(
+                        Finding(
+                            "warning",
+                            source,
+                            "actionable warnings reported",
+                            {"path": next_path, "value": actionable},
+                        )
+                    )
+                continue
             if isinstance(value, str) and any(marker in value.lower() for marker in TEXT_FAILURE_MARKERS):
                 findings.append(Finding("warning", source, "failure-like text reported", {"path": next_path, "value": value}))
             scan_payload(source, value, findings, next_path)

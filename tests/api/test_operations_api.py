@@ -3,9 +3,15 @@ from datetime import date, timedelta
 from threading import Lock
 
 from fastapi.testclient import TestClient
+import pandas as pd
 import pytest
 
-from dashboard.api.data_readiness_background import DataReadinessConfig, DataReadinessWorker
+from dashboard.api.data_readiness_background import (
+    DataReadinessConfig,
+    DataReadinessWorker,
+    _latest_yfinance_statement,
+    _valuation_targets,
+)
 from dashboard.api.ingestion_background import IngestionBackgroundConfig, IngestionBackgroundWorker
 from dashboard.api.market_freshness_background import MarketFreshnessConfig, MarketFreshnessWorker
 from dashboard.api.app import create_app
@@ -897,7 +903,7 @@ def test_market_freshness_status_defaults_disabled(tmp_path):
         "poll_interval_seconds": 900,
         "include_watchlist": False,
         "lookback_days": 7,
-        "max_symbols_per_tick": 5,
+        "max_symbols_per_tick": 25,
     }
 
 
@@ -995,6 +1001,14 @@ def test_market_freshness_tick_skips_fresh_current_prices(tmp_path, monkeypatch)
         VALUES ('AAPL', 'AAPL', 121.0, 'yfinance', 'regular', now(), now())
         """
     )
+    db.conn.execute(
+        """
+        INSERT INTO asset_quote_daily(
+            asset_id, date, close, adj_close, ing_source
+        )
+        VALUES ('AAPL', current_date, 121.0, 121.0, 'yfinance')
+        """
+    )
     db.conn.close()
 
     class FailingYahooProvider:
@@ -1015,6 +1029,157 @@ def test_market_freshness_tick_skips_fresh_current_prices(tmp_path, monkeypatch)
     assert asyncio.run(worker.tick_poll()) == 0
     assert worker.status()["last_subscription_count"] == 1
     assert worker.status()["last_error"] is None
+
+
+def test_market_freshness_repairs_fresh_current_price_with_mismatched_daily_quote(
+    tmp_path,
+    monkeypatch,
+):
+    db_path = tmp_path / "api.db"
+    db = DB(db_path)
+    init_db(db)
+    db.conn.execute(
+        "INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')"
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy)
+        VALUES ('MSFT.TO', 'MSFT.TO', 'stock', 'CAD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'MSFT.TO', TRUE, 'position')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO current_asset_price(
+            asset_id, symbol, price, provider, market_session,
+            trade_ts_utc, updated_at
+        )
+        VALUES (
+            'MSFT.TO', 'MSFT.TO', 31.59, 'yfinance', 'regular',
+            now(), now()
+        )
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset_quote_daily(
+            asset_id, date, close, adj_close, ing_source
+        )
+        VALUES ('MSFT.TO', current_date, 27.40, 27.40, 'stale')
+        """
+    )
+    db.conn.close()
+
+    class FakeYahooProvider:
+        def fetch_price_daily(self, asset_id, start_date, end_date):
+            assert asset_id == "MSFT.TO"
+            return [
+                PriceDailyRow(
+                    asset_id=asset_id,
+                    price_date=date.today(),
+                    open_price=None,
+                    high_price=None,
+                    low_price=None,
+                    close_price=31.59,
+                    adj_close_price=31.59,
+                    volume=None,
+                    source="yfinance",
+                )
+            ]
+
+    monkeypatch.setattr(
+        "dashboard.api.market_freshness_background.YahooPriceProvider",
+        FakeYahooProvider,
+    )
+    worker = MarketFreshnessWorker(
+        db_path,
+        Lock(),
+        MarketFreshnessConfig(enabled=True, max_symbols_per_tick=10),
+    )
+
+    assert asyncio.run(worker.tick_poll()) == 1
+
+    db = DB(db_path)
+    repaired = db.conn.execute(
+        """
+        SELECT close, adj_close, ing_source
+        FROM asset_quote_daily
+        WHERE asset_id = 'MSFT.TO'
+          AND date = current_date
+        """
+    ).fetchone()
+    db.conn.close()
+    assert repaired == (31.59, 31.59, "yfinance")
+
+
+def test_market_freshness_uses_last_stored_close_when_live_provider_has_no_rows(
+    tmp_path,
+    monkeypatch,
+):
+    db_path = tmp_path / "api.db"
+    db = DB(db_path)
+    init_db(db)
+    db.conn.execute(
+        "INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')"
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy)
+        VALUES ('RNW.TO', 'RNW.TO', 'stock', 'CAD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'RNW.TO', TRUE, 'position')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset_quote_daily(
+            asset_id, date, close, adj_close, volume, ing_source
+        )
+        VALUES ('RNW.TO', DATE '2023-10-04', 13.20, 13.20, 500, 'yfinance')
+        """
+    )
+    db.conn.close()
+
+    class EmptyYahooProvider:
+        def fetch_price_daily(self, asset_id, start_date, end_date):
+            return []
+
+    monkeypatch.setattr(
+        "dashboard.api.market_freshness_background.YahooPriceProvider",
+        EmptyYahooProvider,
+    )
+    worker = MarketFreshnessWorker(
+        db_path,
+        Lock(),
+        MarketFreshnessConfig(enabled=True, max_symbols_per_tick=10),
+    )
+
+    assert asyncio.run(worker.tick_poll()) == 1
+
+    db = DB(db_path)
+    current = db.conn.execute(
+        """
+        SELECT price, provider, market_session, CAST(trade_ts_utc AS DATE)
+        FROM current_asset_price
+        WHERE asset_id = 'RNW.TO'
+        """
+    ).fetchone()
+    db.conn.close()
+    assert current == (
+        13.20,
+        "stored_close_fallback",
+        "previous_close",
+        date(2023, 10, 4),
+    )
 
 
 def test_data_readiness_status_defaults_disabled(tmp_path):
@@ -1043,6 +1208,69 @@ def test_data_readiness_status_defaults_disabled(tmp_path):
         "years": 10,
         "min_price_rows": 3,
     }
+
+
+def test_yfinance_statement_fallback_uses_annual_and_older_finite_values():
+    class FakeTicker:
+        ticker = "MELI"
+
+        def get_cash_flow(self, *, freq):
+            if freq == "quarterly":
+                return pd.DataFrame()
+            return pd.DataFrame(
+                {
+                    "2025-12-31": [float("nan"), float("nan")],
+                    "2024-12-31": [123.0, 150.0],
+                },
+                index=["FreeCashFlow", "OperatingCashFlow"],
+            )
+
+    result = _latest_yfinance_statement(
+        FakeTicker(),
+        "get_cash_flow",
+        {
+            "freeCashFlow": ("FreeCashFlow",),
+            "operatingCashFlow": ("OperatingCashFlow",),
+        },
+    )
+
+    assert result == {
+        "freeCashFlow": 123.0,
+        "operatingCashFlow": 150.0,
+    }
+
+
+def test_readiness_does_not_treat_company_description_funds_as_a_fund(tmp_path):
+    db_path = tmp_path / "api.db"
+    db = DB(db_path)
+    init_db(db)
+    db.conn.execute(
+        "INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')"
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset(
+            asset_id, symbol, asset_type, ccy, name, description
+        )
+        VALUES (
+            'MELI', 'MELI', 'stock', 'USD', 'MercadoLibre, Inc.',
+            'Customers can transfer funds via web and mobile applications.'
+        )
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'MELI', TRUE, 'position')
+        """
+    )
+
+    targets = _valuation_targets(db.conn)
+    db.conn.close()
+
+    assert [(target.portfolio_id, target.asset_id) for target in targets] == [
+        (1, "MELI")
+    ]
 
 
 def test_data_readiness_tick_schedules_missing_underlying_for_cdr(tmp_path, monkeypatch):
@@ -1165,9 +1393,15 @@ def test_data_readiness_does_not_reschedule_terminal_provider_gaps(
     )
     db.conn.close()
 
+    hydration_calls = []
+
+    def unavailable_backup(conn, asset_id):
+        hydration_calls.append(asset_id)
+        return False
+
     monkeypatch.setattr(
         "dashboard.api.data_readiness_background._hydrate_yfinance_summary",
-        lambda conn, asset_id: False,
+        unavailable_backup,
     )
     monkeypatch.setattr(
         CommandApiService,
@@ -1185,6 +1419,7 @@ def test_data_readiness_does_not_reschedule_terminal_provider_gaps(
 
     assert result["scheduled_jobs"] == 0
     assert result["pending_jobs"] == 0
+    assert hydration_calls == ["AMD"]
     db = DB(db_path)
     statuses = db.conn.execute(
         """

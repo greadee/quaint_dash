@@ -365,6 +365,31 @@ _CDR_SYMBOL_ALIASES = {
     "VISA": "V",
 }
 
+_KNOWN_CDR_BASE_SYMBOLS = {
+    "AAPL",
+    "AMD",
+    "AMZN",
+    "ANET",
+    "ASML",
+    "AVGO",
+    "BKNG",
+    "CEG",
+    "GEV",
+    "GOOG",
+    "ISRG",
+    "LLY",
+    "META",
+    "MSFT",
+    "MU",
+    "NOW",
+    "NVDA",
+    "NVO",
+    "SPGI",
+    "TSLA",
+    "UBER",
+    "V",
+}
+
 
 def _cdr_underlying_symbol(
     *,
@@ -378,8 +403,16 @@ def _cdr_underlying_symbol(
         str(value or "")
         for value in (asset_id, symbol, asset_subtype, name, description)
     ).lower()
-    if "cdr" not in text and "depositary receipt" not in text and "depository receipt" not in text:
-        return None
-
     base = (symbol or asset_id).split(".", maxsplit=1)[0].upper()
-    return _CDR_SYMBOL_ALIASES.get(base, base) or None
+    base = _CDR_SYMBOL_ALIASES.get(base, base)
+    if (
+        "cdr" not in text
+        and "depositary receipt" not in text
+        and "depository receipt" not in text
+        and not (
+            (symbol or asset_id).upper().endswith((".TO", ".NE"))
+            and base in _KNOWN_CDR_BASE_SYMBOLS
+        )
+    ):
+        return None
+    return base or None
