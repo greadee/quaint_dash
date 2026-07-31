@@ -810,7 +810,7 @@ CREATE TABLE IF NOT EXISTS ingestion_run (
 
 
 CREATE TABLE IF NOT EXISTS fundamental_subscription (
-    asset_id TEXT PRIMARY KEY,
+    asset_id TEXT NOT NULL,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
 
     refresh_interval_days INTEGER NOT NULL DEFAULT 7,
@@ -824,9 +824,7 @@ CREATE TABLE IF NOT EXISTS fundamental_subscription (
     subscription_source TEXT NOT NULL DEFAULT 'manual',
 
     created_at TIMESTAMP NOT NULL DEFAULT now(),
-    updated_at TIMESTAMP NOT NULL DEFAULT now(),
-
-    FOREIGN KEY(asset_id) REFERENCES asset(asset_id)
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
 ALTER TABLE fundamental_subscription
@@ -852,8 +850,7 @@ CREATE TABLE IF NOT EXISTS fundamental_sync_state (
     PRIMARY KEY (asset_id, dataset, sync_mode)
 );
 
-CREATE INDEX IF NOT EXISTS idx_fundamental_subscription_due
-ON fundamental_subscription (is_active, next_refresh_at);
+DROP INDEX IF EXISTS idx_fundamental_subscription_due;
 
 CREATE INDEX IF NOT EXISTS idx_fundamental_sync_state_asset
 ON fundamental_sync_state (asset_id);

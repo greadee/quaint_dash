@@ -76,6 +76,26 @@ class TickerUniverseRepository:
 
         return [row[0] for row in rows]
 
+    def earnings_asset_ids(self, include_watchlist: bool = True) -> list[str]:
+        """Return source symbols that can carry company-level earnings events."""
+        asset_ids = self.ingestible_asset_ids(
+            include_watchlist=include_watchlist,
+            asset_types=("stock", "adr"),
+        )
+        targets: set[str] = set()
+        for asset_id, symbol, _exchange, asset_subtype, name, description in (
+            self._asset_symbol_rows(asset_ids)
+        ):
+            underlying = _cdr_underlying_symbol(
+                asset_id=asset_id,
+                symbol=symbol,
+                asset_subtype=asset_subtype,
+                name=name,
+                description=description,
+            )
+            targets.add(underlying or asset_id)
+        return sorted(targets)
+
     def sync_portfolio_tickers_from_positions(self) -> int:
         if not self._table_exists("portfolio_ticker"):
             return 0

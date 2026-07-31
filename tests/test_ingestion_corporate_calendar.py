@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 
 import duckdb
+import pandas as pd
 
 from dashboard.ingestion.fundamentals.schema import ensure_fundamental_phase1_schema
 from dashboard.ingestion.corporate_calendar.models import (
@@ -11,6 +12,8 @@ from dashboard.ingestion.corporate_calendar.service import (
     CorporateCalendarIngestionService,
 )
 from dashboard.ingestion.corporate_calendar.provider_fmp import FmpEntitlementError
+from dashboard.ingestion.corporate_calendar.provider_yahoo import YahooEarningsProvider
+from dashboard.ingestion.rate_limits import InMemoryRateLimiter, RateLimitPolicy
 
 
 class FakeCorporateProvider:
@@ -68,6 +71,44 @@ class EntitlementFailingProvider(FakeCorporateProvider):
         raise FmpEntitlementError(
             "FMP HTTP error 402: plan does not include this corporate endpoint"
         )
+
+
+class PartialEarningsProvider(FakeCorporateProvider):
+    def fetch_earnings_for_symbol(self, asset_id, limit=16):
+        return [
+            CorporateCalendarEventRow(
+                asset_id=asset_id,
+                earnings_date=date.today() - timedelta(days=1),
+                fiscal_year=2026,
+                fiscal_quarter=1,
+                time="amc",
+                eps_estimated=None,
+                eps_actual=1.7,
+                revenue_estimated=None,
+                revenue_actual=95.0,
+                source="primary",
+            )
+        ]
+
+
+class BackupEarningsProvider:
+    source = "backup"
+
+    def fetch_earnings_for_symbol(self, asset_id, limit=16):
+        return [
+            CorporateCalendarEventRow(
+                asset_id=asset_id,
+                earnings_date=date.today() - timedelta(days=1),
+                fiscal_year=None,
+                fiscal_quarter=None,
+                time=None,
+                eps_estimated=1.5,
+                eps_actual=1.7,
+                revenue_estimated=None,
+                revenue_actual=None,
+                source="backup",
+            )
+        ]
 
 
 def make_conn():
@@ -222,6 +263,263 @@ def test_stage_2_due_earnings_update_appends_actuals_and_financials():
     """).fetchone()
 
     assert stmt == ("income", 2026, 1)
+
+
+def test_yahoo_earnings_provider_parses_estimate_and_reported_eps(monkeypatch):
+    frame = pd.DataFrame(
+        {
+            "EPS Estimate": [3.12, 3.05],
+            "Reported EPS": [3.18, None],
+        },
+        index=pd.to_datetime(["2026-07-29", "2026-10-28"], utc=True),
+    )
+
+    class FakeTicker:
+        def get_earnings_dates(self, limit):
+            assert limit == 16
+            return frame
+
+    monkeypatch.setattr(
+        "dashboard.ingestion.corporate_calendar.provider_yahoo.yf.Ticker",
+        lambda symbol: FakeTicker(),
+    )
+    provider = YahooEarningsProvider(
+        rate_limiter=InMemoryRateLimiter(),
+        rate_limit_policy=RateLimitPolicy(
+            provider="test-yahoo-earnings",
+            calls=10,
+            period_seconds=1,
+        ),
+    )
+
+    rows = provider.fetch_earnings_for_symbol("MSFT", limit=16)
+
+    assert [(row.asset_id, row.earnings_date) for row in rows] == [
+        ("MSFT", date(2026, 7, 29)),
+        ("MSFT", date(2026, 10, 28)),
+    ]
+    assert rows[0].eps_estimated == 3.12
+    assert rows[0].eps_actual == 3.18
+    assert rows[0].source == "yfinance_earnings_backup"
+
+
+def test_missing_surprise_job_merges_backup_without_erasing_primary_values():
+    conn = make_conn()
+    ensure_fundamental_phase1_schema(conn)
+    service = CorporateCalendarIngestionService(
+        conn,
+        provider=PartialEarningsProvider(),
+        backup_earnings_provider=BackupEarningsProvider(),
+    )
+    earnings_date = date.today() - timedelta(days=1)
+    conn.execute(
+        """
+        INSERT INTO earnings_calendar_event(
+            asset_id, earnings_date, fiscal_year, fiscal_quarter,
+            eps_actual, revenue_actual, source
+        )
+        VALUES ('AAPL', ?, 2026, 1, 1.7, 95.0, 'primary')
+        """,
+        [earnings_date],
+    )
+    conn.execute(
+        """
+        INSERT INTO earnings_calendar_event(
+            asset_id, earnings_date, fiscal_year, fiscal_quarter,
+            eps_estimated, eps_actual, revenue_estimated, revenue_actual, source
+        )
+        VALUES ('AAPL', ?, 2025, 4, 1.4, 1.6, 88.0, 91.0, 'ranking_local_estimate')
+        """,
+        [earnings_date - timedelta(days=90)],
+    )
+
+    job_ids = service.schedule_missing_earnings_surprise_updates(max_assets=10)
+    processed = service.process_jobs(max_jobs=1)
+    repeated = service.schedule_missing_earnings_surprise_updates(max_assets=10)
+    row = conn.execute(
+        """
+        SELECT eps_estimated, eps_actual, revenue_actual, source
+        FROM earnings_calendar_event
+        WHERE asset_id = 'AAPL' AND earnings_date = ?
+        """,
+        [earnings_date],
+    ).fetchone()
+
+    assert len(job_ids) == 1
+    assert processed == 1
+    assert repeated == []
+    assert row == (1.5, 1.7, 95.0, "primary+backup")
+
+
+def test_latest_incomplete_earnings_event_is_not_masked_by_older_complete_event():
+    class LatestIncompleteEarningsProvider(PartialEarningsProvider):
+        def fetch_earnings_for_symbol(self, symbol: str, limit: int = 16):
+            latest = super().fetch_earnings_for_symbol(symbol, limit)
+            latest.append(
+                CorporateCalendarEventRow(
+                    asset_id=symbol,
+                    earnings_date=date.today() - timedelta(days=91),
+                    fiscal_year=2025,
+                    fiscal_quarter=4,
+                    eps_estimated=1.4,
+                    eps_actual=1.6,
+                    revenue_estimated=88.0,
+                    revenue_actual=91.0,
+                    source="primary",
+                )
+            )
+            return latest
+
+    class TrackingBackupEarningsProvider(BackupEarningsProvider):
+        def __init__(self):
+            self.calls = 0
+
+        def fetch_earnings_for_symbol(self, asset_id, limit=16):
+            self.calls += 1
+            return super().fetch_earnings_for_symbol(asset_id, limit)
+
+    conn = make_conn()
+    ensure_fundamental_phase1_schema(conn)
+    backup_provider = TrackingBackupEarningsProvider()
+    service = CorporateCalendarIngestionService(
+        conn,
+        provider=LatestIncompleteEarningsProvider(),
+        backup_earnings_provider=backup_provider,
+    )
+
+    job_ids = service.schedule_missing_earnings_surprise_updates(max_assets=10)
+    processed = service.process_jobs(max_jobs=1)
+    latest = conn.execute(
+        """
+        SELECT eps_estimated, eps_actual, source
+        FROM earnings_calendar_event
+        WHERE asset_id = 'AAPL'
+          AND earnings_date <= current_date
+        ORDER BY earnings_date DESC
+        LIMIT 1
+        """
+    ).fetchone()
+
+    assert len(job_ids) == 1
+    assert processed == 1
+    assert backup_provider.calls == 1
+    assert latest[:2] == (1.5, 1.7)
+
+
+def test_missing_surprise_trigger_picks_up_future_subscribed_holdings():
+    conn = make_conn()
+    ensure_fundamental_phase1_schema(conn)
+    service = CorporateCalendarIngestionService(
+        conn,
+        provider=PartialEarningsProvider(),
+        backup_earnings_provider=BackupEarningsProvider(),
+    )
+    conn.execute(
+        """
+        CREATE TABLE portfolio_ticker (
+            portfolio_id BIGINT,
+            asset_id TEXT,
+            is_active BOOLEAN,
+            source TEXT,
+            created_at TIMESTAMP DEFAULT now(),
+            updated_at TIMESTAMP DEFAULT now(),
+            PRIMARY KEY(portfolio_id, asset_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'AAPL', TRUE, 'position')
+        """
+    )
+
+    initial_ids = service.schedule_missing_earnings_surprise_updates(max_assets=10)
+    initial_subscription = conn.execute(
+        """
+        SELECT is_active, subscription_source
+        FROM fundamental_subscription
+        WHERE asset_id = 'AAPL'
+        """
+    ).fetchone()
+
+    conn.execute(
+        """
+        INSERT INTO asset(asset_id, asset_type, ccy, track)
+        VALUES ('MSFT', 'stock', 'USD', TRUE)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'MSFT', TRUE, 'position')
+        """
+    )
+    future_ids = service.schedule_missing_earnings_surprise_updates(max_assets=10)
+    jobs = conn.execute(
+        """
+        SELECT asset_id, job_type, dataset, status
+        FROM ingestion_job
+        ORDER BY job_id
+        """
+    ).fetchall()
+
+    assert len(initial_ids) == 1
+    assert initial_subscription == (True, "ticker_universe")
+    assert len(future_ids) == 1
+    assert jobs == [
+        ("AAPL", "earnings_backup", "earnings_actuals", "pending"),
+        ("MSFT", "earnings_backup", "earnings_actuals", "pending"),
+    ]
+
+
+def test_missing_surprise_trigger_ignores_fmp_statement_entitlement_deactivation():
+    conn = make_conn()
+    ensure_fundamental_phase1_schema(conn)
+    service = CorporateCalendarIngestionService(conn, provider=PartialEarningsProvider())
+    conn.execute(
+        """
+        INSERT INTO fundamental_subscription(
+            asset_id, is_active, next_refresh_at, subscription_source
+        )
+        VALUES ('AAPL', FALSE, TIMESTAMP '9999-12-31', 'ticker_universe')
+        """
+    )
+
+    job_ids = service.schedule_missing_earnings_surprise_updates(max_assets=10)
+
+    assert len(job_ids) == 1
+    assert conn.execute(
+        """
+        SELECT asset_id, job_type, dataset, status
+        FROM ingestion_job
+        WHERE job_id = ?
+        """,
+        [job_ids[0]],
+    ).fetchone() == ("AAPL", "earnings_backup", "earnings_actuals", "pending")
+
+
+def test_forced_missing_surprise_trigger_can_retry_after_same_day_incomplete_backup():
+    conn = make_conn()
+    ensure_fundamental_phase1_schema(conn)
+    service = CorporateCalendarIngestionService(
+        conn,
+        provider=PartialEarningsProvider(),
+        backup_earnings_provider=None,
+    )
+
+    first_ids = service.schedule_missing_earnings_surprise_updates(max_assets=10)
+    assert service.process_jobs(max_jobs=1) == 1
+
+    normal_ids = service.schedule_missing_earnings_surprise_updates(max_assets=10)
+    forced_ids = service.schedule_missing_earnings_surprise_updates(
+        max_assets=10,
+        force=True,
+    )
+
+    assert len(first_ids) == 1
+    assert normal_ids == []
+    assert len(forced_ids) == 1
 
 
 def test_stage_3_backfill_enqueues_earnings_and_statement_jobs():

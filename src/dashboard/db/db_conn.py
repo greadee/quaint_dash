@@ -12,6 +12,7 @@ from threading import Lock
 
 import duckdb
 
+from dashboard.ingestion.fundamentals.schema import ensure_fundamental_phase1_schema
 from dashboard.ingestion.stock_catalog import seed_stock_catalog
 
 _CONNECT_LOCK = Lock()
@@ -63,6 +64,7 @@ def init_db(db: DB):
     sql = schema_path.read_text(encoding="utf-8")
     db.conn.execute(sql)
     _ensure_mutable_signal_cache_heaps(db.conn)
+    ensure_fundamental_phase1_schema(db.conn)
     _reconcile_ingestion_job_sequence(db.conn)
 
     # Streaming is a first-class dashboard command, so fresh databases must

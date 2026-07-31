@@ -73,10 +73,7 @@ class CorporateCalendarIngestionRepository:
         self.conn.execute(qry.ENSURE_SYNC_STATE, [asset_id, DOMAIN_CORPORATE, dataset])
 
     def get_tracked_stock_asset_ids(self) -> list[str]:
-        return self.ticker_universe.ingestible_asset_ids(
-            include_watchlist=True,
-            asset_types=("stock", "adr"),
-        )
+        return self.ticker_universe.earnings_asset_ids(include_watchlist=True)
 
     def claim_next_pending_job(self) -> Optional[CorporateIngestionJob]:
         row = self.conn.execute(

@@ -184,6 +184,10 @@ class IngestionCommands:
             if asset_id is None:
                 total += self.schedule_due_corporate_calendar_refresh()
                 total += self.schedule_due_corporate_fundamental_updates(max_assets=max_assets)
+            total += self.schedule_missing_earnings_surprise_updates(
+                max_assets=max_assets,
+                asset_id=asset_id,
+            )
             total += self.schedule_due_fundamental_backfills(
                 max_assets=max_assets,
                 asset_id=asset_id,
@@ -214,6 +218,10 @@ class IngestionCommands:
             if asset_id is None:
                 total += self.schedule_due_corporate_calendar_refresh()
                 total += self.schedule_due_corporate_fundamental_updates(max_assets=max_assets)
+            total += self.schedule_missing_earnings_surprise_updates(
+                max_assets=max_assets,
+                asset_id=asset_id,
+            )
             total += self.schedule_due_fundamental_backfills(
                 max_assets=max_assets,
                 asset_id=asset_id,
@@ -313,6 +321,7 @@ class IngestionCommands:
         )
         total += self.schedule_due_corporate_calendar_refresh()
         total += self.schedule_due_corporate_fundamental_updates(max_assets=max_assets)
+        total += self.schedule_missing_earnings_surprise_updates(max_assets=max_assets)
         total += self.schedule_due_fundamental_refreshes(max_assets=max_assets)
         total += self.schedule_due_sentiment_snapshot_refreshes(max_assets=max_assets)
         return total
@@ -964,6 +973,11 @@ class IngestionCommands:
             stale_only=stale_only,
         ):
             subscription.subscribe_asset(asset_id, subscription_source="ranking")
+            total += self.schedule_missing_earnings_surprise_updates(
+                max_assets=1,
+                asset_id=asset_id,
+                force=missing_only,
+            )
             total += self.schedule_due_fundamental_backfills(max_assets=1, asset_id=asset_id)
             total += self.schedule_due_fundamental_refreshes(max_assets=1, asset_id=asset_id)
         total += self.schedule_due_corporate_calendar_refresh()
@@ -1033,13 +1047,25 @@ class IngestionCommands:
             events = self.conn.execute(
                 """
                 SELECT COUNT(*)
-                FROM earnings_calendar_event
-                WHERE asset_id = ?
-                  AND (eps_actual IS NOT NULL OR revenue_actual IS NOT NULL)
+                FROM (
+                    SELECT eps_estimated, eps_actual, revenue_estimated, revenue_actual
+                    FROM earnings_calendar_event
+                    WHERE asset_id = ?
+                      AND earnings_date <= current_date
+                    ORDER BY earnings_date DESC
+                    LIMIT 1
+                ) latest
+                WHERE (
+                        (eps_estimated IS NOT NULL AND eps_actual IS NOT NULL)
+                        OR (
+                            revenue_estimated IS NOT NULL
+                            AND revenue_actual IS NOT NULL
+                        )
+                  )
                 """,
                 [asset_id],
             ).fetchone()
-            return int(statements[0]) < 2 and int(events[0]) == 0
+            return int(statements[0]) < 2 or int(events[0]) == 0
         if factor == "institutional_buying":
             row = self.conn.execute(
                 """
@@ -1218,6 +1244,22 @@ class IngestionCommands:
             service.schedule_due_fundamental_subscription_backfills(
                 max_assets=max_assets,
                 asset_id=asset_id,
+            )
+        )
+
+    def schedule_missing_earnings_surprise_updates(
+        self,
+        max_assets: int = 25,
+        asset_id: str | None = None,
+        force: bool = False,
+    ) -> int:
+        """Schedule backup-source earnings repairs for current subscribed assets."""
+        service = CorporateCalendarIngestionService(self.conn)
+        return len(
+            service.schedule_missing_earnings_surprise_updates(
+                max_assets=max_assets,
+                asset_id=asset_id,
+                force=force,
             )
         )
 

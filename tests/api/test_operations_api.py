@@ -1419,7 +1419,7 @@ def test_ingestion_readiness_treats_successful_financial_statement_sync_as_check
     assert by_requirement["income_statements"]["detail"] == "coverage checked; no statements returned"
 
 
-def test_stock_ranking_readiness_reports_factor_gaps(tmp_path):
+def test_stock_ranking_readiness_reports_source_backed_earnings_gap(tmp_path):
     db_path = tmp_path / "api.db"
     app = create_app(db_path)
     db = DB(db_path)
@@ -1452,15 +1452,15 @@ def test_stock_ranking_readiness_reports_factor_gaps(tmp_path):
     assert response.status_code == 200
     payload = response.json()
     assert payload["total"] == 1
-    assert payload["ready_count"] == 1
+    assert payload["ready_count"] == 0
     item = payload["items"][0]
     by_requirement = {requirement["key"]: requirement for requirement in item["requirements"]}
     assert by_requirement["share_price_momentum"]["ready"] is True
     assert by_requirement["news_sentiment"]["ready"] is True
     assert by_requirement["retail_sentiment"]["ready"] is True
-    assert by_requirement["earnings_momentum"]["ready"] is True
+    assert by_requirement["earnings_momentum"]["ready"] is False
     assert by_requirement["institutional_buying"]["ready"] is True
-    assert item["missing"] == []
+    assert item["missing"] == ["Earnings momentum"]
 
 
 def test_ranking_schedule_queues_missing_catalog_stock_inputs(tmp_path):
@@ -1636,7 +1636,8 @@ def test_retry_failed_ingestion_jobs_retries_run_budget_failures(tmp_path):
         VALUES
             (1, 'AAPL', 'corporate', 'refresh', 'financial_statements', 'failed', 10, 'FMP HTTP error 402: plan does not include this corporate endpoint'),
             (2, 'AAPL', 'market', 'refresh', 'price_daily', 'failed', 10, 'yfinance call budget exhausted (500 calls this run)'),
-            (3, 'AAPL', 'market', 'refresh', 'splits', 'failed', 10, 'temporary provider reset')
+            (3, 'AAPL', 'market', 'refresh', 'splits', 'failed', 10, 'temporary provider reset'),
+            (4, 'AAPL', 'corporate', 'earnings_backup', 'earnings_actuals', 'failed', 10, 'primary earnings provider failed: FMP HTTP error 402; backup earnings provider failed: parser unavailable')
         """
     )
     db.conn.close()
@@ -1649,9 +1650,9 @@ def test_retry_failed_ingestion_jobs_retries_run_budget_failures(tmp_path):
         jobs = client.get("/api/v1/ingestion/jobs")
 
     assert retry.status_code == 200
-    assert retry.json()["result"] == {"retried_jobs": 2}
+    assert retry.json()["result"] == {"retried_jobs": 3}
     statuses = {row["job_id"]: row["status"] for row in jobs.json()}
-    assert statuses == {1: "failed", 2: "pending", 3: "pending"}
+    assert statuses == {1: "failed", 2: "pending", 3: "pending", 4: "pending"}
 
 
 def test_clear_ingestion_history_removes_jobs_and_sync_state(tmp_path):

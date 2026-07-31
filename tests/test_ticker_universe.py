@@ -189,6 +189,7 @@ def test_stream_subscriptions_include_cdr_and_underlying_when_cdr_is_held():
         ("AMD", "AMD", "portfolio_underlying"),
         ("AMD.TO", "AMD.TO", "portfolio"),
     ]
+    assert TickerUniverseRepository(conn).earnings_asset_ids() == ["AMD"]
 
 
 def test_stream_subscriptions_do_not_duplicate_underlying_when_it_is_held_directly():

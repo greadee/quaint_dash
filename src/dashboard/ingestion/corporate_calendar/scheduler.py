@@ -13,6 +13,7 @@ from dashboard.ingestion.corporate_calendar.constants import (
     DOMAIN_CORPORATE,
     JOB_TYPE_BACKFILL,
     JOB_TYPE_CALENDAR_REFRESH,
+    JOB_TYPE_EARNINGS_BACKUP,
     JOB_TYPE_EARNINGS_UPDATE,
     JOB_TYPE_REFRESH,
     PRIORITY_CORPORATE_BACKFILL,
@@ -231,6 +232,92 @@ class CorporateCalendarScheduler:
 
         return job_ids
 
+    def schedule_missing_earnings_surprise_updates(
+        self,
+        max_assets: int = 25,
+        asset_id: str | None = None,
+        force: bool = False,
+    ) -> list[int]:
+        """Queue daily repair jobs when subscribed assets lack an actual/estimate pair."""
+        ensure_fundamental_phase1_schema(self.conn)
+        self._ensure_active_universe_subscriptions()
+
+        asset_ids = self.ticker_universe.earnings_asset_ids(include_watchlist=True)
+        if asset_id is not None:
+            normalized = asset_id.upper().strip()
+            asset_ids = [normalized] if normalized in set(asset_ids) else []
+        if not asset_ids:
+            return []
+
+        for earnings_asset_id in asset_ids:
+            self.conn.execute(
+                """
+                INSERT INTO asset(asset_id, asset_type, ccy, track)
+                VALUES (?, 'stock', 'USD', TRUE)
+                ON CONFLICT(asset_id) DO NOTHING
+                """,
+                [earnings_asset_id],
+            )
+
+        placeholders = ", ".join("?" for _ in asset_ids)
+        rows = self.conn.execute(
+            f"""
+            SELECT a.asset_id
+            FROM asset a
+            WHERE a.asset_id IN ({placeholders})
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM earnings_calendar_event e
+                    WHERE e.asset_id = a.asset_id
+                      AND e.earnings_date <= current_date
+                      AND e.earnings_date = (
+                            SELECT MAX(latest.earnings_date)
+                            FROM earnings_calendar_event latest
+                            WHERE latest.asset_id = a.asset_id
+                              AND latest.earnings_date <= current_date
+                      )
+                      AND (
+                            (e.eps_estimated IS NOT NULL AND e.eps_actual IS NOT NULL)
+                            OR (
+                                e.revenue_estimated IS NOT NULL
+                                AND e.revenue_actual IS NOT NULL
+                            )
+                      )
+              )
+            ORDER BY a.asset_id
+            LIMIT ?
+            """,
+            [*asset_ids, max_assets],
+        ).fetchall()
+
+        today = date.today()
+        start_date = today - timedelta(days=365 * 5)
+        job_ids: list[int] = []
+        for (due_asset_id,) in rows:
+            if self._has_open_dataset_job(
+                asset_id=due_asset_id,
+                dataset=DATASET_EARNINGS_ACTUALS,
+            ):
+                continue
+            if not force and self._has_open_or_today_job(
+                asset_id=due_asset_id,
+                dataset=DATASET_EARNINGS_ACTUALS,
+                job_type=JOB_TYPE_EARNINGS_BACKUP,
+                today=today,
+            ):
+                continue
+            job_ids.append(
+                self.repo.create_job(
+                    asset_id=due_asset_id,
+                    job_type=JOB_TYPE_EARNINGS_BACKUP,
+                    dataset=DATASET_EARNINGS_ACTUALS,
+                    priority=PRIORITY_EARNINGS_UPDATE,
+                    start_date=start_date,
+                    end_date=today,
+                )
+            )
+        return job_ids
+
     def schedule_due_fundamental_subscription_backfills(
         self,
         max_assets: int = 25,
@@ -312,39 +399,49 @@ class CorporateCalendarScheduler:
             return 0
 
         now = datetime.now()
-        rows = [
-            (
-                asset_id,
-                True,
-                DEFAULT_FUNDAMENTAL_REFRESH_INTERVAL_DAYS,
-                now,
-                "ticker_universe",
-                now,
-                now,
-            )
-            for asset_id in asset_ids
-        ]
-        self.conn.executemany(
-            """
-            INSERT INTO fundamental_subscription (
-                asset_id,
-                is_active,
-                refresh_interval_days,
-                next_refresh_at,
-                subscription_source,
-                created_at,
-                updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT (asset_id)
-            DO UPDATE SET
-                next_refresh_at = COALESCE(fundamental_subscription.next_refresh_at, excluded.next_refresh_at),
-                updated_at = excluded.updated_at
-            WHERE fundamental_subscription.is_active = TRUE
-            """,
-            rows,
-        )
-        return len(rows)
+        for asset_id in asset_ids:
+            existing = self.conn.execute(
+                """
+                SELECT is_active
+                FROM fundamental_subscription
+                WHERE asset_id = ?
+                LIMIT 1
+                """,
+                [asset_id],
+            ).fetchone()
+            if existing is None:
+                self.conn.execute(
+                    """
+                    INSERT INTO fundamental_subscription (
+                        asset_id,
+                        is_active,
+                        refresh_interval_days,
+                        next_refresh_at,
+                        subscription_source,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES (?, TRUE, ?, ?, 'ticker_universe', ?, ?)
+                    """,
+                    [
+                        asset_id,
+                        DEFAULT_FUNDAMENTAL_REFRESH_INTERVAL_DAYS,
+                        now,
+                        now,
+                        now,
+                    ],
+                )
+            elif bool(existing[0]):
+                self.conn.execute(
+                    """
+                    UPDATE fundamental_subscription
+                    SET next_refresh_at = COALESCE(next_refresh_at, ?),
+                        updated_at = ?
+                    WHERE asset_id = ?
+                    """,
+                    [now, now, asset_id],
+                )
+        return len(asset_ids)
 
     def _deactivate_entitlement_blocked_subscriptions(self) -> int:
         rows = self.conn.execute(
@@ -479,4 +576,22 @@ class CorporateCalendarScheduler:
             [asset_id, DOMAIN_CORPORATE, dataset, job_type],
         ).fetchone()
 
+        return int(row[0]) > 0
+
+    def _has_open_dataset_job(
+        self,
+        asset_id: str,
+        dataset: str,
+    ) -> bool:
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM ingestion_job
+            WHERE asset_id = ?
+              AND domain = ?
+              AND dataset = ?
+              AND status IN ('pending', 'running')
+            """,
+            [asset_id, DOMAIN_CORPORATE, dataset],
+        ).fetchone()
         return int(row[0]) > 0

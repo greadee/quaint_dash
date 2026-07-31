@@ -1178,8 +1178,13 @@ def test_stock_rankings_rank_buy_and_sell_signals_from_stored_metrics(tmp_path):
     assert all_response.status_code == 200
     catalog_row = next(item for item in all_payload["items"] if item["symbol"] == "AAAACAT")
     assert catalog_row["is_tracked"] is False
-    assert catalog_row["data_status"] == "complete"
-    assert catalog_row["missing_inputs"] == []
+    assert catalog_row["data_status"] == "partial"
+    assert catalog_row["missing_inputs"] == [
+        (
+            "Needs at least two stored income statements with revenue or EPS inputs.; "
+            "Needs an earnings event with actual and estimated EPS or revenue."
+        )
+    ]
     assert [component["name"] for component in catalog_row["components"]] == [
         "Share price momentum",
         "News sentiment",

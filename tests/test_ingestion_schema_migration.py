@@ -169,6 +169,14 @@ def test_init_db_adds_backfill_columns_to_existing_fundamental_subscription(tmp_
         )
         """
     )
+    conn.execute(
+        """
+        INSERT INTO fundamental_subscription(
+            asset_id, is_active, next_refresh_at, subscription_source
+        )
+        VALUES ('MSFT', FALSE, TIMESTAMP '9999-12-31', 'legacy')
+        """
+    )
     conn.close()
 
     db = DB(str(db_path))
@@ -178,3 +186,28 @@ def test_init_db_adds_backfill_columns_to_existing_fundamental_subscription(tmp_
 
     assert "last_backfill_requested_at" in columns
     assert "last_backfill_succeeded_at" in columns
+    assert db.conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM duckdb_constraints()
+        WHERE table_name = 'fundamental_subscription'
+          AND constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY', 'UNIQUE')
+        """
+    ).fetchone() == (0,)
+    assert db.conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM duckdb_indexes()
+        WHERE table_name = 'fundamental_subscription'
+        """
+    ).fetchone() == (0,)
+    migrated = db.conn.execute(
+        """
+        SELECT is_active, next_refresh_at, subscription_source
+        FROM fundamental_subscription
+        WHERE asset_id = 'MSFT'
+        """
+    ).fetchone()
+    assert migrated[0] is False
+    assert str(migrated[1]).startswith("9999-12-31")
+    assert migrated[2] == "legacy"

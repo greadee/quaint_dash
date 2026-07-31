@@ -186,13 +186,13 @@ INSERT INTO earnings_calendar_event (
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (asset_id, earnings_date)
 DO UPDATE SET
-    fiscal_year = excluded.fiscal_year,
-    fiscal_quarter = excluded.fiscal_quarter,
-    "time" = excluded."time",
-    eps_estimated = excluded.eps_estimated,
-    eps_actual = excluded.eps_actual,
-    revenue_estimated = excluded.revenue_estimated,
-    revenue_actual = excluded.revenue_actual,
+    fiscal_year = COALESCE(excluded.fiscal_year, earnings_calendar_event.fiscal_year),
+    fiscal_quarter = COALESCE(excluded.fiscal_quarter, earnings_calendar_event.fiscal_quarter),
+    "time" = COALESCE(excluded."time", earnings_calendar_event."time"),
+    eps_estimated = COALESCE(excluded.eps_estimated, earnings_calendar_event.eps_estimated),
+    eps_actual = COALESCE(excluded.eps_actual, earnings_calendar_event.eps_actual),
+    revenue_estimated = COALESCE(excluded.revenue_estimated, earnings_calendar_event.revenue_estimated),
+    revenue_actual = COALESCE(excluded.revenue_actual, earnings_calendar_event.revenue_actual),
     source = excluded.source,
     as_of_ts = now()
 """

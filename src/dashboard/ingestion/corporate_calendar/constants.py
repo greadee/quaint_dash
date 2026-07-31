@@ -7,6 +7,7 @@ DOMAIN_CORPORATE = "corporate"
 JOB_TYPE_REFRESH = "refresh"
 JOB_TYPE_CALENDAR_REFRESH = "calendar_refresh"
 JOB_TYPE_EARNINGS_UPDATE = "earnings_update"
+JOB_TYPE_EARNINGS_BACKUP = "earnings_backup"
 JOB_TYPE_BACKFILL = "backfill"
 
 DATASET_EARNINGS_CALENDAR = "earnings_calendar"

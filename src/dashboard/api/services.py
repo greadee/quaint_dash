@@ -5307,7 +5307,6 @@ class PortfolioApiService:
             self._ensure_stock_asset(asset_id)
             self._ensure_price_momentum_input(asset_id)
             self._ensure_sentiment_inputs(asset_id, row["symbol"])
-            self._ensure_earnings_momentum_inputs(asset_id)
             self._ensure_institutional_buying_input(asset_id, row["symbol"])
 
     def _ensure_price_momentum_input(self, asset_id: str) -> None:
@@ -5411,73 +5410,6 @@ class PortfolioApiService:
                     blended - previous,
                 ],
             )
-
-    def _ensure_earnings_momentum_inputs(self, asset_id: str) -> None:
-        statement_count = self.conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM financial_statement
-            WHERE asset_id = ? AND statement_type = 'income'
-            """,
-            [asset_id],
-        ).fetchone()[0]
-        event_count = self.conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM earnings_calendar_event
-            WHERE asset_id = ?
-              AND earnings_date <= current_date
-              AND (eps_actual IS NOT NULL OR revenue_actual IS NOT NULL)
-            """,
-            [asset_id],
-        ).fetchone()[0]
-        if int(statement_count) >= 2 and int(event_count) > 0:
-            return
-        latest_price = (ComparisonApiService(self.conn)._prices(asset_id) or [(None, 50.0)])[0][1]
-        bias = _stable_asset_bias(asset_id)
-        revenue_latest = 1_000_000_000.0 * (0.8 + bias)
-        revenue_previous = revenue_latest / (1.02 + bias * 0.16)
-        eps_latest = max(0.05, latest_price / (16.0 + bias * 12.0))
-        eps_previous = eps_latest / (1.01 + bias * 0.12)
-        today = date.today()
-        for offset, revenue, eps, year, quarter in [
-            (120, revenue_previous, eps_previous, today.year - 1, 4),
-            (30, revenue_latest, eps_latest, today.year, 1),
-        ]:
-            period_end = today - timedelta(days=offset)
-            payload = json.dumps({"revenue": revenue, "netIncome": revenue * 0.12, "eps": eps})
-            self.conn.execute(
-                """
-                INSERT INTO financial_statement(
-                    asset_id, statement_type, year, quarter, period_end_date, report_date, data_json, source
-                )
-                VALUES (?, 'income', ?, ?, ?, ?, ?, 'ranking_local_estimate')
-                ON CONFLICT (asset_id, statement_type, year, quarter)
-                DO NOTHING
-                """,
-                [asset_id, year, quarter, period_end, period_end + timedelta(days=10), payload],
-            )
-        earnings_date = today - timedelta(days=20)
-        self.conn.execute(
-            """
-            INSERT INTO earnings_calendar_event(
-                asset_id, earnings_date, fiscal_year, fiscal_quarter,
-                eps_estimated, eps_actual, revenue_estimated, revenue_actual, source
-            )
-            VALUES (?, ?, ?, 1, ?, ?, ?, ?, 'ranking_local_estimate')
-            ON CONFLICT (asset_id, earnings_date)
-            DO NOTHING
-            """,
-            [
-                asset_id,
-                earnings_date,
-                today.year,
-                eps_latest * 0.96,
-                eps_latest,
-                revenue_latest * 0.97,
-                revenue_latest,
-            ],
-        )
 
     def _ensure_institutional_buying_input(self, asset_id: str, symbol: str) -> None:
         row = self.conn.execute(
@@ -8692,8 +8624,14 @@ class CommandApiService(BrokerCommands, IngestionCommands):
         where = [
             "status = 'failed'",
             "COALESCE(attempt_count, 0) < ?",
-            "NOT (LOWER(COALESCE(error_message, '')) LIKE '%http error 402%')",
-            "NOT (LOWER(COALESCE(error_message, '')) LIKE '%plan does not include%')",
+            (
+                "(job_type = 'earnings_backup' OR "
+                "NOT (LOWER(COALESCE(error_message, '')) LIKE '%http error 402%'))"
+            ),
+            (
+                "(job_type = 'earnings_backup' OR "
+                "NOT (LOWER(COALESCE(error_message, '')) LIKE '%plan does not include%'))"
+            ),
         ]
         params: list[object] = [MAX_INGESTION_JOB_ATTEMPTS]
         if domain:

@@ -15,6 +15,7 @@ from dashboard.ingestion.corporate_calendar.jobs import (
     enqueue_earnings_update_jobs,
 )
 from dashboard.ingestion.corporate_calendar.provider_fmp import FmpCorporateCalendarProvider
+from dashboard.ingestion.corporate_calendar.provider_yahoo import YahooEarningsProvider
 from dashboard.ingestion.corporate_calendar.worker import CorporateCalendarWorker
 from dashboard.ingestion.corporate_calendar.scheduler import CorporateCalendarScheduler
 
@@ -24,10 +25,16 @@ class CorporateCalendarIngestionService:
     Higher-level entry point for CLI / scheduler code.
     """
 
-    def __init__(self, conn, provider: FmpCorporateCalendarProvider | None = None) -> None:
+    def __init__(
+        self,
+        conn,
+        provider: FmpCorporateCalendarProvider | None = None,
+        backup_earnings_provider=None,
+    ) -> None:
         self.conn = conn
         self.repo = CorporateCalendarIngestionRepository(conn)
         self.provider = provider
+        self.backup_earnings_provider = backup_earnings_provider
 
     def enqueue_calendar_refresh(
         self,
@@ -64,7 +71,15 @@ class CorporateCalendarIngestionService:
         )
 
     def process_jobs(self, max_jobs: int = 1) -> int:
-        worker = CorporateCalendarWorker(self.conn, self.provider or FmpCorporateCalendarProvider())
+        primary_provider = self.provider or FmpCorporateCalendarProvider()
+        backup_provider = self.backup_earnings_provider
+        if backup_provider is None and self.provider is None:
+            backup_provider = YahooEarningsProvider()
+        worker = CorporateCalendarWorker(
+            self.conn,
+            primary_provider,
+            backup_earnings_provider=backup_provider,
+        )
 
         completed = 0
 
@@ -110,6 +125,20 @@ class CorporateCalendarIngestionService:
         return scheduler.schedule_fundamental_updates_after_events(
             lookback_days=lookback_days,
             max_assets=max_assets,
+        )
+
+    def schedule_missing_earnings_surprise_updates(
+        self,
+        max_assets: int = 25,
+        asset_id: str | None = None,
+        force: bool = False,
+    ) -> list[int]:
+        """Schedule source-backed repair jobs for subscribed assets missing surprise pairs."""
+        scheduler = CorporateCalendarScheduler(self.conn)
+        return scheduler.schedule_missing_earnings_surprise_updates(
+            max_assets=max_assets,
+            asset_id=asset_id,
+            force=force,
         )
 
     def schedule_due_fundamental_subscription_refreshes(
