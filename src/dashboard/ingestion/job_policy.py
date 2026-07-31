@@ -12,7 +12,6 @@ INGESTION_JOB_LEASE_SECONDS = 300
 _PERMANENT_FAILURE_MARKERS = (
     "http error 402",
     "plan does not include",
-    "call budget exhausted",
 )
 
 

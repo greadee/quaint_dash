@@ -476,6 +476,38 @@ def test_portfolio_snapshot_refresh_materializes_current_reports(tmp_path):
     db.conn.close()
 
 
+def test_portfolio_risk_and_fundamentals_use_snapshot_query_budgets(tmp_path):
+    db_path = tmp_path / "portfolio_analytics_query_budget.db"
+    create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        """
+        INSERT INTO portfolio(portfolio_id, portfolio_name, base_ccy)
+        VALUES (1, 'Core', 'CAD')
+        """
+    )
+    PortfolioApiService(db.conn).refresh_portfolio_snapshots()
+
+    counting = _CountingConnection(db.conn)
+    service = PortfolioApiService(counting)
+    risk = service.risk(
+        portfolio_id=1,
+        benchmark_index_id=None,
+        risk_free_rate=0.0,
+        range_key="1Y",
+    )
+
+    assert risk.portfolio_id == 1
+    assert counting.query_count <= 7
+
+    counting.query_count = 0
+    fundamentals = service.fundamentals(portfolio_id=1, horizon_years=5)
+
+    assert fundamentals.portfolio_id == 1
+    assert counting.query_count <= 10
+    db.conn.close()
+
+
 def test_portfolio_positions_use_underlying_metadata_for_cdrs(tmp_path):
     db_path = tmp_path / "api.db"
     app = create_app(db_path)

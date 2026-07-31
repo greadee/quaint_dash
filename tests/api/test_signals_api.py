@@ -177,6 +177,32 @@ def test_signal_snapshots_bound_summary_and_detail_queries(tmp_path):
     db_path = tmp_path / "signals.db"
     create_app(db_path)
     db = DB(db_path)
+    mutable_summary_index = db.conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM duckdb_indexes()
+        WHERE index_name = 'idx_signal_evaluation_current_summary'
+        """
+    ).fetchone()
+    assert mutable_summary_index == (0,)
+    mutable_primary_key = db.conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM duckdb_constraints()
+        WHERE table_name = 'signal_evaluation_current'
+          AND constraint_type = 'PRIMARY KEY'
+        """
+    ).fetchone()
+    assert mutable_primary_key == (0,)
+    other_mutable_constraints = db.conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM duckdb_constraints()
+        WHERE table_name IN ('signal_evidence', 'signal_portfolio_impact')
+          AND constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY')
+        """
+    ).fetchone()
+    assert other_mutable_constraints == (0,)
     _seed_signal_assets(db)
     service = PortfolioApiService(db.conn)
     refresh = service.refresh_signal_snapshots(include_retail_sentiment=False)

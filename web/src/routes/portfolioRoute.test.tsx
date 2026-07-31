@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -16,6 +16,7 @@ const apiMock = vi.hoisted(() => ({
   portfolioPerformance: vi.fn(),
   portfolioRisk: vi.fn(),
   portfolioFundamentals: vi.fn(),
+  portfolioNews: vi.fn(),
 }));
 
 vi.mock("../api", () => ({ api: apiMock }));
@@ -73,6 +74,7 @@ function renderPortfolioDetail(route = "/portfolios/1?tab=overview") {
 describe("PortfolioWorkspacePage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    apiMock.portfolioNews.mockResolvedValue({ items: [] });
   });
 
   it("renders aggregate portfolio state from API data", async () => {
@@ -280,6 +282,47 @@ describe("PortfolioWorkspacePage", () => {
     await user.click(screen.getByRole("button", { name: "Pie" }));
 
     expect(screen.getByLabelText("Allocation pie chart")).toBeInTheDocument();
+  });
+
+  it("starts snapshot-backed overview analytics without waiting for performance", async () => {
+    apiMock.portfolio.mockResolvedValue({
+      portfolio_id: 1,
+      name: "Core Growth",
+      base_ccy: "CAD",
+      market_value: 75000,
+      book_cost: 60000,
+      unrealized_gain: 15000,
+      position_count: 0,
+    });
+    apiMock.positions.mockResolvedValue([]);
+    apiMock.portfolioPerformance.mockReturnValue(new Promise(() => undefined));
+    apiMock.portfolioRisk.mockResolvedValue({
+      portfolio_id: 1,
+      risk_free_rate: 0,
+      observation_count: 0,
+      missing_inputs: [],
+    });
+    apiMock.portfolioFundamentals.mockResolvedValue({
+      portfolio_id: 1,
+      base_currency: "CAD",
+      horizon_years: 5,
+      weighted_expected_cagr: { value: null, coverage: 0 },
+      pe_ratio: { value: null, coverage: 0 },
+      price_to_free_cash_flow: { value: null, coverage: 0 },
+      dividend_yield: { value: null, coverage: 0 },
+      margin_of_safety: { value: null, coverage: 0 },
+      holdings: [],
+      missing_inputs: [],
+    });
+
+    renderPortfolioDetail();
+
+    expect(await screen.findByRole("heading", { name: "Core Growth" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(apiMock.portfolioPerformance).toHaveBeenCalledTimes(1);
+      expect(apiMock.portfolioRisk).toHaveBeenCalledTimes(1);
+      expect(apiMock.portfolioFundamentals).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("renders holding Kiviat factor diagrams from backend holding signals", async () => {

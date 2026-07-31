@@ -1621,7 +1621,7 @@ def test_retry_failed_ingestion_jobs_skips_failures_with_newer_success(tmp_path)
     assert statuses == {1: "failed", 2: "done", 3: "pending"}
 
 
-def test_retry_failed_ingestion_jobs_skips_provider_permanent_failures(tmp_path):
+def test_retry_failed_ingestion_jobs_retries_run_budget_failures(tmp_path):
     db_path = tmp_path / "api.db"
     app = create_app(db_path)
     db = DB(db_path)
@@ -1649,9 +1649,9 @@ def test_retry_failed_ingestion_jobs_skips_provider_permanent_failures(tmp_path)
         jobs = client.get("/api/v1/ingestion/jobs")
 
     assert retry.status_code == 200
-    assert retry.json()["result"] == {"retried_jobs": 1}
+    assert retry.json()["result"] == {"retried_jobs": 2}
     statuses = {row["job_id"]: row["status"] for row in jobs.json()}
-    assert statuses == {1: "failed", 2: "failed", 3: "pending"}
+    assert statuses == {1: "failed", 2: "pending", 3: "pending"}
 
 
 def test_clear_ingestion_history_removes_jobs_and_sync_state(tmp_path):

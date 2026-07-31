@@ -75,6 +75,33 @@ def test_rate_limiter_raises_when_run_budget_is_exhausted():
         limiter.acquire(policy)
 
 
+def test_rate_limiter_reset_starts_a_new_run_without_clearing_window():
+    now = 0.0
+    sleeps = []
+
+    def clock():
+        return now
+
+    def sleeper(seconds: float):
+        nonlocal now
+        sleeps.append(seconds)
+        now += seconds
+
+    limiter = InMemoryRateLimiter(clock=clock, sleeper=sleeper)
+    policy = RateLimitPolicy(
+        provider="test",
+        calls=1,
+        period_seconds=10,
+        max_calls_per_run=1,
+    )
+
+    limiter.acquire(policy)
+    limiter.reset_run_counts()
+    limiter.acquire(policy)
+
+    assert sleeps == [10.0]
+
+
 def test_fmp_corporate_provider_uses_limiter_and_detects_429(monkeypatch):
     limiter = FakeLimiter()
     provider = FmpCorporateCalendarProvider(

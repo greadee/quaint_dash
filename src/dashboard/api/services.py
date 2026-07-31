@@ -122,10 +122,16 @@ from dashboard.analytics.calculations import (
     risk_return_metrics,
 )
 from dashboard.analytics.models import (
+    AssetRiskContribution,
     DEFAULT_BENCHMARK_BY_COUNTRY,
     DEFAULT_BENCHMARK_BY_CURRENCY,
+    PortfolioRiskDecomposition,
+    PortfolioValuationRollup,
     PositionAnalytics,
+    PositionValuationContribution,
     PricePoint,
+    RelativeRiskMetrics,
+    RiskReturnMetrics,
 )
 from dashboard.brokers.repository import BrokerSyncRepository
 from dashboard.brokers.models import BrokerUser
@@ -230,6 +236,18 @@ class SignalAdapter:
     source: str
     trigger_threshold: float
     lookback_period: str
+
+
+@dataclass(frozen=True)
+class _StoredPortfolioAnalytics:
+    portfolio_id: int
+    benchmark_index_id: str | None
+    risk: RiskReturnMetrics | None
+    relative: RelativeRiskMetrics | None
+    risk_decomposition: PortfolioRiskDecomposition
+    valuation: PortfolioValuationRollup
+    missing_inputs: list[str]
+    refreshed_at: datetime
 
 
 _SIGNAL_ADAPTERS = {
@@ -2554,11 +2572,20 @@ class PortfolioApiService:
         risk_free_rate: float = 0.0,
         range_key: str = "3Y",
     ) -> PortfolioRiskResponse:
-        report = AnalyticsEngine(AnalyticsRepository(self.conn)).portfolio_report(
-            portfolio_id=portfolio_id,
-            benchmark_index_id=benchmark_index_id,
-            risk_free_rate=risk_free_rate,
-        )
+        report = self._stored_portfolio_analytics(portfolio_id)
+        if (
+            report is None
+            or risk_free_rate != 0.0
+            or (
+                benchmark_index_id is not None
+                and benchmark_index_id != report.benchmark_index_id
+            )
+        ):
+            report = AnalyticsEngine(AnalyticsRepository(self.conn)).portfolio_report(
+                portfolio_id=portfolio_id,
+                benchmark_index_id=benchmark_index_id,
+                risk_free_rate=risk_free_rate,
+            )
         risk = report.risk
         relative = report.relative
         decomposition = report.risk_decomposition
@@ -2600,7 +2627,7 @@ class PortfolioApiService:
             risk_contribution_concentration=risk_concentration,
             missing_inputs=report.missing_inputs + decomposition.missing_inputs,
             metric_insights=self._risk_metric_insights(report),
-            as_of=datetime.now(UTC),
+            as_of=getattr(report, "refreshed_at", datetime.now(UTC)),
         )
 
     def fundamentals(
@@ -2609,7 +2636,11 @@ class PortfolioApiService:
         horizon_years: int = 5,
     ) -> PortfolioFundamentalsResponse:
         portfolio = self.get_portfolio(portfolio_id)
-        report = AnalyticsEngine(AnalyticsRepository(self.conn)).portfolio_report(portfolio_id)
+        report = self._stored_portfolio_analytics(portfolio_id)
+        if report is None:
+            report = AnalyticsEngine(AnalyticsRepository(self.conn)).portfolio_report(
+                portfolio_id
+            )
         positions = {item.asset_id: item for item in self.list_positions(portfolio_id)}
         contributions = report.valuation.position_contributions
         coverage_by_metric = {
@@ -2659,7 +2690,7 @@ class PortfolioApiService:
                     missing_inputs=missing,
                 )
             )
-        as_of = datetime.now(UTC)
+        as_of = getattr(report, "refreshed_at", datetime.now(UTC))
         metric_insights = self._fundamental_metric_insights(
             report.valuation.position_contributions,
             positions,
@@ -2704,6 +2735,78 @@ class PortfolioApiService:
             missing_inputs=report.valuation.missing_inputs,
             metric_insights=metric_insights,
             as_of=as_of,
+        )
+
+    def _stored_portfolio_analytics(
+        self,
+        portfolio_id: int,
+    ) -> _StoredPortfolioAnalytics | None:
+        row = self.conn.execute(
+            """
+            SELECT payload_json, refreshed_at
+            FROM portfolio_analytics_snapshot
+            WHERE portfolio_id = ?
+            ORDER BY snapshot_date DESC, refreshed_at DESC
+            LIMIT 1
+            """,
+            [portfolio_id],
+        ).fetchone()
+        if row is None:
+            return None
+        payload = _json_dict(row[0])
+        risk_payload = payload.get("risk")
+        relative_payload = payload.get("relative")
+        decomposition_payload = _json_dict(payload.get("risk_decomposition"))
+        valuation_payload = _json_dict(payload.get("valuation"))
+        if not decomposition_payload or not valuation_payload:
+            return None
+        try:
+            volatility_contributions = [
+                AssetRiskContribution(**_json_dict(item))
+                for item in decomposition_payload.get(
+                    "volatility_contributions",
+                    [],
+                )
+            ]
+            decomposition = PortfolioRiskDecomposition(
+                **{
+                    **decomposition_payload,
+                    "volatility_contributions": volatility_contributions,
+                }
+            )
+            position_contributions = [
+                PositionValuationContribution(**_json_dict(item))
+                for item in valuation_payload.get("position_contributions", [])
+            ]
+            valuation = PortfolioValuationRollup(
+                **{
+                    **valuation_payload,
+                    "position_contributions": position_contributions,
+                }
+            )
+            risk = (
+                RiskReturnMetrics(**_json_dict(risk_payload))
+                if risk_payload is not None
+                else None
+            )
+            relative = (
+                RelativeRiskMetrics(**_json_dict(relative_payload))
+                if relative_payload is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            return None
+        return _StoredPortfolioAnalytics(
+            portfolio_id=portfolio_id,
+            benchmark_index_id=payload.get("benchmark_index_id"),
+            risk=risk,
+            relative=relative,
+            risk_decomposition=decomposition,
+            valuation=valuation,
+            missing_inputs=[
+                str(item) for item in payload.get("missing_inputs", [])
+            ],
+            refreshed_at=row[1],
         )
 
     def _metric_coverage(
@@ -3704,57 +3807,57 @@ class PortfolioApiService:
         rows = self._current_signal_rows(
             include_retail_sentiment=include_retail_sentiment
         )
-        self.conn.execute("BEGIN TRANSACTION")
-        try:
-            self.conn.execute(
+        existing_active_ids = {
+            str(item[0])
+            for item in self.conn.execute(
                 """
-                UPDATE signal_evaluation_current
-                SET is_active = FALSE, updated_at = now()
-                WHERE model_version = ?
-                """,
-                [_SIGNALS_MODEL_VERSION],
-            )
-            for row in rows:
-                self._persist_signal_evaluation(row)
-            stale = self.conn.execute(
-                """
-                SELECT COUNT(*)
+                SELECT signal_id
                 FROM signal_evaluation_current
                 WHERE model_version = ?
-                  AND is_active = FALSE
+                  AND is_active = TRUE
                 """,
                 [_SIGNALS_MODEL_VERSION],
-            ).fetchone()
-            pruned_count = int(stale[0] or 0) if stale else 0
-            self.conn.execute(
-                """
-                DELETE FROM signal_evidence
-                WHERE signal_id IN (
-                    SELECT signal_id
-                    FROM signal_evaluation_current
-                    WHERE model_version = ? AND is_active = FALSE
-                )
-                """,
-                [_SIGNALS_MODEL_VERSION],
-            )
-            self.conn.execute(
-                """
-                DELETE FROM signal_portfolio_impact
-                WHERE signal_id IN (
-                    SELECT signal_id
-                    FROM signal_evaluation_current
-                    WHERE model_version = ? AND is_active = FALSE
-                )
-                """,
-                [_SIGNALS_MODEL_VERSION],
-            )
-            self.conn.execute("COMMIT")
-        except Exception:
-            self.conn.execute("ROLLBACK")
-            raise
+            ).fetchall()
+        }
+        current_ids = {row.signal_id for row in rows}
+        stale_ids = sorted(existing_active_ids - current_ids)
+        batch_size = 25
+        for offset in range(0, len(rows), batch_size):
+            self.conn.execute("BEGIN TRANSACTION")
+            try:
+                for row in rows[offset : offset + batch_size]:
+                    self._persist_signal_evaluation(row)
+                self.conn.execute("COMMIT")
+            except Exception:
+                self.conn.execute("ROLLBACK")
+                raise
+        for offset in range(0, len(stale_ids), batch_size):
+            self.conn.execute("BEGIN TRANSACTION")
+            try:
+                for signal_id in stale_ids[offset : offset + batch_size]:
+                    self.conn.execute(
+                        """
+                        UPDATE signal_evaluation_current
+                        SET is_active = FALSE, updated_at = now()
+                        WHERE signal_id = ?
+                        """,
+                        [signal_id],
+                    )
+                    self.conn.execute(
+                        "DELETE FROM signal_evidence WHERE signal_id = ?",
+                        [signal_id],
+                    )
+                    self.conn.execute(
+                        "DELETE FROM signal_portfolio_impact WHERE signal_id = ?",
+                        [signal_id],
+                    )
+                self.conn.execute("COMMIT")
+            except Exception:
+                self.conn.execute("ROLLBACK")
+                raise
         return SignalSnapshotRefreshResponse(
             refreshed_count=len(rows),
-            pruned_count=pruned_count,
+            pruned_count=len(stale_ids),
             generated_at=generated_at,
             model_version=_SIGNALS_MODEL_VERSION,
         )
@@ -4153,6 +4256,10 @@ class PortfolioApiService:
                 ],
             )
         self.conn.execute(
+            "DELETE FROM signal_evaluation_current WHERE signal_id = ?",
+            [row.signal_id],
+        )
+        self.conn.execute(
             """
             INSERT INTO signal_evaluation_current(
                 signal_id, summary, status, direction, strength, confidence,
@@ -4167,32 +4274,6 @@ class PortfolioApiService:
                 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                 ?, ?, TRUE, now(), now()
             )
-            ON CONFLICT (signal_id)
-            DO UPDATE SET
-                summary = EXCLUDED.summary,
-                status = EXCLUDED.status,
-                direction = EXCLUDED.direction,
-                strength = EXCLUDED.strength,
-                confidence = EXCLUDED.confidence,
-                portfolio_priority = EXCLUDED.portfolio_priority,
-                raw_observed_value = EXCLUDED.raw_observed_value,
-                normalized_value = EXCLUDED.normalized_value,
-                trigger_threshold = EXCLUDED.trigger_threshold,
-                first_detected_at = EXCLUDED.first_detected_at,
-                confirmation_at = EXCLUDED.confirmation_at,
-                last_evaluated_at = EXCLUDED.last_evaluated_at,
-                data_as_of = EXCLUDED.data_as_of,
-                expires_at = EXCLUDED.expires_at,
-                resolved_at = EXCLUDED.resolved_at,
-                resolution_reason = EXCLUDED.resolution_reason,
-                model_version = EXCLUDED.model_version,
-                source = EXCLUDED.source,
-                missing_data_status = EXCLUDED.missing_data_status,
-                input_data_timestamps_json =
-                    EXCLUDED.input_data_timestamps_json,
-                missing_inputs_json = EXCLUDED.missing_inputs_json,
-                is_active = TRUE,
-                updated_at = now()
             """,
             [
                 row.signal_id,
@@ -8613,7 +8694,6 @@ class CommandApiService(BrokerCommands, IngestionCommands):
             "COALESCE(attempt_count, 0) < ?",
             "NOT (LOWER(COALESCE(error_message, '')) LIKE '%http error 402%')",
             "NOT (LOWER(COALESCE(error_message, '')) LIKE '%plan does not include%')",
-            "NOT (LOWER(COALESCE(error_message, '')) LIKE '%call budget exhausted%')",
         ]
         params: list[object] = [MAX_INGESTION_JOB_ATTEMPTS]
         if domain:

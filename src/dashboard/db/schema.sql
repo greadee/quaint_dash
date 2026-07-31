@@ -207,7 +207,7 @@ CREATE INDEX IF NOT EXISTS idx_signal_evaluation_summary
 ON signal_evaluation(status, direction, portfolio_priority, confidence, last_evaluated_at);
 
 CREATE TABLE IF NOT EXISTS signal_evaluation_current (
-    signal_id TEXT PRIMARY KEY,
+    signal_id TEXT NOT NULL,
     summary TEXT NOT NULL,
     status TEXT NOT NULL,
     direction TEXT NOT NULL,
@@ -231,13 +231,12 @@ CREATE TABLE IF NOT EXISTS signal_evaluation_current (
     missing_inputs_json TEXT NOT NULL DEFAULT '[]',
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMP NOT NULL DEFAULT now(),
-    updated_at TIMESTAMP NOT NULL DEFAULT now(),
-
-    FOREIGN KEY (signal_id) REFERENCES signal_evaluation(signal_id)
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_signal_evaluation_current_summary
-ON signal_evaluation_current(is_active, status, direction, portfolio_priority, confidence, last_evaluated_at);
+-- This table is bounded to the current signal set and is bulk-updated on refresh.
+-- DuckDB can invalidate the database while maintaining this mutable compound index.
+DROP INDEX IF EXISTS idx_signal_evaluation_current_summary;
 
 CREATE TABLE IF NOT EXISTS signal_evidence (
     signal_id TEXT NOT NULL,
@@ -250,10 +249,7 @@ CREATE TABLE IF NOT EXISTS signal_evidence (
     detail TEXT NOT NULL,
     source TEXT NOT NULL,
     as_of TIMESTAMP,
-    created_at TIMESTAMP NOT NULL DEFAULT now(),
-
-    PRIMARY KEY (signal_id, evidence_id),
-    FOREIGN KEY (signal_id) REFERENCES signal_evaluation(signal_id)
+    created_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS signal_portfolio_impact (
@@ -265,14 +261,10 @@ CREATE TABLE IF NOT EXISTS signal_portfolio_impact (
     currency TEXT NOT NULL DEFAULT 'CAD',
     concentration_note TEXT NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT now(),
-    updated_at TIMESTAMP NOT NULL DEFAULT now(),
-
-    PRIMARY KEY (signal_id, portfolio_id),
-    FOREIGN KEY (signal_id) REFERENCES signal_evaluation(signal_id)
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_signal_portfolio_impact_portfolio
-ON signal_portfolio_impact(portfolio_id, weight);
+DROP INDEX IF EXISTS idx_signal_portfolio_impact_portfolio;
 
 CREATE TABLE IF NOT EXISTS signal_user_state (
     signal_id TEXT PRIMARY KEY,

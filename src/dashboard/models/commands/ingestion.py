@@ -7,6 +7,7 @@ from dashboard.ingestion.indices.index_service_factory import (
     create_index_ingestion_service,
     create_index_scheduler,
 )
+from dashboard.ingestion.rate_limits import default_rate_limiter
 from dashboard.ingestion.ticker_universe import TickerUniverseRepository
 from dashboard.ingestion.trading_calendar.service import TradingCalendarIngestionService
 
@@ -320,6 +321,7 @@ class IngestionCommands:
         """
         Process pending ingestion jobs through the shared dev command surface.
         """
+        default_rate_limiter().reset_run_counts()
         domain = domain.lower()
 
         if domain == "market":

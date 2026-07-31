@@ -43,6 +43,11 @@ class InMemoryRateLimiter:
                 return
             self._sleeper(sleep_for)
 
+    def reset_run_counts(self) -> None:
+        """Start a new bounded provider run without clearing rolling-window limits."""
+        with self._lock:
+            self._run_counts.clear()
+
     def _reserve_or_delay(self, policy: RateLimitPolicy) -> float:
         with self._lock:
             now = self._clock()
