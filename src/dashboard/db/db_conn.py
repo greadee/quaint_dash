@@ -80,6 +80,8 @@ def init_db(db: DB):
     db.conn.execute(financial_news_schema.read_text(encoding="utf-8"))
     ingestion_job_schema = schema_path.parent / "migrations" / "ingestion_job_recovery.sql"
     db.conn.execute(ingestion_job_schema.read_text(encoding="utf-8"))
+    candidate_schema = schema_path.parent / "migrations" / "candidate_runs.sql"
+    db.conn.execute(candidate_schema.read_text(encoding="utf-8"))
     seed_stock_catalog(db.conn)
 
 

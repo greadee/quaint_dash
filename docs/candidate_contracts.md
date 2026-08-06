@@ -14,7 +14,7 @@ The provider-neutral contract lives in `dashboard.ai_brain.candidates`:
 - `CandidateHighlight`, `CandidateWarning`, and `CandidateMissingMetric` preserve structured supporting and limiting context.
 - `CandidateSourceWatermark` records source coverage at the run boundary.
 
-The package imports no database, API, provider, ranking, analytics, or UI module. Persistence begins in Slice 5.2; source adapters and scoring begin in later slices.
+The domain models, identity functions, and canonical serializer import no database, API, provider, ranking, analytics, or UI module. `CandidateRunRepository` is the candidate-owned DuckDB infrastructure boundary added in Slice 5.2. Source adapters and scoring begin in later slices.
 
 ## Versions
 
@@ -95,13 +95,31 @@ Candidate hashes include every material contract field. `VOLATILE_HASH_FIELDS` e
 - `request_id`;
 - `runtime_ms`.
 
-The run's `input_snapshot_hash` is material. `CandidateRun.expected_output_hash` recomputes the material output hash, and `output_hash_is_valid` reports integrity. Slice 5.2 persistence must reject any run whose stored output hash does not match.
+The run's `input_snapshot_hash` is material. `CandidateRun.expected_output_hash` recomputes the material output hash, and `output_hash_is_valid` reports integrity. Candidate persistence rejects writes and reads whose output hash does not match.
 
-## Explicit Exclusions
+## Persistence
 
-Slice 5.1 adds no:
+`src/dashboard/db/migrations/candidate_runs.sql` creates eight narrowly scoped tables:
 
-- database table, migration, or repository;
+- candidate run metadata;
+- source watermarks;
+- candidate reviews;
+- review reason codes;
+- source matches;
+- run-scoped evidence;
+- missing metrics;
+- warnings.
+
+Run-scoped evidence preserves freshness as evaluated at that run's point in time. Query-critical review fields, including eligibility and the three top-level scores, use typed columns. The complete versioned review graph is also stored as canonical JSON so score components, highlights, and nested evidence associations round-trip without prematurely freezing later scoring-query tables.
+
+Writes are transactional and immutable. Repeating the same run identity and material output is idempotent and leaves the original `created_at`, request ID, and runtime unchanged. Reusing a run identity with different material output fails with `CandidatePersistenceConflict`. New input snapshot hashes create distinct historical runs.
+
+Reads rebuild domain models, verify canonical review payload hashes, compare typed and normalized child rows with the payload, validate run-scoped evidence, and recompute the run output hash. Any mismatch fails with `CandidatePersistenceIntegrityError`.
+
+## Current Explicit Exclusions
+
+Slice 5.2 adds no:
+
 - API or transport model;
 - source query or adapter;
 - candidate nomination or held-asset exclusion;
@@ -113,6 +131,6 @@ Slice 5.1 adds no:
 
 ```powershell
 .\.venv\Scripts\python.exe -m ruff check src\dashboard\ai_brain\candidates tests\ai_brain\candidates
-.\.venv\Scripts\python.exe -m pytest tests\ai_brain\candidates\test_candidate_contracts.py -q
+.\.venv\Scripts\python.exe -m pytest tests\ai_brain\candidates -q
 .\.venv\Scripts\python.exe -m tools.check_architecture_boundaries
 ```

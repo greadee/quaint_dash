@@ -26,6 +26,14 @@ from dashboard.ai_brain.candidates.models import (
     CandidateSourceWatermark,
     CandidateWarning,
 )
+from dashboard.ai_brain.candidates.persistence import (
+    CandidatePersistenceConflict,
+    CandidatePersistenceError,
+    CandidatePersistenceIntegrityError,
+    CandidateRunRepository,
+    ensure_candidate_schema,
+)
+from dashboard.ai_brain.candidates.serialization import candidate_review_from_json
 
 __all__ = [
     "VOLATILE_HASH_FIELDS",
@@ -37,8 +45,12 @@ __all__ = [
     "CandidateEvidenceRef",
     "CandidateHighlight",
     "CandidateMissingMetric",
+    "CandidatePersistenceConflict",
+    "CandidatePersistenceError",
+    "CandidatePersistenceIntegrityError",
     "CandidateReview",
     "CandidateRun",
+    "CandidateRunRepository",
     "CandidateScore",
     "CandidateScoreComponent",
     "CandidateSourceMatch",
@@ -50,4 +62,6 @@ __all__ = [
     "candidate_run_id",
     "canonical_hash",
     "canonical_json",
+    "candidate_review_from_json",
+    "ensure_candidate_schema",
 ]
