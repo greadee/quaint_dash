@@ -36,12 +36,12 @@ from dashboard.ai_brain.candidates.persistence import (
 from dashboard.ai_brain.candidates.serialization import candidate_review_from_json
 
 __all__ = [
-    "VOLATILE_HASH_FIELDS",
     "CANDIDATE_EVIDENCE_SCHEMA_VERSION",
     "CANDIDATE_METHODOLOGY_VERSION",
     "CANDIDATE_REASON_CODES_VERSION",
     "CANDIDATE_REVIEW_SCHEMA_VERSION",
     "CANDIDATE_RUN_SCHEMA_VERSION",
+    "VOLATILE_HASH_FIELDS",
     "CandidateEvidenceRef",
     "CandidateHighlight",
     "CandidateMissingMetric",
@@ -58,10 +58,10 @@ __all__ = [
     "CandidateWarning",
     "candidate_evidence_id",
     "candidate_id",
+    "candidate_review_from_json",
     "candidate_review_id",
     "candidate_run_id",
     "canonical_hash",
     "canonical_json",
-    "candidate_review_from_json",
     "ensure_candidate_schema",
 ]

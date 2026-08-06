@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
-from dashboard.ai_brain.candidates.canonical import canonical_hash, canonical_json, normalize_decimal
+from dashboard.ai_brain.candidates.canonical import (
+    canonical_hash,
+    canonical_json,
+    normalize_decimal,
+)
 from dashboard.ai_brain.candidates.models import (
     CandidateEvidenceRef,
     CandidateReview,

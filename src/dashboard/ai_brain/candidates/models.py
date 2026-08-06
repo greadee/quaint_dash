@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import Iterable
 
 from dashboard.ai_brain.candidates.canonical import (
     candidate_evidence_id,
@@ -17,7 +17,6 @@ from dashboard.ai_brain.candidates.canonical import (
     is_sha256,
     is_typed_hash,
 )
-
 
 CANDIDATE_RUN_SCHEMA_VERSION = "candidate-run.v1"
 CANDIDATE_REVIEW_SCHEMA_VERSION = "candidate-review.v1"

@@ -24,7 +24,7 @@ def candidate_review_from_json(payload: str) -> CandidateReview:
 
     value = json.loads(payload)
     if not isinstance(value, dict):
-        raise ValueError("candidate review payload must be a JSON object")
+        raise TypeError("candidate review payload must be a JSON object")
     return _review(value)
 
 

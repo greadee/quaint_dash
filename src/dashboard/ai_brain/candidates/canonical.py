@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable
 from dataclasses import fields, is_dataclass
 from datetime import date, datetime, timezone
-from decimal import Decimal, ROUND_HALF_EVEN
-from typing import Any, Iterable
-
+from decimal import ROUND_HALF_EVEN, Decimal
+from typing import Any
 
 DECIMAL_QUANTUM = Decimal("0.00000001")
 VOLATILE_HASH_FIELDS = frozenset(
@@ -153,5 +153,5 @@ def _canonical_field(name: str, value: Any, *, for_hash: bool) -> Any:
 
 def _identity_key(item: Any, identity_fields: Iterable[str]) -> tuple[str, ...]:
     if not isinstance(item, dict):
-        raise ValueError("identity-sorted contract sequences must contain dataclasses")
+        raise TypeError("identity-sorted contract sequences must contain dataclasses")
     return tuple(str(item.get(field_name, "")) for field_name in identity_fields)
