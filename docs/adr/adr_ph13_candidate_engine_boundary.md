@@ -199,11 +199,13 @@ Slice 5.1 implements the provider-neutral contracts and canonical evidence proto
 
 Slice 5.2 implements repeatable DuckDB schema initialization and immutable candidate-run persistence. Query-critical run and review fields are structured; canonical versioned review payloads preserve score components, highlights, and nested evidence associations. Reads verify normalized rows and canonical hashes before returning domain models.
 
-No source adapter, candidate scoring, API, provider, recommendation, or UI behavior is implemented through Slice 5.2.
+Slice 5.3 implements read-only persisted-source adapters for rankings, watchlists, asset/catalog search, and benchmark constituents or proxies. It also implements shared CDR-underlying resolution and a deterministic outside-holding pool that merges source evidence, excludes direct and resolvable equivalent holdings, and blocks unresolved nominations.
+
+Mutable current-state sources disclose partial historical coverage. No source adapter hydrates missing data or calls a provider. No candidate scoring, API, recommendation, or UI behavior is implemented through Slice 5.3.
 
 ## Deferred
 
-- Source adapters and economic-exposure resolver to Slices 5.3 and 5.4.
+- Sector, geography, association, and profile-theme adapters to Slice 5.4.
 - Scoring and guardrails to Slices 5.5 and 5.6.
 - Candidate orchestration to Slice 5.7.
 - Public API, UI, recommendation decisions, LLM providers, and trade behavior to later phases.

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from dashboard.assets import cdr_underlying_symbol
+
 
 @dataclass(frozen=True)
 class TickerSubscription:
@@ -86,7 +88,7 @@ class TickerUniverseRepository:
         for asset_id, symbol, _exchange, asset_subtype, name, description in (
             self._asset_symbol_rows(asset_ids)
         ):
-            underlying = _cdr_underlying_symbol(
+            underlying = cdr_underlying_symbol(
                 asset_id=asset_id,
                 symbol=symbol,
                 asset_subtype=asset_subtype,
@@ -217,7 +219,7 @@ class TickerUniverseRepository:
                         source_scope=scope,
                     ),
                 )
-                underlying = _cdr_underlying_symbol(
+                underlying = cdr_underlying_symbol(
                     asset_id=asset_id,
                     symbol=symbol,
                     asset_subtype=asset_subtype,
@@ -356,63 +358,3 @@ class TickerUniverseRepository:
 
         rows = self.conn.execute(f"PRAGMA table_info('{table_name}')").fetchall()
         return any(row[1] == column_name for row in rows)
-
-
-_CDR_SYMBOL_ALIASES = {
-    "CEGS": "CEG",
-    "NVON": "NVO",
-    "NOWS": "NOW",
-    "VISA": "V",
-}
-
-_KNOWN_CDR_BASE_SYMBOLS = {
-    "AAPL",
-    "AMD",
-    "AMZN",
-    "ANET",
-    "ASML",
-    "AVGO",
-    "BKNG",
-    "CEG",
-    "GEV",
-    "GOOG",
-    "ISRG",
-    "LLY",
-    "META",
-    "MSFT",
-    "MU",
-    "NOW",
-    "NVDA",
-    "NVO",
-    "SPGI",
-    "TSLA",
-    "UBER",
-    "V",
-}
-
-
-def _cdr_underlying_symbol(
-    *,
-    asset_id: str,
-    symbol: str,
-    asset_subtype: str | None,
-    name: str | None,
-    description: str | None,
-) -> str | None:
-    text = " ".join(
-        str(value or "")
-        for value in (asset_id, symbol, asset_subtype, name, description)
-    ).lower()
-    base = (symbol or asset_id).split(".", maxsplit=1)[0].upper()
-    base = _CDR_SYMBOL_ALIASES.get(base, base)
-    if (
-        "cdr" not in text
-        and "depositary receipt" not in text
-        and "depository receipt" not in text
-        and not (
-            (symbol or asset_id).upper().endswith((".TO", ".NE"))
-            and base in _KNOWN_CDR_BASE_SYMBOLS
-        )
-    ):
-        return None
-    return base or None

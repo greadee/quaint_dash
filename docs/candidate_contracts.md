@@ -14,7 +14,7 @@ The provider-neutral contract lives in `dashboard.ai_brain.candidates`:
 - `CandidateHighlight`, `CandidateWarning`, and `CandidateMissingMetric` preserve structured supporting and limiting context.
 - `CandidateSourceWatermark` records source coverage at the run boundary.
 
-The domain models, identity functions, and canonical serializer import no database, API, provider, ranking, analytics, or UI module. `CandidateRunRepository` is the candidate-owned DuckDB infrastructure boundary added in Slice 5.2. Source adapters and scoring begin in later slices.
+The domain models, identity functions, and canonical serializer import no database, API, provider, ranking, analytics, or UI module. `CandidateRunRepository` is the candidate-owned DuckDB infrastructure boundary added in Slice 5.2. Slice 5.3 source adapters query stored repository tables through a narrow read-only connection boundary. Scoring begins in later slices.
 
 ## Versions
 
@@ -27,6 +27,8 @@ Current contract versions are:
 | Candidate evidence schema | `candidate-evidence.v1` |
 | Candidate methodology | `candidate-engine.deterministic.v1` |
 | Candidate reason definitions | `candidate-reason-codes.v1` |
+| Candidate source adapters | `candidate-source-adapters.v1` |
+| Economic-exposure identity | `candidate-economic-exposure.v1` |
 
 Contract-shape changes require a schema-version change. Material identity, normalization, score, ordering, or guardrail semantic changes require a methodology-version change. Adding or changing the meaning of a reason code requires a reason-code version change.
 
@@ -40,6 +42,21 @@ IDs use a lowercase type prefix and lowercase SHA-256 digest:
 - `candidate-evidence:<digest>` derives from source domain, source schema version, stable source record identity, effective `as_of`, and material payload hash.
 
 Tickers are uppercase point-in-time labels and do not determine identity. Model validation rejects malformed or materially inconsistent IDs.
+
+For outside-holding exclusion, direct repository assets and documented CDR wrappers resolve to one economic-exposure identity. The resolver uses repository asset metadata and the shared CDR alias policy; it does not infer arbitrary ticker relationships. ETF overlap remains a later weighted redundancy relationship and is not identity equivalence. Missing or ambiguous identities and missing CDR underlyings fail closed as blocked nominations with evidence-backed warnings.
+
+## Source Adapters And Outside-Holding Pool
+
+Slice 5.3 adds deterministic read-only adapters for:
+
+- the latest persisted stock-ranking snapshot at or before `as_of`;
+- active watchlist rows updated at or before `as_of`;
+- bounded asset and stock-catalog search results updated at or before `as_of`;
+- the latest stored benchmark composition and its constituents at or before `as_of`.
+
+Each nomination has one versioned source reason and at least one stable evidence reference. The pool merges duplicate economic exposures, retains all distinct source reasons and evidence, and excludes direct or resolvable equivalent held exposures before scoring. The adapters do not hydrate data, call providers, mutate source tables, score candidates, or assign recommendation actions.
+
+Ranking and benchmark composition records are dated snapshots. Watchlist, asset catalog, stock catalog, and broker position-map rows are mutable current-state tables; their watermarks and limitations explicitly report that historical reconstruction is partial. Empty requested snapshots report missing coverage. Omitted search terms or benchmark IDs report unsupported coverage rather than fabricating candidates.
 
 ## Review Invariants
 
@@ -118,12 +135,11 @@ Reads rebuild domain models, verify canonical review payload hashes, compare typ
 
 ## Current Explicit Exclusions
 
-Slice 5.2 adds no:
+Through Slice 5.3, the candidate engine adds no:
 
 - API or transport model;
-- source query or adapter;
-- candidate nomination or held-asset exclusion;
 - score weight, threshold, ranking, or tie-break policy;
+- sector, geography, peer, industry, or profile-theme gap source;
 - freshness or guardrail adjudication;
 - recommendation action, LLM call, provider call, or UI.
 
@@ -132,5 +148,6 @@ Slice 5.2 adds no:
 ```powershell
 .\.venv\Scripts\python.exe -m ruff check src\dashboard\ai_brain\candidates tests\ai_brain\candidates
 .\.venv\Scripts\python.exe -m pytest tests\ai_brain\candidates -q
+.\.venv\Scripts\python.exe -m pytest tests\test_ticker_universe.py -q
 .\.venv\Scripts\python.exe -m tools.check_architecture_boundaries
 ```
