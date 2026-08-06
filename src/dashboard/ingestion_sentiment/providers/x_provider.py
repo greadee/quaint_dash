@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from dashboard.ingestion_sentiment.models import SocialPostInput
 from dashboard.ingestion_sentiment.providers.http_client import JsonHttpClient
+
+UTC = timezone.utc
 
 
 class XProvider:

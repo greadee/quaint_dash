@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import base64
 import os
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlencode
 
 from dashboard.ingestion_sentiment.models import SocialPostInput
 from dashboard.ingestion_sentiment.providers.http_client import JsonHttpClient
+
+UTC = timezone.utc
 
 
 DEFAULT_SUBREDDITS = ["stocks", "investing", "wallstreetbets", "SecurityAnalysis"]
