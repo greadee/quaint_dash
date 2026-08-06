@@ -122,4 +122,25 @@ Use **GPT-5.6 Sol with high reasoning** for the Phase 4 recovery slice. The work
 
 The blocker recorded by this point-in-time audit was resolved later on 2026-08-05. The versioned deterministic profile contract, evidence handling, confidence, data gaps, and six fixture classes are documented in `docs/evidence/2026-08-05-phase4-investor-profile-recovery.md`.
 
-The original gate result above is preserved as audit history. The current recheck passes and authorizes Slice 5.1 after the recovery commit is reviewed.
+The original gate result above is preserved as audit history. Commit `7035661` was reviewed as the Phase 4 recovery input, and the Slice 5.0 gate was rerun before starting Slice 5.1.
+
+### Recheck Evidence
+
+- The original master prompt's Phase 4 output list maps to `InvestorProfile`: archetypes, five factor scores, observed risk posture, concentration, geography, sector/theme tilts, allocation mix, confidence, evidence IDs, and data gaps.
+- `InvestorProfile` carries stable profile identity, schema and methodology versions, a UTC point-in-time timestamp, and an input snapshot hash.
+- `EvidenceRef` validates stable content-derived IDs, source schema, payload hash, status, and timezone-aware `as_of`; future evidence is rejected.
+- Stated preferences remain separate from observed behavior and do not produce a suitability conclusion.
+- The required six portfolio classes and determinism, stale-evidence, future-evidence, and malformed-input invariants are covered by `tests/ai_brain/test_investor_profile.py`.
+- The architecture boundary includes `src/dashboard/ai_brain` in the framework-independent backend core.
+
+```text
+python -m pytest tests/ai_brain/test_investor_profile.py tests/test_architecture_boundaries.py -q
+15 passed
+
+python -m tools.check_architecture_boundaries
+Architecture boundary check passed.
+```
+
+### Recheck Result
+
+**Passed.** The Phase 4 prerequisite is available and tested. Slice 5.1 is authorized. No candidate schema, persistence, adapter, ranking, scoring, API, provider, or UI behavior was added by this recheck.
