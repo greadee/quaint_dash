@@ -1,0 +1,53 @@
+"""Provider-neutral deterministic candidate-engine contracts."""
+
+from dashboard.ai_brain.candidates.canonical import (
+    VOLATILE_HASH_FIELDS,
+    candidate_evidence_id,
+    candidate_id,
+    candidate_review_id,
+    candidate_run_id,
+    canonical_hash,
+    canonical_json,
+)
+from dashboard.ai_brain.candidates.models import (
+    CANDIDATE_EVIDENCE_SCHEMA_VERSION,
+    CANDIDATE_METHODOLOGY_VERSION,
+    CANDIDATE_REASON_CODES_VERSION,
+    CANDIDATE_REVIEW_SCHEMA_VERSION,
+    CANDIDATE_RUN_SCHEMA_VERSION,
+    CandidateEvidenceRef,
+    CandidateHighlight,
+    CandidateMissingMetric,
+    CandidateReview,
+    CandidateRun,
+    CandidateScore,
+    CandidateScoreComponent,
+    CandidateSourceMatch,
+    CandidateSourceWatermark,
+    CandidateWarning,
+)
+
+__all__ = [
+    "VOLATILE_HASH_FIELDS",
+    "CANDIDATE_EVIDENCE_SCHEMA_VERSION",
+    "CANDIDATE_METHODOLOGY_VERSION",
+    "CANDIDATE_REASON_CODES_VERSION",
+    "CANDIDATE_REVIEW_SCHEMA_VERSION",
+    "CANDIDATE_RUN_SCHEMA_VERSION",
+    "CandidateEvidenceRef",
+    "CandidateHighlight",
+    "CandidateMissingMetric",
+    "CandidateReview",
+    "CandidateRun",
+    "CandidateScore",
+    "CandidateScoreComponent",
+    "CandidateSourceMatch",
+    "CandidateSourceWatermark",
+    "CandidateWarning",
+    "candidate_evidence_id",
+    "candidate_id",
+    "candidate_review_id",
+    "candidate_run_id",
+    "canonical_hash",
+    "canonical_json",
+]

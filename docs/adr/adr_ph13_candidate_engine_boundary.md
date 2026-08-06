@@ -193,9 +193,14 @@ Rejected. Phase 5 completes the deterministic backend candidate contract. Read-o
 - Canonical serialization and precision add implementation work in Slice 5.1 but prevent unstable IDs and snapshot drift later.
 - Economic-exposure ambiguity fails closed instead of silently producing duplicate or already-held candidates.
 
+## Implementation Status
+
+Slice 5.1 implements the provider-neutral contracts and canonical evidence protocol under `src/dashboard/ai_brain/candidates`. The frozen schema, methodology, reason-code, identity, timestamp, decimal, ordering, and volatile-field rules are documented in `docs/candidate_contracts.md` and covered by pure contract tests.
+
+No persistence, source adapter, candidate scoring, API, provider, recommendation, or UI behavior is implemented by Slice 5.1.
+
 ## Deferred
 
-- Python domain-model implementation to Slice 5.1.
 - Candidate persistence and migrations to Slice 5.2.
 - Source adapters and economic-exposure resolver to Slices 5.3 and 5.4.
 - Scoring and guardrails to Slices 5.5 and 5.6.
