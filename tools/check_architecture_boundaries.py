@@ -43,6 +43,7 @@ RULES: tuple[BoundaryRule, ...] = (
     BoundaryRule(
         name="python-core-no-web-framework",
         paths=(
+            "src/dashboard/ai_brain",
             "src/dashboard/analytics",
             "src/dashboard/brokers",
             "src/dashboard/ingestion",

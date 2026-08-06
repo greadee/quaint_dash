@@ -117,3 +117,9 @@ Complete the Phase 4 deterministic investor-profile contract and fixtures, then 
 ### Recommended Model
 
 Use **GPT-5.6 Sol with high reasoning** for the Phase 4 recovery slice. The work requires contract design, financial-domain distinctions, deterministic inference bands, and fixture review, but it should remain narrower than the cross-source identity and scoring slices that justify `xhigh` or `max`.
+
+## Recheck After Phase 4 Recovery
+
+The blocker recorded by this point-in-time audit was resolved later on 2026-08-05. The versioned deterministic profile contract, evidence handling, confidence, data gaps, and six fixture classes are documented in `docs/evidence/2026-08-05-phase4-investor-profile-recovery.md`.
+
+The original gate result above is preserved as audit history. The current recheck passes and authorizes Slice 5.1 after the recovery commit is reviewed.
