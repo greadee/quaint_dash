@@ -101,6 +101,7 @@ Status vocabulary: Proposed, Accepted, Implemented, Superseded, Deprecated, Reje
 | ADR PH10 | Modular boundary blueprint for Phase 1.5 | Accepted | Current |  | `docs/architecture/README.md`, boundary check, pilot report |
 | ADR PH11 | Operations status application boundary | Accepted | Current |  | `src/dashboard/application/operations.py`, Operations API tests |
 | ADR PH12 | Operations worker command boundary | Accepted | Current |  | `OperationsWorkerCommands`, Operations API tests |
+| ADR PH13 | Deterministic candidate engine boundary | Accepted | Current for Phase 5 contract work |  | `docs/adr/adr_ph13_candidate_engine_boundary.md`, Phase 5 prerequisite audit |
 
 ## Supersession notes
 
@@ -112,6 +113,8 @@ Status vocabulary: Proposed, Accepted, Implemented, Superseded, Deprecated, Reje
   queries without changing API response semantics.
 - ADR PH12 extends the Operations/Data Quality application boundary to process-local worker
   commands while preserving existing route behavior.
+- ADR PH13 freezes the deterministic candidate-engine ownership, vocabulary, point-in-time,
+  identity, precision, and hashing contracts before Phase 5 runtime implementation begins.
 - ADR-041 is partially superseded in practice because yfinance now does more than gap repair:
   current market freshness and benchmark proxy fallback use it.
 - ADR-073 remains true for explicit broker sync scheduling, but the API periodic background worker
