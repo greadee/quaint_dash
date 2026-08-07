@@ -29,6 +29,12 @@ Current contract versions are:
 | Candidate reason definitions | `candidate-reason-codes.v1` |
 | Candidate source adapters | `candidate-source-adapters.v1` |
 | Economic-exposure identity | `candidate-economic-exposure.v1` |
+| Portfolio gap policy | `candidate-portfolio-gap.v1` |
+| Portfolio analytics source | `portfolio-analytics-snapshot.v1` |
+| Benchmark exposure source | `benchmark-exposure-snapshot.v1` |
+| Business peer source | `business-strength-peer-group.v1` |
+| Business classification source | `asset-business-classification.v1` |
+| Profile theme source | `profile-theme-benchmark.v1` |
 
 Contract-shape changes require a schema-version change. Material identity, normalization, score, ordering, or guardrail semantic changes require a methodology-version change. Adding or changing the meaning of a reason code requires a reason-code version change.
 
@@ -57,6 +63,22 @@ Slice 5.3 adds deterministic read-only adapters for:
 Each nomination has one versioned source reason and at least one stable evidence reference. The pool merges duplicate economic exposures, retains all distinct source reasons and evidence, and excludes direct or resolvable equivalent held exposures before scoring. The adapters do not hydrate data, call providers, mutate source tables, score candidates, or assign recommendation actions.
 
 Ranking and benchmark composition records are dated snapshots. Watchlist, asset catalog, stock catalog, and broker position-map rows are mutable current-state tables; their watermarks and limitations explicitly report that historical reconstruction is partial. Empty requested snapshots report missing coverage. Omitted search terms or benchmark IDs report unsupported coverage rather than fabricating candidates.
+
+## Portfolio Gap And Association Policy
+
+Slice 5.4 adds five deterministic source families:
+
+- sector gaps compare the latest frozen portfolio analytics exposure snapshot with one explicit benchmark exposure snapshot;
+- geography gaps use the same policy for country exposure;
+- peer associations require common effective-dated `business_strength_peer_member` membership;
+- industry associations require common effective-dated `asset_business_classification.industry` values;
+- themes require an observed Phase 4 theme tilt, an explicit versioned theme-to-index alias, and a stored theme benchmark composition.
+
+Gap nomination is deliberately narrow. Portfolio and benchmark exposure totals must each be between 95% and 105%. At least 75% must have known classifications. `Unknown`, `Unclassified`, `Other`, and `Broad Market` never become positive gap dimensions. The portfolio must have at least 40% in one known sector or 60% in one known country. A benchmark dimension must carry at least 5%, and its gap versus the portfolio must be at least 10 percentage points.
+
+Profile use is descriptive, not a suitability assessment. The profile must match the portfolio and supported schema/methodology, cannot be from the future, and cannot carry insufficient-data or dimension-classification conflicts. A conflict produces an evidence-backed blocked source nomination; it does not become a score penalty. Theme nominations additionally require an observed theme weight above zero and below 30%. This threshold identifies a bounded, profile-consistent research association; it does not assert that the investor should increase that theme.
+
+Current asset labels and peer-group definitions remain mutable even where membership is effective-dated. Their source results therefore report partial historical coverage. Incomplete portfolio or benchmark exposure, missing mappings, missing compositions, and absent profile support return explicit missing or unsupported metadata and no fabricated candidates.
 
 ## Review Invariants
 
@@ -135,11 +157,11 @@ Reads rebuild domain models, verify canonical review payload hashes, compare typ
 
 ## Current Explicit Exclusions
 
-Through Slice 5.3, the candidate engine adds no:
+Through Slice 5.4, the candidate engine adds no:
 
 - API or transport model;
 - score weight, threshold, ranking, or tie-break policy;
-- sector, geography, peer, industry, or profile-theme gap source;
+- quality, value, or momentum screen;
 - freshness or guardrail adjudication;
 - recommendation action, LLM call, provider call, or UI.
 

@@ -288,15 +288,25 @@ def test_empty_sources_report_truthful_missing_and_unsupported_metadata(conn) ->
 
     assert result.candidates == ()
     assert coverage == {
+        "asset-business-classification": "unsupported",
         "asset-catalog-search": "unsupported",
         "benchmark-composition": "unsupported",
+        "business-strength-peer-groups": "unsupported",
+        "portfolio-geography-gap": "unsupported",
+        "portfolio-sector-gap": "unsupported",
+        "profile-theme-benchmark": "unsupported",
         "stock-ranking": "missing",
         "watchlist": "missing",
     }
     assert set(result.source_limitations) == {
+        "source.geography_gap.benchmark_not_supplied",
+        "source.industry.seed_not_supplied",
+        "source.peer.seed_not_supplied",
         "source.all_universe.query_not_supplied",
         "source.benchmark.index_not_supplied",
         "source.ranking.snapshot_missing",
+        "source.sector_gap.benchmark_not_supplied",
+        "source.theme.profile_not_supplied",
         "source.watchlist.snapshot_missing",
     }
 

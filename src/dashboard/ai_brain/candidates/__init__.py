@@ -33,6 +33,15 @@ from dashboard.ai_brain.candidates.persistence import (
     CandidateRunRepository,
     ensure_candidate_schema,
 )
+from dashboard.ai_brain.candidates.portfolio_sources import (
+    BENCHMARK_EXPOSURE_SCHEMA_VERSION,
+    BUSINESS_CLASSIFICATION_SCHEMA_VERSION,
+    BUSINESS_PEER_SCHEMA_VERSION,
+    PORTFOLIO_ANALYTICS_SCHEMA_VERSION,
+    PORTFOLIO_GAP_POLICY_VERSION,
+    PROFILE_THEME_SCHEMA_VERSION,
+    CandidatePortfolioSourceAdapters,
+)
 from dashboard.ai_brain.candidates.serialization import candidate_review_from_json
 from dashboard.ai_brain.candidates.source_adapters import (
     ALL_UNIVERSE_SCHEMA_VERSION,
@@ -41,6 +50,7 @@ from dashboard.ai_brain.candidates.source_adapters import (
     STOCK_RANKING_SCHEMA_VERSION,
     WATCHLIST_SCHEMA_VERSION,
     CandidateNomination,
+    CandidateNominationBlock,
     CandidateSourceAdapters,
     SourceAdapterResult,
 )
@@ -58,6 +68,9 @@ from dashboard.ai_brain.candidates.universe import (
 __all__ = [
     "ALL_UNIVERSE_SCHEMA_VERSION",
     "BENCHMARK_CONSTITUENT_SCHEMA_VERSION",
+    "BENCHMARK_EXPOSURE_SCHEMA_VERSION",
+    "BUSINESS_CLASSIFICATION_SCHEMA_VERSION",
+    "BUSINESS_PEER_SCHEMA_VERSION",
     "CANDIDATE_EVIDENCE_SCHEMA_VERSION",
     "CANDIDATE_METHODOLOGY_VERSION",
     "CANDIDATE_REASON_CODES_VERSION",
@@ -65,6 +78,9 @@ __all__ = [
     "CANDIDATE_RUN_SCHEMA_VERSION",
     "CANDIDATE_SOURCE_ADAPTER_VERSION",
     "IDENTITY_METHODOLOGY_VERSION",
+    "PORTFOLIO_ANALYTICS_SCHEMA_VERSION",
+    "PORTFOLIO_GAP_POLICY_VERSION",
+    "PROFILE_THEME_SCHEMA_VERSION",
     "STOCK_RANKING_SCHEMA_VERSION",
     "VOLATILE_HASH_FIELDS",
     "WATCHLIST_SCHEMA_VERSION",
@@ -74,12 +90,14 @@ __all__ = [
     "CandidateHighlight",
     "CandidateMissingMetric",
     "CandidateNomination",
+    "CandidateNominationBlock",
     "CandidatePersistenceConflict",
     "CandidatePersistenceError",
     "CandidatePersistenceIntegrityError",
     "CandidatePoolExclusion",
     "CandidatePoolItem",
     "CandidatePoolResult",
+    "CandidatePortfolioSourceAdapters",
     "CandidateReview",
     "CandidateRun",
     "CandidateRunRepository",

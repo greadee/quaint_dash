@@ -12,11 +12,15 @@ from dashboard.ai_brain.candidates.models import (
     CandidateSourceWatermark,
     CandidateWarning,
 )
+from dashboard.ai_brain.candidates.portfolio_sources import (
+    CandidatePortfolioSourceAdapters,
+)
 from dashboard.ai_brain.candidates.source_adapters import (
     CandidateNomination,
     CandidateSourceAdapters,
     SourceAdapterResult,
 )
+from dashboard.ai_brain.models import InvestorProfile
 from dashboard.assets import cdr_underlying_symbol
 
 IDENTITY_METHODOLOGY_VERSION = "candidate-economic-exposure.v1"
@@ -244,6 +248,7 @@ class OutsideHoldingUniverseBuilder:
     def __init__(self, conn: Any) -> None:
         self.conn = conn
         self.adapters = CandidateSourceAdapters(conn)
+        self.portfolio_sources = CandidatePortfolioSourceAdapters(conn)
         self.identity = CandidateAssetIdentityResolver(conn)
 
     def build(
@@ -256,8 +261,11 @@ class OutsideHoldingUniverseBuilder:
         ranking_limit: int = 25,
         search_terms: tuple[str, ...] = (),
         benchmark_index_ids: tuple[str, ...] = (),
+        comparison_benchmark_index_id: str | None = None,
+        investor_profile: InvestorProfile | None = None,
     ) -> CandidatePoolResult:
         normalized_as_of = _normalize_as_of(as_of)
+        held_asset_ids = self._held_asset_ids(portfolio_id, normalized_as_of)
         source_results = (
             self.adapters.top_ranked(
                 as_of=normalized_as_of,
@@ -273,6 +281,31 @@ class OutsideHoldingUniverseBuilder:
             self.adapters.benchmark_constituents(
                 as_of=normalized_as_of,
                 benchmark_index_ids=benchmark_index_ids,
+            ),
+            self.portfolio_sources.sector_gaps(
+                portfolio_id=portfolio_id,
+                as_of=normalized_as_of,
+                benchmark_index_id=comparison_benchmark_index_id,
+                investor_profile=investor_profile,
+            ),
+            self.portfolio_sources.geography_gaps(
+                portfolio_id=portfolio_id,
+                as_of=normalized_as_of,
+                benchmark_index_id=comparison_benchmark_index_id,
+                investor_profile=investor_profile,
+            ),
+            self.portfolio_sources.peer_associations(
+                as_of=normalized_as_of,
+                seed_asset_ids=held_asset_ids,
+            ),
+            self.portfolio_sources.industry_associations(
+                as_of=normalized_as_of,
+                seed_asset_ids=held_asset_ids,
+            ),
+            self.portfolio_sources.profile_themes(
+                as_of=normalized_as_of,
+                investor_profile=investor_profile,
+                portfolio_id=portfolio_id,
             ),
         )
         return self.build_from_sources(
@@ -311,8 +344,15 @@ class OutsideHoldingUniverseBuilder:
 
         grouped: dict[str, list[tuple[CandidateNomination, ResolvedCandidateIdentity]]] = {}
         blocked_entries: dict[
-            str,
-            list[tuple[CandidateNomination, ResolvedCandidateIdentity]],
+            tuple[str, str],
+            list[
+                tuple[
+                    CandidateSourceMatch,
+                    ResolvedCandidateIdentity,
+                    str,
+                    str,
+                ]
+            ],
         ] = {}
         for result in source_results:
             for nomination in result.nominations:
@@ -323,14 +363,44 @@ class OutsideHoldingUniverseBuilder:
                 )
                 if not identity.resolved:
                     blocked_entries.setdefault(
-                        identity.economic_exposure_id,
+                        (
+                            "guardrail.identity.unresolved",
+                            identity.economic_exposure_id,
+                        ),
                         [],
                     ).append(
-                        (nomination, identity)
+                        (
+                            nomination.source_match,
+                            identity,
+                            nomination.source_asset_id,
+                            nomination.ticker,
+                        )
                     )
                     continue
                 grouped.setdefault(identity.economic_exposure_id, []).append(
                     (nomination, identity)
+                )
+            for blocked_nomination in result.blocked_nominations:
+                identity = self.identity.resolve(
+                    asset_id=blocked_nomination.source_asset_id,
+                    ticker=blocked_nomination.ticker,
+                    as_of=normalized_as_of,
+                )
+                reason_code = (
+                    blocked_nomination.reason_code
+                    if identity.resolved
+                    else "guardrail.identity.unresolved"
+                )
+                blocked_entries.setdefault(
+                    (reason_code, identity.economic_exposure_id),
+                    [],
+                ).append(
+                    (
+                        blocked_nomination.source_match,
+                        identity,
+                        blocked_nomination.source_asset_id,
+                        blocked_nomination.ticker,
+                    )
                 )
 
         candidates: list[CandidatePoolItem] = []
@@ -386,24 +456,47 @@ class OutsideHoldingUniverseBuilder:
             )
 
         blocked: list[BlockedCandidateIdentity] = []
-        for entries in blocked_entries.values():
+        for (reason_code, exposure_id), entries in blocked_entries.items():
             matches = _merge_source_matches(
-                tuple(entry[0].source_match for entry in entries)
+                tuple(entry[0] for entry in entries)
             )
             evidence_refs = _evidence_refs(matches)
             identity = min(
                 (entry[1] for entry in entries),
                 key=lambda item: (item.source_asset_id, item.ticker),
             )
+            candidate_keys = {
+                key
+                for entry in entries
+                for key in entry[1].comparison_keys
+            }
+            if candidate_keys.intersection(held_keys) or (
+                identity.canonical_asset_id in held_canonical_ids
+            ):
+                direct = any(entry[2].upper() in held_source_ids for entry in entries)
+                exclusions.append(
+                    CandidatePoolExclusion(
+                        asset_id=identity.canonical_asset_id or identity.source_asset_id,
+                        ticker=identity.ticker,
+                        economic_exposure_id=exposure_id,
+                        reason_code=(
+                            "guardrail.exposure.direct_holding"
+                            if direct
+                            else "guardrail.exposure.equivalent_holding"
+                        ),
+                        evidence_refs=evidence_refs,
+                    )
+                )
+                continue
             blocked.append(
                 BlockedCandidateIdentity(
                     source_asset_id=identity.source_asset_id,
                     ticker=identity.ticker,
-                    reason_code="guardrail.identity.unresolved",
+                    reason_code=reason_code,
                     source_matches=matches,
                     warnings=(
                         CandidateWarning(
-                            warning_code="guardrail.identity.unresolved",
+                            warning_code=reason_code,
                             severity="critical",
                             blocking=True,
                             evidence_refs=evidence_refs,
@@ -438,9 +531,7 @@ class OutsideHoldingUniverseBuilder:
                 )
             ),
             candidates=tuple(sorted(candidates, key=lambda item: item.asset_id)),
-            exclusions=tuple(
-                sorted(exclusions, key=lambda item: (item.asset_id, item.reason_code))
-            ),
+            exclusions=_merge_exclusions(exclusions),
             blocked_identities=tuple(
                 sorted(blocked, key=lambda item: (item.source_asset_id, item.reason_code))
             ),
@@ -550,6 +641,37 @@ def _evidence_refs(
             }.values(),
             key=lambda item: item.evidence_id,
         )
+    )
+
+
+def _merge_exclusions(
+    exclusions: list[CandidatePoolExclusion],
+) -> tuple[CandidatePoolExclusion, ...]:
+    grouped: dict[
+        tuple[str, str, str, str],
+        dict[str, CandidateEvidenceRef],
+    ] = {}
+    for item in exclusions:
+        key = (
+            item.asset_id,
+            item.ticker,
+            item.economic_exposure_id,
+            item.reason_code,
+        )
+        grouped.setdefault(key, {}).update(
+            {ref.evidence_id: ref for ref in item.evidence_refs}
+        )
+    return tuple(
+        CandidatePoolExclusion(
+            asset_id=key[0],
+            ticker=key[1],
+            economic_exposure_id=key[2],
+            reason_code=key[3],
+            evidence_refs=tuple(
+                sorted(evidence.values(), key=lambda item: item.evidence_id)
+            ),
+        )
+        for key, evidence in sorted(grouped.items())
     )
 
 

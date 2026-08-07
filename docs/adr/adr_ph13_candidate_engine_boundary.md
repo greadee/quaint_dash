@@ -201,12 +201,14 @@ Slice 5.2 implements repeatable DuckDB schema initialization and immutable candi
 
 Slice 5.3 implements read-only persisted-source adapters for rankings, watchlists, asset/catalog search, and benchmark constituents or proxies. It also implements shared CDR-underlying resolution and a deterministic outside-holding pool that merges source evidence, excludes direct and resolvable equivalent holdings, and blocks unresolved nominations.
 
-Mutable current-state sources disclose partial historical coverage. No source adapter hydrates missing data or calls a provider. No candidate scoring, API, recommendation, or UI behavior is implemented through Slice 5.3.
+Slice 5.4 implements sector and geography gap adapters over frozen portfolio and benchmark exposure snapshots, effective-dated peer and industry associations, and profile-consistent theme associations over stored benchmark compositions. Gap thresholds, unknown-classification exclusions, profile conflicts, and theme aliases are versioned. Incomplete exposure fails closed.
+
+Mutable current-state sources disclose partial historical coverage. Phase 4 profile observations constrain source eligibility but are not treated as suitability permission. No source adapter hydrates missing data or calls a provider. No candidate scoring, API, recommendation, or UI behavior is implemented through Slice 5.4.
 
 ## Deferred
 
-- Sector, geography, association, and profile-theme adapters to Slice 5.4.
-- Scoring and guardrails to Slices 5.5 and 5.6.
+- Quality, value, and momentum screens plus candidate scoring to Slice 5.5.
+- Freshness and remaining guardrails to Slice 5.6.
 - Candidate orchestration to Slice 5.7.
 - Public API, UI, recommendation decisions, LLM providers, and trade behavior to later phases.
 

@@ -37,10 +37,27 @@ class CandidateNomination:
 
 
 @dataclass(frozen=True)
+class CandidateNominationBlock:
+    source_asset_id: str
+    ticker: str
+    reason_code: str
+    source_match: CandidateSourceMatch
+
+    def __post_init__(self) -> None:
+        if not self.source_asset_id or self.source_asset_id != self.source_asset_id.strip():
+            raise ValueError("blocked source_asset_id must be nonempty and trimmed")
+        if not self.ticker or self.ticker != self.ticker.strip().upper():
+            raise ValueError("blocked nomination ticker must be uppercase and trimmed")
+        if not self.reason_code.startswith("guardrail.profile."):
+            raise ValueError("blocked nominations require a profile guardrail reason")
+
+
+@dataclass(frozen=True)
 class SourceAdapterResult:
     source_family: str
     watermark: CandidateSourceWatermark
     nominations: tuple[CandidateNomination, ...]
+    blocked_nominations: tuple[CandidateNominationBlock, ...] = ()
     limitations: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -49,6 +66,11 @@ class SourceAdapterResult:
             for nomination in self.nominations
         ):
             raise ValueError("adapter nominations must match the adapter source family")
+        if any(
+            nomination.source_match.source_family != self.source_family
+            for nomination in self.blocked_nominations
+        ):
+            raise ValueError("blocked nominations must match the adapter source family")
 
 
 class CandidateSourceAdapters:
@@ -122,7 +144,7 @@ class CandidateSourceAdapters:
                     source_methodology_version=STOCK_RANKING_SCHEMA_VERSION,
                     reason_code=f"source.ranking.{normalized_factor}",
                     evidence_refs=(
-                        _evidence(
+                        candidate_source_evidence(
                             source_domain="stock-ranking",
                             source_schema_version=STOCK_RANKING_SCHEMA_VERSION,
                             source_record_id=(
@@ -200,7 +222,7 @@ class CandidateSourceAdapters:
                     source_methodology_version=WATCHLIST_SCHEMA_VERSION,
                     reason_code="source.watchlist.active",
                     evidence_refs=(
-                        _evidence(
+                        candidate_source_evidence(
                             source_domain="watchlist",
                             source_schema_version=WATCHLIST_SCHEMA_VERSION,
                             source_record_id=f"watchlist:{row[0]}",
@@ -275,7 +297,7 @@ class CandidateSourceAdapters:
                             source_methodology_version=ALL_UNIVERSE_SCHEMA_VERSION,
                             reason_code="source.all_universe.search",
                             evidence_refs=(
-                                _evidence(
+                                candidate_source_evidence(
                                     source_domain="asset-catalog-search",
                                     source_schema_version=ALL_UNIVERSE_SCHEMA_VERSION,
                                     source_record_id=f"search:{term}:{row[0]}",
@@ -411,7 +433,7 @@ class CandidateSourceAdapters:
                 covered_indexes += 1
             for row in rows:
                 is_proxy = bool(snapshot[2] or row[9])
-                evidence = _evidence(
+                evidence = candidate_source_evidence(
                     source_domain="benchmark-composition",
                     source_schema_version=BENCHMARK_CONSTITUENT_SCHEMA_VERSION,
                     source_record_id=(
@@ -563,7 +585,7 @@ class CandidateSourceAdapters:
         ).fetchall()
 
 
-def _evidence(
+def candidate_source_evidence(
     *,
     source_domain: str,
     source_schema_version: str,
