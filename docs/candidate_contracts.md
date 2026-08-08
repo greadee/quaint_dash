@@ -14,7 +14,7 @@ The provider-neutral contract lives in `dashboard.ai_brain.candidates`:
 - `CandidateHighlight`, `CandidateWarning`, and `CandidateMissingMetric` preserve structured supporting and limiting context.
 - `CandidateSourceWatermark` records source coverage at the run boundary.
 
-The domain models, identity functions, and canonical serializer import no database, API, provider, ranking, analytics, or UI module. `CandidateRunRepository` is the candidate-owned DuckDB infrastructure boundary added in Slice 5.2. Slice 5.3 source adapters query stored repository tables through a narrow read-only connection boundary. Scoring begins in later slices.
+The domain models, identity functions, and canonical serializer import no database, API, provider, ranking, analytics, or UI module. `CandidateRunRepository` is the candidate-owned DuckDB infrastructure boundary added in Slice 5.2. Source, scoring, and guardrail services query stored repository tables through narrow read-only connection boundaries.
 
 ## Versions
 
@@ -25,12 +25,16 @@ Current contract versions are:
 | Candidate run schema | `candidate-run.v1` |
 | Candidate review schema | `candidate-review.v1` |
 | Candidate evidence schema | `candidate-evidence.v1` |
-| Candidate methodology | `candidate-engine.deterministic.v1` |
+| Candidate methodology | `candidate-engine.deterministic.v2` |
 | Candidate screen policy | `candidate-screens.v1` |
 | Candidate scoring policy | `candidate-scoring.v1` |
+| Candidate guardrail policy | `candidate-guardrails.v1` |
 | Candidate score inputs | `candidate-score-inputs.v1` |
 | Economic-overlap source | `candidate-economic-overlap.v1` |
-| Candidate reason definitions | `candidate-reason-codes.v1` |
+| Candidate identity evidence | `candidate-identity.v1` |
+| Candidate price evidence | `candidate-price-snapshot.v1` |
+| Candidate liquidity evidence | `candidate-liquidity-snapshot.v1` |
+| Candidate reason definitions | `candidate-reason-codes.v2` |
 | Candidate source adapters | `candidate-source-adapters.v1` |
 | Economic-exposure identity | `candidate-economic-exposure.v1` |
 | Portfolio gap policy | `candidate-portfolio-gap.v1` |
@@ -113,7 +117,7 @@ Each alignment is `100 - absolute(candidate score - observed profile score)`, bo
 
 Diversification models a fixed 5% hypothetical allocation for comparison only. It scales the existing sector or country exposure to 95%, adds 5% to the candidate classification, and measures the HHI reduction against the maximum possible reduction at that allocation size. Both sector and geography require 95%-105% total exposure, at least 75% known classification, and a known candidate classification. The final diversification score weights sector and geography equally. It does not size a trade or claim that the hypothetical allocation should occur.
 
-Redundancy builds economic-exposure maps from the frozen portfolio positions and stored ETF look-through rows where applicable. It is the sum of the minimum candidate and portfolio weights for shared economic exposures, bounded to 0-100. Direct and equivalent holdings remain exclusions before scoring. An ETF without look-through holdings has an unavailable redundancy score instead of zero. ETF holdings are a mutable current-state source, so their overlap evidence remains `unknown` freshness until Slice 5.6 adjudicates it. A score of 50 or more moves an otherwise complete review to `downgraded`; it is not silently subtracted from another score.
+Redundancy builds economic-exposure maps from the frozen portfolio positions and stored ETF look-through rows where applicable. It is the sum of the minimum candidate and portfolio weights for shared economic exposures, bounded to 0-100. Direct and equivalent holdings remain exclusions before scoring. An ETF without look-through holdings has an unavailable redundancy score instead of zero. ETF holdings are a mutable current-state source. Slice 5.6 therefore leaves overlap evidence `unknown` when an undated ETF look-through row participates and downgrades the review. A score of 50 or more also moves an otherwise complete review to `downgraded`; it is not silently subtracted from another score.
 
 Valuation, quality, momentum, risk, and sentiment highlights preserve their own bounded 0-100 source metric and evidence. An absent highlight produces a noncritical missing metric and no synthetic zero-valued highlight.
 
@@ -127,6 +131,37 @@ Final ordering is:
 6. canonical asset ID ascending.
 
 Profile identity/version/coverage conflicts and missing critical score evidence block ordering. Raw ranking magnitude is source evidence only and is not a fit component, so it cannot bypass profile conflict, unavailable critical scores, or a material redundancy downgrade. Slice 5.5 does not tune these definitions from production outcomes.
+
+## Freshness And Guardrail Policy
+
+Slice 5.6 applies `candidate-guardrails.v1` after scoring and before final ordering. Freshness is evaluated against the review's frozen `data_as_of`, never the wall clock. Calendar age is defined by evidence type:
+
+| Evidence type | Current through | Block after |
+| --- | ---: | ---: |
+| Daily market price | 7 days | 14 days |
+| Daily liquidity sample | 14 days | 30 days |
+| Factor or ranking snapshot | 45 days | 120 days |
+| Valuation or risk analytics | 120 days | 365 days |
+| Business quality | 180 days | 540 days |
+| Portfolio state or gap | 30 days | 90 days |
+| Benchmark composition | 90 days | 365 days |
+| Classification | 365 days | 1,095 days |
+| Peer or industry association | 365 days | 730 days |
+| Canonical identity metadata | 365 days | 730 days |
+| Investor profile | 30 days | 90 days |
+| Sentiment | 3 days | 14 days |
+| Catalog or watchlist state | 180 days | 365 days |
+| Dated derived overlap | 30 days | 90 days |
+
+Evidence at the current boundary is `current`. Evidence one day beyond that boundary is `stale`. Critical identity, price, or risk evidence within its stale window downgrades; evidence beyond its block boundary blocks. Unknown critical freshness also blocks. If every material source reference is stale, the review downgrades; if every material source reference is beyond its block boundary, the review blocks. Stale material evidence alongside current material support remains visible as an informational warning. Unknown domains retain `unknown` freshness rather than inheriting a global default.
+
+Material candidate support is limited to versioned ranking, screen, benchmark, gap, peer, industry, and theme evidence. Catalog presence, watchlist membership, investor-profile facts, portfolio state, overlap calculations, and sentiment do not independently establish material support. A review with no material support blocks. A sentiment-only review receives the specific `guardrail.support.sentiment_only` block.
+
+Stored `asset_quote_daily` rows provide critical price evidence and a 20-row liquidity sample. Liquidity requires at least 10 positive-volume observations. Missing coverage remains an explicit noncritical metric and downgrades. Median daily local-currency notional below 1,000,000 downgrades as low liquidity; below 100,000 receives the stronger `extremely_low` warning but remains a research downgrade, not a trade or suitability decision.
+
+Risk highlights at or above 70 receive a structured speculative-risk warning without changing eligibility. A score at or above 90 downgrades. Diversification at or below 20 produces an informational concentration warning. Redundancy at or above 50 produces a structured downgrade warning. Missing supported sector or geography classification blocks when the corresponding diversification input is unavailable.
+
+A stale positive highlight combined with current negative evidence produces `guardrail.evidence.current_contradiction` and downgrades the review, so it cannot outrank a current eligible review. Mixed current positive and negative evidence remains visible as informational context. Warnings never alter numeric fit, diversification, or redundancy values; eligibility effects are explicit in the versioned policy.
 
 ## Review Invariants
 
@@ -157,7 +192,7 @@ Evidence includes:
 
 Evidence newer than a review's `data_as_of` is invalid. Source matches, numeric score components, highlights, and warnings require evidence. A review with no evidence is invalid, including blocked reviews.
 
-Freshness is represented but not adjudicated in Slice 5.1. Candidate-specific stale downgrade and block thresholds belong to Slice 5.6.
+Freshness states are material run output. Slice 5.6 derives them from evidence-type thresholds and the frozen review boundary. Replaying the same evidence at the same `data_as_of` yields the same freshness and guardrail output.
 
 ## Canonical Serialization
 
@@ -205,11 +240,10 @@ Reads rebuild domain models, verify canonical review payload hashes, compare typ
 
 ## Current Explicit Exclusions
 
-Through Slice 5.5, the candidate engine adds no:
+Through Slice 5.6, the candidate engine adds no:
 
 - API or transport model;
-- freshness-age adjudication or evidence-type age thresholds;
-- liquidity, speculative-risk, contradictory-evidence, or sentiment-only guardrail policy;
+- complete candidate-run orchestration or internal read service;
 - recommendation action, LLM call, provider call, or UI.
 
 ## Verification

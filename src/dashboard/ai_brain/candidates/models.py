@@ -21,8 +21,8 @@ from dashboard.ai_brain.candidates.canonical import (
 CANDIDATE_RUN_SCHEMA_VERSION = "candidate-run.v1"
 CANDIDATE_REVIEW_SCHEMA_VERSION = "candidate-review.v1"
 CANDIDATE_EVIDENCE_SCHEMA_VERSION = "candidate-evidence.v1"
-CANDIDATE_METHODOLOGY_VERSION = "candidate-engine.deterministic.v1"
-CANDIDATE_REASON_CODES_VERSION = "candidate-reason-codes.v1"
+CANDIDATE_METHODOLOGY_VERSION = "candidate-engine.deterministic.v2"
+CANDIDATE_REASON_CODES_VERSION = "candidate-reason-codes.v2"
 
 CANDIDATE_ELIGIBILITY_STATES = frozenset({"eligible", "downgraded", "blocked"})
 CANDIDATE_RUN_STATES = frozenset({"completed", "partial", "blocked"})

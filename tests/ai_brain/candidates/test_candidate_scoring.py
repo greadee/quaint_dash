@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -88,6 +88,19 @@ def _asset(
             country,
             UPDATED_AT,
             UPDATED_AT,
+        ],
+    )
+    conn.executemany(
+        """
+        INSERT INTO asset_quote_daily(
+            asset_id, date, open, high, low, close, adj_close, volume,
+            ing_source, ing_at
+        )
+        VALUES (?, ?, 100, 101, 99, 100, 100, 100000, 'fixture', ?)
+        """,
+        [
+            [asset_id, AS_OF.date() - timedelta(days=offset), UPDATED_AT]
+            for offset in range(1, 21)
         ],
     )
 

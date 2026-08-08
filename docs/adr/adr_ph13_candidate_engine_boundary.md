@@ -205,21 +205,21 @@ Slice 5.4 implements sector and geography gap adapters over frozen portfolio and
 
 Slice 5.5 implements quality, value, and momentum screen adapters plus deterministic profile-fit, diversification, economic-overlap redundancy, source-support, highlight, and ordering policies. Numeric scores require their documented contributors; missing critical score evidence blocks ordering, material redundancy downgrades eligibility, and raw ranking magnitude cannot override either state. Screen and score policies are versioned separately from source schemas.
 
-Mutable current-state sources disclose partial historical coverage. Phase 4 profile observations constrain source eligibility but are not treated as suitability permission. No source adapter hydrates missing data or calls a provider. No API, recommendation, or UI behavior is implemented through Slice 5.5.
+Slice 5.6 implements evidence-type freshness thresholds and a monotonic post-scoring guardrail policy. Critical identity, price, and risk evidence fails closed; material support excludes sentiment, catalog, watchlist, profile, portfolio, and overlap-only evidence. Liquidity, speculative risk, concentration, redundancy, unsupported classification, undated ETF look-through, and stale/current conflicts produce stable warnings with explicit eligibility effects. Numeric scores are never silently penalized.
+
+Mutable current-state sources disclose partial historical coverage. Phase 4 profile observations constrain source eligibility but are not treated as suitability permission. No source adapter or guardrail hydrates missing data or calls a provider. No API, recommendation, or UI behavior is implemented through Slice 5.6.
 
 ## Deferred
 
-- Freshness and remaining guardrails to Slice 5.6.
 - Candidate orchestration to Slice 5.7.
 - Public API, UI, recommendation decisions, LLM providers, and trade behavior to later phases.
 
 ## Validation Method
 
 - Verify every prerequisite claim against current code, schema, and tests.
-- Confirm repository search finds no implemented investor-profile contract.
-- Confirm this ADR changes no runtime code or database schema.
-- Run Markdown structure checks and `git diff --check`.
-- Rerun the Slice 5.0 gate after Phase 4 is completed.
+- Run candidate contract, persistence, source, scoring, freshness, and guardrail tests.
+- Run repository lint, architecture, test, data-health, and live-web regression checks.
+- Confirm no provider, recommendation, trade, API, or UI path was added.
 
 ## Related ADRs
 

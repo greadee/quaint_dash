@@ -13,6 +13,7 @@ from dashboard.ai_brain.candidates.canonical import (
     candidate_review_id,
     canonical_hash,
 )
+from dashboard.ai_brain.candidates.guardrails import CandidateGuardrailPolicy
 from dashboard.ai_brain.candidates.models import (
     CANDIDATE_METHODOLOGY_VERSION,
     CANDIDATE_REASON_CODES_VERSION,
@@ -117,6 +118,7 @@ class CandidateScoringEngine:
     def __init__(self, conn: Any) -> None:
         self.conn = conn
         self.identity = CandidateAssetIdentityResolver(conn)
+        self.guardrails = CandidateGuardrailPolicy(conn)
 
     def score(
         self,
@@ -144,6 +146,11 @@ class CandidateScoringEngine:
                 run_id=run_id,
             )
             for item in pool.candidates
+        )
+        reviews = self.guardrails.apply(
+            portfolio_id=pool.portfolio_id,
+            as_of=as_of,
+            reviews=reviews,
         )
         return CandidateScoringResult(
             portfolio_id=pool.portfolio_id,
