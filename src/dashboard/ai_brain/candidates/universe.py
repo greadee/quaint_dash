@@ -15,6 +15,7 @@ from dashboard.ai_brain.candidates.models import (
 from dashboard.ai_brain.candidates.portfolio_sources import (
     CandidatePortfolioSourceAdapters,
 )
+from dashboard.ai_brain.candidates.screen_adapters import CandidateScreenAdapters
 from dashboard.ai_brain.candidates.source_adapters import (
     CandidateNomination,
     CandidateSourceAdapters,
@@ -249,6 +250,7 @@ class OutsideHoldingUniverseBuilder:
         self.conn = conn
         self.adapters = CandidateSourceAdapters(conn)
         self.portfolio_sources = CandidatePortfolioSourceAdapters(conn)
+        self.screens = CandidateScreenAdapters(conn)
         self.identity = CandidateAssetIdentityResolver(conn)
 
     def build(
@@ -282,6 +284,9 @@ class OutsideHoldingUniverseBuilder:
                 as_of=normalized_as_of,
                 benchmark_index_ids=benchmark_index_ids,
             ),
+            self.screens.quality(as_of=normalized_as_of),
+            self.screens.value(as_of=normalized_as_of),
+            self.screens.momentum(as_of=normalized_as_of),
             self.portfolio_sources.sector_gaps(
                 portfolio_id=portfolio_id,
                 as_of=normalized_as_of,

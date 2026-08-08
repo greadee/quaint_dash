@@ -463,8 +463,8 @@ class CandidatePortfolioSourceAdapters:
                 limitation="source.theme.profile_not_supplied",
             )
 
-        profile_evidence = _profile_evidence(investor_profile, "theme")
-        conflict = _profile_conflict(
+        profile_evidence = candidate_profile_evidence(investor_profile, "theme")
+        conflict = candidate_profile_conflict(
             investor_profile,
             normalized_as_of,
             "theme",
@@ -651,8 +651,8 @@ class CandidatePortfolioSourceAdapters:
                 ),
             )
 
-        profile_evidence = _profile_evidence(investor_profile, dimension)
-        conflict = _profile_conflict(
+        profile_evidence = candidate_profile_evidence(investor_profile, dimension)
+        conflict = candidate_profile_conflict(
             investor_profile,
             normalized_as_of,
             dimension,
@@ -1070,7 +1070,7 @@ def _calculate_gaps(
     return gaps, ()
 
 
-def _profile_conflict(
+def candidate_profile_conflict(
     profile: InvestorProfile,
     as_of: datetime,
     dimension: str,
@@ -1102,7 +1102,7 @@ def _profile_conflict(
     return None
 
 
-def _profile_evidence(
+def candidate_profile_evidence(
     profile: InvestorProfile,
     dimension: str,
 ) -> CandidateEvidenceRef:
@@ -1120,6 +1120,12 @@ def _profile_evidence(
             "suitability_status": profile.suitability_status,
             "archetype_labels": profile.archetype_labels,
             "confidence": profile.confidence,
+            "factor_scores": tuple(
+                _profile_dimension_payload(item) for item in profile.factor_scores
+            ),
+            "observed_risk_posture": _profile_dimension_payload(
+                profile.observed_risk_posture
+            ),
             "concentration_profile": _profile_dimension_payload(
                 profile.concentration_profile
             ),
@@ -1130,6 +1136,15 @@ def _profile_evidence(
             "theme_tilts": tuple(
                 _profile_tilt_payload(item) for item in profile.theme_tilts
             ),
+            "allocation_mix": {
+                "etf_weight": profile.allocation_mix.etf_weight,
+                "passive_weight": profile.allocation_mix.passive_weight,
+                "direct_stock_weight": profile.allocation_mix.direct_stock_weight,
+                "classified_weight": profile.allocation_mix.classified_weight,
+                "label": profile.allocation_mix.label,
+                "confidence": profile.allocation_mix.confidence,
+                "evidence_ids": tuple(sorted(profile.allocation_mix.evidence_refs)),
+            },
             "data_gaps": profile.data_gaps,
             "dimension": dimension,
         },

@@ -26,6 +26,10 @@ Current contract versions are:
 | Candidate review schema | `candidate-review.v1` |
 | Candidate evidence schema | `candidate-evidence.v1` |
 | Candidate methodology | `candidate-engine.deterministic.v1` |
+| Candidate screen policy | `candidate-screens.v1` |
+| Candidate scoring policy | `candidate-scoring.v1` |
+| Candidate score inputs | `candidate-score-inputs.v1` |
+| Economic-overlap source | `candidate-economic-overlap.v1` |
 | Candidate reason definitions | `candidate-reason-codes.v1` |
 | Candidate source adapters | `candidate-source-adapters.v1` |
 | Economic-exposure identity | `candidate-economic-exposure.v1` |
@@ -80,6 +84,50 @@ Profile use is descriptive, not a suitability assessment. The profile must match
 
 Current asset labels and peer-group definitions remain mutable even where membership is effective-dated. Their source results therefore report partial historical coverage. Incomplete portfolio or benchmark exposure, missing mappings, missing compositions, and absent profile support return explicit missing or unsupported metadata and no fabricated candidates.
 
+## Deterministic Screens
+
+Slice 5.5 adds three read-only screen sources:
+
+- quality requires a latest stored business-strength score of at least 70 with confidence and completeness each at least 60;
+- value averages available DCF and dividend-discount margins of safety, maps -25% to 0 and +50% to 100, and requires a normalized score of at least 65;
+- momentum requires a latest stored ticker-factor momentum score of at least 70.
+
+Scores must come from snapshots at or before `as_of`. The adapters do not calculate or hydrate missing source rows. A source with snapshots but no qualifying asset reports `available` coverage and `no_qualifying_assets`; a source without a snapshot reports `missing` coverage.
+
+## Candidate Scoring Policy
+
+The versioned `candidate-scoring.v1` policy constructs three independent score states.
+
+Profile fit uses five observed Phase 4 dimensions plus bounded source support:
+
+| Component | Weight |
+| --- | ---: |
+| Growth alignment | 16% |
+| Value alignment | 20% |
+| Quality alignment | 20% |
+| Income alignment | 12% |
+| Speculative-risk alignment | 12% |
+| Source support | 20% |
+
+Each alignment is `100 - absolute(candidate score - observed profile score)`, bounded to 0-100. Candidate factors prefer the stored ticker-factor snapshot. Stored asset analytics may supply growth, valuation, and risk where the factor snapshot does not; the latest business-strength score is the quality authority. Income uses the stored dividend factor. A numeric fit requires all five alignment dimensions. Source support starts at 35 for one evidenced source family, adds 15 per additional family and 5 per additional evidence domain, and is capped at 100. It cannot make an incomplete alignment numeric.
+
+Diversification models a fixed 5% hypothetical allocation for comparison only. It scales the existing sector or country exposure to 95%, adds 5% to the candidate classification, and measures the HHI reduction against the maximum possible reduction at that allocation size. Both sector and geography require 95%-105% total exposure, at least 75% known classification, and a known candidate classification. The final diversification score weights sector and geography equally. It does not size a trade or claim that the hypothetical allocation should occur.
+
+Redundancy builds economic-exposure maps from the frozen portfolio positions and stored ETF look-through rows where applicable. It is the sum of the minimum candidate and portfolio weights for shared economic exposures, bounded to 0-100. Direct and equivalent holdings remain exclusions before scoring. An ETF without look-through holdings has an unavailable redundancy score instead of zero. ETF holdings are a mutable current-state source, so their overlap evidence remains `unknown` freshness until Slice 5.6 adjudicates it. A score of 50 or more moves an otherwise complete review to `downgraded`; it is not silently subtracted from another score.
+
+Valuation, quality, momentum, risk, and sentiment highlights preserve their own bounded 0-100 source metric and evidence. An absent highlight produces a noncritical missing metric and no synthetic zero-valued highlight.
+
+Final ordering is:
+
+1. eligibility: `eligible`, `downgraded`, then `blocked`;
+2. fit descending, with null last;
+3. diversification descending, with null last;
+4. redundancy ascending, with null last;
+5. distinct evidence-domain coverage descending;
+6. canonical asset ID ascending.
+
+Profile identity/version/coverage conflicts and missing critical score evidence block ordering. Raw ranking magnitude is source evidence only and is not a fit component, so it cannot bypass profile conflict, unavailable critical scores, or a material redundancy downgrade. Slice 5.5 does not tune these definitions from production outcomes.
+
 ## Review Invariants
 
 Every candidate review must contain:
@@ -94,7 +142,7 @@ Every candidate review must contain:
 
 A numeric score requires components and evidence. An unavailable score remains null and names a `CandidateMissingMetric` included by the review. Missing values are not converted to neutral scores. A blocking warning requires blocked eligibility.
 
-The contract supports valuation, risk, and sentiment highlights, but does not require all three when source data is unavailable. Missing values belong in `CandidateMissingMetric`, not fabricated highlights.
+The contract supports valuation, quality, momentum, risk, and sentiment highlights, but does not require all five when source data is unavailable. Missing values belong in `CandidateMissingMetric`, not fabricated highlights.
 
 ## Evidence Protocol
 
@@ -157,12 +205,11 @@ Reads rebuild domain models, verify canonical review payload hashes, compare typ
 
 ## Current Explicit Exclusions
 
-Through Slice 5.4, the candidate engine adds no:
+Through Slice 5.5, the candidate engine adds no:
 
 - API or transport model;
-- score weight, threshold, ranking, or tie-break policy;
-- quality, value, or momentum screen;
-- freshness or guardrail adjudication;
+- freshness-age adjudication or evidence-type age thresholds;
+- liquidity, speculative-risk, contradictory-evidence, or sentiment-only guardrail policy;
 - recommendation action, LLM call, provider call, or UI.
 
 ## Verification

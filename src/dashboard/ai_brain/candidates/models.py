@@ -48,7 +48,9 @@ SOURCE_COVERAGE_STATES = frozenset({"available", "partial", "missing", "unsuppor
 MISSING_METRIC_CRITICALITIES = frozenset({"critical", "noncritical"})
 GUARDRAIL_EFFECTS = frozenset({"none", "downgrade", "block"})
 WARNING_SEVERITIES = frozenset({"info", "warning", "critical"})
-HIGHLIGHT_CATEGORIES = frozenset({"valuation", "risk", "sentiment"})
+HIGHLIGHT_CATEGORIES = frozenset(
+    {"momentum", "quality", "risk", "sentiment", "valuation"}
+)
 HIGHLIGHT_DIRECTIONS = frozenset({"positive", "negative", "neutral", "unknown"})
 
 _DOTTED_CODE = re.compile(r"^[a-z][a-z0-9]*(?:\.[a-z0-9][a-z0-9_-]*)+$")

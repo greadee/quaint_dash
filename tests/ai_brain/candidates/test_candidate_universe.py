@@ -290,12 +290,15 @@ def test_empty_sources_report_truthful_missing_and_unsupported_metadata(conn) ->
     assert coverage == {
         "asset-business-classification": "unsupported",
         "asset-catalog-search": "unsupported",
+        "asset-analytics-valuation": "missing",
         "benchmark-composition": "unsupported",
+        "business-strength-scorecard": "missing",
         "business-strength-peer-groups": "unsupported",
         "portfolio-geography-gap": "unsupported",
         "portfolio-sector-gap": "unsupported",
         "profile-theme-benchmark": "unsupported",
         "stock-ranking": "missing",
+        "ticker-factor": "missing",
         "watchlist": "missing",
     }
     assert set(result.source_limitations) == {
@@ -303,10 +306,13 @@ def test_empty_sources_report_truthful_missing_and_unsupported_metadata(conn) ->
         "source.industry.seed_not_supplied",
         "source.peer.seed_not_supplied",
         "source.all_universe.query_not_supplied",
+        "source.momentum_screen.snapshot_missing",
         "source.benchmark.index_not_supplied",
+        "source.quality_screen.snapshot_missing",
         "source.ranking.snapshot_missing",
         "source.sector_gap.benchmark_not_supplied",
         "source.theme.profile_not_supplied",
+        "source.value_screen.snapshot_missing",
         "source.watchlist.snapshot_missing",
     }
 
