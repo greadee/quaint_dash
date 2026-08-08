@@ -13,6 +13,7 @@ The provider-neutral contract lives in `dashboard.ai_brain.candidates`:
 - `CandidateScore` and `CandidateScoreComponent` represent fit, diversification, and redundancy states without defining scoring policy.
 - `CandidateHighlight`, `CandidateWarning`, and `CandidateMissingMetric` preserve structured supporting and limiting context.
 - `CandidateSourceWatermark` records source coverage at the run boundary.
+- `CandidateRunService` composes the frozen invocation, adapters, scoring, guardrails, and immutable run repository without exposing a transport boundary.
 
 The domain models, identity functions, and canonical serializer import no database, API, provider, ranking, analytics, or UI module. `CandidateRunRepository` is the candidate-owned DuckDB infrastructure boundary added in Slice 5.2. Source, scoring, and guardrail services query stored repository tables through narrow read-only connection boundaries.
 
@@ -25,7 +26,8 @@ Current contract versions are:
 | Candidate run schema | `candidate-run.v1` |
 | Candidate review schema | `candidate-review.v1` |
 | Candidate evidence schema | `candidate-evidence.v1` |
-| Candidate methodology | `candidate-engine.deterministic.v2` |
+| Candidate methodology | `candidate-engine.deterministic.v3` |
+| Candidate orchestration policy | `candidate-orchestration.v1` |
 | Candidate screen policy | `candidate-screens.v1` |
 | Candidate scoring policy | `candidate-scoring.v1` |
 | Candidate guardrail policy | `candidate-guardrails.v1` |
@@ -163,6 +165,31 @@ Risk highlights at or above 70 receive a structured speculative-risk warning wit
 
 A stale positive highlight combined with current negative evidence produces `guardrail.evidence.current_contradiction` and downgrades the review, so it cannot outrank a current eligible review. Mixed current positive and negative evidence remains visible as informational context. Warnings never alter numeric fit, diversification, or redundancy values; eligibility effects are explicit in the versioned policy.
 
+## Orchestration And Run State
+
+Slice 5.7 adds the internal `CandidateRunService`. Its frozen `CandidateRunRequest` contains one positive portfolio ID, one UTC whole-second `as_of`, one completed Phase 4 profile, and normalized source parameters. Search terms and benchmark IDs are deduplicated and sorted. Request IDs, clocks, and runtime measurements are not material inputs.
+
+The service executes all twelve stored-source families through `OutsideHoldingUniverseBuilder`, applies `CandidateScoringEngine` and `CandidateGuardrailPolicy`, derives the final run identity, persists through `CandidateRunRepository`, reads the immutable row back, and returns `CandidateRun`. Source reads and persistence share one DuckDB transaction so a run cannot combine before-and-after views of concurrent source writes. It has no provider, network, recommendation, trade, API, or UI dependency.
+
+The `candidate-engine.deterministic.v3` input snapshot hash includes:
+
+- run, review, evidence, adapter, screen, scoring, guardrail, identity, and orchestration versions;
+- normalized portfolio scope, `as_of`, source parameters, and the complete material Phase 4 profile;
+- all source watermarks, pool candidates, held-exposure exclusions, blocked identities, and source limitations;
+- the evidence, score-input states, missing metrics, freshness states, and guardrail states resolved before final run IDs are rebound.
+
+Creation time, request ID, runtime, output hash, and temporary pre-hash run IDs remain excluded. Repeating the same versioned invocation returns the originally persisted run, including its volatile audit fields. Changed source evidence changes the input hash and creates a new immutable run.
+
+Required profile schema, profile methodology, profile identity, portfolio scope, profile time, candidate identity methodology, source watermark domains, and source schema versions are checked before persistence. Incompatibility raises `CandidateInputCompatibilityError` with a structured reason, dependency, expected value, and actual value. Scoring does not execute when pool versions are incompatible.
+
+Run state is deterministic:
+
+- `blocked` when no review exists or every review is blocked;
+- `partial` when at least one review can proceed but any source watermark is partial, missing, or unsupported;
+- `completed` when at least one review can proceed and every source watermark is available.
+
+Candidate eligibility remains independent of run state. `CandidateRun` exposes eligible, downgraded, and blocked counts. `missing_dependencies` deterministically combines missing or unsupported source domains with every review's structured missing-metric source. Source coverage remains available in the persisted watermarks.
+
 ## Review Invariants
 
 Every candidate review must contain:
@@ -240,10 +267,9 @@ Reads rebuild domain models, verify canonical review payload hashes, compare typ
 
 ## Current Explicit Exclusions
 
-Through Slice 5.6, the candidate engine adds no:
+Through Slice 5.7, the candidate engine adds no:
 
 - API or transport model;
-- complete candidate-run orchestration or internal read service;
 - recommendation action, LLM call, provider call, or UI.
 
 ## Verification

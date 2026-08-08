@@ -47,7 +47,7 @@ class CandidateRunRepository:
     def ensure_schema(self) -> None:
         ensure_candidate_schema(self.conn)
 
-    def save(self, run: CandidateRun) -> bool:
+    def save(self, run: CandidateRun, *, manage_transaction: bool = True) -> bool:
         """Persist one immutable run; return False when the same run already exists."""
 
         if not run.output_hash_is_valid:
@@ -69,16 +69,19 @@ class CandidateRunRepository:
                 )
             return False
 
-        self.conn.execute("BEGIN TRANSACTION")
+        if manage_transaction:
+            self.conn.execute("BEGIN TRANSACTION")
         try:
             self._insert_run(run)
             self._insert_watermarks(run)
             self._insert_evidence(run.run_id, evidence.values())
             for review in sorted(run.candidate_reviews, key=lambda item: item.candidate_id):
                 self._insert_review(review)
-            self.conn.execute("COMMIT")
+            if manage_transaction:
+                self.conn.execute("COMMIT")
         except Exception:
-            self.conn.execute("ROLLBACK")
+            if manage_transaction:
+                self.conn.execute("ROLLBACK")
             raise
         return True
 

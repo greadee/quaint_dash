@@ -21,7 +21,7 @@ from dashboard.ai_brain.candidates.canonical import (
 CANDIDATE_RUN_SCHEMA_VERSION = "candidate-run.v1"
 CANDIDATE_REVIEW_SCHEMA_VERSION = "candidate-review.v1"
 CANDIDATE_EVIDENCE_SCHEMA_VERSION = "candidate-evidence.v1"
-CANDIDATE_METHODOLOGY_VERSION = "candidate-engine.deterministic.v2"
+CANDIDATE_METHODOLOGY_VERSION = "candidate-engine.deterministic.v3"
 CANDIDATE_REASON_CODES_VERSION = "candidate-reason-codes.v2"
 
 CANDIDATE_ELIGIBILITY_STATES = frozenset({"eligible", "downgraded", "blocked"})
@@ -482,6 +482,20 @@ class CandidateRun:
     @property
     def blocked_count(self) -> int:
         return sum(review.eligibility_state == "blocked" for review in self.candidate_reviews)
+
+    @property
+    def missing_dependencies(self) -> tuple[str, ...]:
+        missing_sources = {
+            watermark.source_domain
+            for watermark in self.source_watermarks
+            if watermark.coverage_state in {"missing", "unsupported"}
+        }
+        missing_metrics = {
+            metric.expected_source
+            for review in self.candidate_reviews
+            for metric in review.missing_metrics
+        }
+        return tuple(sorted(missing_sources | missing_metrics))
 
 
 def _evidence_ids(refs: Iterable[CandidateEvidenceRef]) -> tuple[str, ...]:

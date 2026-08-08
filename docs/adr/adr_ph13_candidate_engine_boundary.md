@@ -207,11 +207,13 @@ Slice 5.5 implements quality, value, and momentum screen adapters plus determini
 
 Slice 5.6 implements evidence-type freshness thresholds and a monotonic post-scoring guardrail policy. Critical identity, price, and risk evidence fails closed; material support excludes sentiment, catalog, watchlist, profile, portfolio, and overlap-only evidence. Liquidity, speculative risk, concentration, redundancy, unsupported classification, undated ETF look-through, and stale/current conflicts produce stable warnings with explicit eligibility effects. Numeric scores are never silently penalized.
 
-Mutable current-state sources disclose partial historical coverage. Phase 4 profile observations constrain source eligibility but are not treated as suitability permission. No source adapter or guardrail hydrates missing data or calls a provider. No API, recommendation, or UI behavior is implemented through Slice 5.6.
+Slice 5.7 implements `candidate-orchestration.v1` behind one internal `CandidateRunService`. A normalized request, complete Phase 4 profile, resolved source pool, and pre-identity evidence/missing-state graph determine `candidate-engine.deterministic.v3` run identity. The service applies existing scoring and guardrails, persists once through the immutable repository, and returns the persisted `CandidateRun`. Unsupported or incomplete source coverage produces deterministic partial or blocked run states. Required profile, identity, watermark, and source-version conflicts raise a structured compatibility error before scoring or persistence.
+
+Mutable current-state sources disclose partial historical coverage. Phase 4 profile observations constrain source eligibility but are not treated as suitability permission. No candidate source, guardrail, or orchestration path hydrates missing data or calls a provider. No public API, recommendation, or UI behavior is implemented through Slice 5.7.
 
 ## Deferred
 
-- Candidate orchestration to Slice 5.7.
+- Phase 5 closure evidence and full requirement traceability to Slice 5.8.
 - Public API, UI, recommendation decisions, LLM providers, and trade behavior to later phases.
 
 ## Validation Method
