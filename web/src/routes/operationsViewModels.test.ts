@@ -26,7 +26,7 @@ describe("operationsViewModels", () => {
     });
 
     expect(detail).toBe(
-      "Scheduled never; ran never. Drain: 2 batches, 5 jobs each, 4 pending. Scope: 25 assets, 10 years, prices/dividends/splits.",
+      "Scheduled never; ran never. Drain: 2 batches, 5 jobs each, 4 pending after last cycle. Scope: 25 assets, 10 years, prices/dividends/splits.",
     );
   });
 
@@ -71,7 +71,7 @@ describe("operationsViewModels", () => {
     });
 
     expect(detail).toBe(
-      "Checked never. 8 readys of 12 targets; 6 valuations calculated. 3 jobs pending.",
+      "Checked never. 8 readys of 12 targets; 6 valuations calculated. 3 jobs pending after last check.",
     );
   });
 });

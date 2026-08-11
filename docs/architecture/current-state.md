@@ -45,7 +45,8 @@ Quaint Dash is a Python backend and CLI with a Vite/React browser client:
 - Transactions remain the durable portfolio ledger; positions are projections.
 - Missing and stale data remain explicit instead of being silently converted to zero.
 - Provider failures and entitlement limits are persisted with redacted errors.
-- Python and web verification run in CI, with focused route and API coverage.
+- Independent Python and web CI jobs run Ruff, pytest with coverage, ESLint, Vitest, TypeScript,
+  and the Vite production build.
 - Architecture decisions preserve reasoning and remain append-only.
 
 ## Next Architectural Work

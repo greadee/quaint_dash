@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { OperationsPage } from "./operationsRoute";
 
@@ -33,8 +33,7 @@ function renderOperations() {
 
 describe("OperationsPage", () => {
   it("renders worker status, readiness gaps, and ingestion jobs", async () => {
-    apiMock.ingestionJobs.mockResolvedValue([
-      {
+    const failedJob = {
         job_id: 1,
         asset_id: "NVDA",
         domain: "market",
@@ -48,8 +47,10 @@ describe("OperationsPage", () => {
         error_message: "provider timeout",
         created_at: "2026-06-18T12:00:00Z",
         updated_at: "2026-06-18T13:00:00Z",
-      },
-    ]);
+    };
+    apiMock.ingestionJobs.mockImplementation((requestedStatus: string) =>
+      Promise.resolve(requestedStatus === "pending" ? [] : [failedJob]),
+    );
     apiMock.ingestionBackgroundStatus.mockResolvedValue({
       enabled: true,
       running: false,
@@ -57,6 +58,7 @@ describe("OperationsPage", () => {
       last_schedule_count: 3,
       last_run_at: "2026-06-18T12:05:00Z",
       last_completed_count: 2,
+      last_pending_count: 4,
       last_error: null,
       schedule_interval_seconds: 3600,
       run_interval_seconds: 300,
@@ -182,7 +184,15 @@ describe("OperationsPage", () => {
 
     expect(await screen.findByRole("heading", { name: "Operations" })).toBeInTheDocument();
     expect(apiMock.ingestionJobs).toHaveBeenCalledWith("", "", 25);
-    expect(await screen.findByText("Routine ingestion worker")).toBeInTheDocument();
+    expect(apiMock.ingestionJobs).toHaveBeenCalledWith("pending", "", 500);
+    const routineHeading = await screen.findByText("Routine ingestion worker");
+    expect(routineHeading).toBeInTheDocument();
+    expect(screen.getAllByText("Current pending jobs")).toHaveLength(2);
+    const routineCard = routineHeading.closest("section");
+    expect(routineCard).not.toBeNull();
+    expect(within(routineCard as HTMLElement).getByText("0 jobs")).toBeInTheDocument();
+    expect(within(routineCard as HTMLElement).getByText("Pending after last cycle")).toBeInTheDocument();
+    expect(within(routineCard as HTMLElement).getByText("4 jobs")).toBeInTheDocument();
     expect(await screen.findByText("Social sentiment ingestion")).toBeInTheDocument();
     expect(screen.getByText("Projection input readiness")).toBeInTheDocument();
     expect(screen.getByText("Ranking input readiness")).toBeInTheDocument();

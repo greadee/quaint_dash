@@ -8,8 +8,9 @@ import { formatCount, formatTimestamp } from "./routeFormatters";
 export function backgroundStatusDetail(status: IngestionBackgroundStatus): string {
   const schedule = `Scheduled ${formatTimestamp(status.last_schedule_at)}`;
   const run = `ran ${formatTimestamp(status.last_run_at)}`;
-  const pending =
-    status.last_pending_count === null ? "pending unknown" : `${status.last_pending_count} pending`;
+  const pending = status.last_pending_count === null
+    ? "pending after last cycle unknown"
+    : `${status.last_pending_count} pending after last cycle`;
   const scope = `${status.max_assets_per_schedule} assets, ${status.years} years, ${
     status.prices_only ? "prices only" : "prices/dividends/splits"
   }`;
@@ -36,6 +37,5 @@ export function dataReadinessStatusDetail(status: DataReadinessWorkerStatus): st
     "target",
   )}`;
   const valuation = `${formatCount(status.last_valuation_count, "valuation")} calculated`;
-  return `${lastCheck}. ${coverage}; ${valuation}. ${formatCount(status.last_pending_count, "job")} pending.`;
+  return `${lastCheck}. ${coverage}; ${valuation}. ${formatCount(status.last_pending_count, "job")} pending after last check.`;
 }
-

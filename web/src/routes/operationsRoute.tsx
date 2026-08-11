@@ -74,6 +74,12 @@ export function OperationsPage() {
     queryKey: ["jobs", status, domain, jobLimit],
     queryFn: () => api.ingestionJobs(status, domain, boundedInt(jobLimit, 25, 1, 500)),
   });
+  const currentPendingJobs = useQuery({
+    queryKey: ["jobs", "current-pending"],
+    queryFn: () => api.ingestionJobs("pending", "", 500),
+    enabled: showRoutineWorker || showDataReadiness,
+    refetchInterval: showRoutineWorker || showDataReadiness ? WORKER_STATUS_REFETCH_MS : false,
+  });
   const background = useQuery({
     queryKey: ["ingestion-background-status"],
     queryFn: api.ingestionBackgroundStatus,
@@ -269,12 +275,12 @@ export function OperationsPage() {
       staleOnly: true,
     });
   };
-  return <div className="page"><div className="page-title"><div><p className="eyebrow">Data health</p><h1>Operations</h1><p className="page-subtitle">Background due work keeps routine data moving. Manual controls remain here for backfills, retries, provider-sensitive refreshes, and explicit runs.</p></div><div className="actions"><PageLayoutButton pageId="operations" /><PageFeatureMenu pageId="operations" /><button onClick={() => { jobs.refetch(); background.refetch(); marketFreshness.refetch(); dataReadiness.refetch(); retailSentiment.refetch(); readiness.refetch(); rankingReadiness.refetch(); }} disabled={jobs.isFetching || background.isFetching || marketFreshness.isFetching || dataReadiness.isFetching || retailSentiment.isFetching || readiness.isFetching || rankingReadiness.isFetching}><RefreshCw size={17}/>Refresh</button><button className="danger" onClick={() => window.confirm("Clear ingestion job history and sync status rows? Market data and broker connections will stay intact.") && clearHistory.mutate()} disabled={isBusy}><Trash2 size={17}/>Clear history</button><button className="primary" onClick={() => window.confirm("Run pending ingestion jobs with these options?") && run.mutate({})} disabled={isBusy}><RefreshCw size={17}/>Run jobs</button></div></div>
+  return <div className="page"><div className="page-title"><div><p className="eyebrow">Data health</p><h1>Operations</h1><p className="page-subtitle">Background due work keeps routine data moving. Manual controls remain here for backfills, retries, provider-sensitive refreshes, and explicit runs.</p></div><div className="actions"><PageLayoutButton pageId="operations" /><PageFeatureMenu pageId="operations" /><button onClick={() => { jobs.refetch(); currentPendingJobs.refetch(); background.refetch(); marketFreshness.refetch(); dataReadiness.refetch(); retailSentiment.refetch(); readiness.refetch(); rankingReadiness.refetch(); }} disabled={jobs.isFetching || currentPendingJobs.isFetching || background.isFetching || marketFreshness.isFetching || dataReadiness.isFetching || retailSentiment.isFetching || readiness.isFetching || rankingReadiness.isFetching}><RefreshCw size={17}/>Refresh</button><button className="danger" onClick={() => window.confirm("Clear ingestion job history and sync status rows? Market data and broker connections will stay intact.") && clearHistory.mutate()} disabled={isBusy}><Trash2 size={17}/>Clear history</button><button className="primary" onClick={() => window.confirm("Run pending ingestion jobs with these options?") && run.mutate({})} disabled={isBusy}><RefreshCw size={17}/>Run jobs</button></div></div>
     <PageLayoutToolbar pageId="operations" />
     <OptionalFeaturesEmpty pageId="operations" />
-    {showRoutineWorker ? <LayoutWidget pageId="operations" widgetId="operations.routineWorker"><IngestionBackgroundCard status={background.data} isLoading={background.isLoading} error={background.error} onStart={() => startBackground.mutate()} onStop={() => stopBackground.mutate()} onTick={() => tickBackground.mutate()} isBusy={isBusy} /></LayoutWidget> : null}
+    {showRoutineWorker ? <LayoutWidget pageId="operations" widgetId="operations.routineWorker"><IngestionBackgroundCard status={background.data} isLoading={background.isLoading} error={background.error} currentPendingCount={currentPendingJobs.data?.length} isCurrentPendingLoading={currentPendingJobs.isLoading} currentPendingError={currentPendingJobs.error} onStart={() => startBackground.mutate()} onStop={() => stopBackground.mutate()} onTick={() => tickBackground.mutate()} isBusy={isBusy} /></LayoutWidget> : null}
     {showMarketFreshness ? <LayoutWidget pageId="operations" widgetId="operations.marketFreshness"><MarketFreshnessCard status={marketFreshness.data} isLoading={marketFreshness.isLoading} error={marketFreshness.error} onStart={() => startMarketFreshness.mutate()} onStop={() => stopMarketFreshness.mutate()} onTick={() => tickMarketFreshness.mutate()} isBusy={isBusy} /></LayoutWidget> : null}
-    {showDataReadiness ? <LayoutWidget pageId="operations" widgetId="operations.dataReadiness"><DataReadinessCard status={dataReadiness.data} isLoading={dataReadiness.isLoading} error={dataReadiness.error} onStart={() => startDataReadiness.mutate()} onStop={() => stopDataReadiness.mutate()} onTick={() => tickDataReadiness.mutate()} isBusy={isBusy} /></LayoutWidget> : null}
+    {showDataReadiness ? <LayoutWidget pageId="operations" widgetId="operations.dataReadiness"><DataReadinessCard status={dataReadiness.data} isLoading={dataReadiness.isLoading} error={dataReadiness.error} currentPendingCount={currentPendingJobs.data?.length} isCurrentPendingLoading={currentPendingJobs.isLoading} currentPendingError={currentPendingJobs.error} onStart={() => startDataReadiness.mutate()} onStop={() => stopDataReadiness.mutate()} onTick={() => tickDataReadiness.mutate()} isBusy={isBusy} /></LayoutWidget> : null}
     {showRetailSentiment ? <LayoutWidget pageId="operations" widgetId="operations.retailSentiment"><RetailSentimentCard status={retailSentiment.data} isLoading={retailSentiment.isLoading} error={retailSentiment.error} onSchedule={scheduleRetailSentiment} onRun={() => run.mutate({ domain: "sentiment", maxJobs: "10" })} isBusy={isBusy} /></LayoutWidget> : null}
     {showProjectionReadiness ? <LayoutWidget pageId="operations" widgetId="operations.projectionReadiness"><IngestionReadinessCard readiness={readiness.data} isLoading={readiness.isLoading} error={readiness.error} onScheduleAsset={scheduleAsset} isBusy={isBusy} /></LayoutWidget> : null}
     {showRankingReadiness ? <LayoutWidget pageId="operations" widgetId="operations.rankingReadiness"><RankingReadinessCard readiness={rankingReadiness.data} isLoading={rankingReadiness.isLoading} error={rankingReadiness.error} onScheduleAsset={scheduleRankingAsset} isBusy={isBusy} /></LayoutWidget> : null}
@@ -340,6 +346,9 @@ function IngestionBackgroundCard({
   status,
   isLoading,
   error,
+  currentPendingCount,
+  isCurrentPendingLoading,
+  currentPendingError,
   onStart,
   onStop,
   onTick,
@@ -348,6 +357,9 @@ function IngestionBackgroundCard({
   status?: IngestionBackgroundStatus;
   isLoading: boolean;
   error: Error | null;
+  currentPendingCount?: number;
+  isCurrentPendingLoading: boolean;
+  currentPendingError: Error | null;
   onStart: () => void;
   onStop: () => void;
   onTick: () => void;
@@ -365,7 +377,8 @@ function IngestionBackgroundCard({
         <Signal label="Last completed" value={isLoading ? "Loading" : formatCount(status?.last_completed_count, "job")} />
         <Signal label="Schedule cadence" value={status ? formatDuration(status.schedule_interval_seconds) : "Unavailable"} />
         <Signal label="Run cadence" value={status ? `${formatDuration(status.run_interval_seconds)} / ${status.max_run_batches_per_tick} batches` : "Unavailable"} />
-        <Signal label="Pending jobs" value={isLoading ? "Loading" : formatCount(status?.last_pending_count, "job")} />
+        <Signal label="Current pending jobs" value={currentQueueCount(currentPendingCount, isCurrentPendingLoading, currentPendingError)} />
+        <Signal label="Pending after last cycle" value={isLoading ? "Loading" : formatCount(status?.last_pending_count, "job")} />
         <div className="background-actions">
           <button className={status?.enabled ? "" : "primary"} onClick={() => window.confirm("Start the routine ingestion worker for this API session? It will schedule due work and run bounded batches in the background.") && onStart()} disabled={isBusy || isLoading || status?.enabled}>Start worker</button>
           <button onClick={() => window.confirm("Stop the routine ingestion worker? Manual controls will still work.") && onStop()} disabled={isBusy || isLoading || !status?.enabled}>Stop worker</button>
@@ -429,6 +442,9 @@ function DataReadinessCard({
   status,
   isLoading,
   error,
+  currentPendingCount,
+  isCurrentPendingLoading,
+  currentPendingError,
   onStart,
   onStop,
   onTick,
@@ -437,6 +453,9 @@ function DataReadinessCard({
   status?: DataReadinessWorkerStatus;
   isLoading: boolean;
   error: Error | null;
+  currentPendingCount?: number;
+  isCurrentPendingLoading: boolean;
+  currentPendingError: Error | null;
   onStart: () => void;
   onStop: () => void;
   onTick: () => void;
@@ -453,7 +472,8 @@ function DataReadinessCard({
         <Signal label="Ready tickers" value={isLoading ? "Loading" : `${status?.last_ready_count ?? 0}/${status?.last_target_count ?? 0}`} />
         <Signal label="Valuations" value={isLoading ? "Loading" : formatCount(status?.last_valuation_count, "holding")} />
         <Signal label="Poll cadence" value={status ? formatDuration(status.poll_interval_seconds) : "Unavailable"} />
-        <Signal label="Pending jobs" value={isLoading ? "Loading" : formatCount(status?.last_pending_count, "job")} />
+        <Signal label="Current pending jobs" value={currentQueueCount(currentPendingCount, isCurrentPendingLoading, currentPendingError)} />
+        <Signal label="Pending after last check" value={isLoading ? "Loading" : formatCount(status?.last_pending_count, "job")} />
         <div className="background-actions">
           <button className={status?.enabled ? "" : "primary"} onClick={() => window.confirm("Start the portfolio data readiness worker for this API session? It schedules missing stock/CDR valuation inputs and calculates portfolio valuations.") && onStart()} disabled={isBusy || isLoading || status?.enabled}>Start worker</button>
           <button onClick={() => window.confirm("Stop the portfolio data readiness worker?") && onStop()} disabled={isBusy || isLoading || !status?.enabled}>Stop worker</button>
@@ -468,6 +488,12 @@ function DataReadinessCard({
       </div>
     )}
   </section>;
+}
+
+function currentQueueCount(count: number | undefined, isLoading: boolean, error: Error | null): string {
+  if (error) return "Unavailable";
+  if (isLoading || count === undefined) return "Loading";
+  return count >= 500 ? "500+ jobs" : formatCount(count, "job");
 }
 
 function RetailSentimentCard({
