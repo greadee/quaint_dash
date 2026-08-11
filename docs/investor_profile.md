@@ -4,7 +4,7 @@ The investor-profile engine describes observed portfolio behavior from stored, p
 
 ## Boundary
 
-The public backend contract lives in `dashboard.ai_brain`:
+The public backend contract lives in `dashboard.rules_and_data`:
 
 - `InvestorProfileInput` is the normalized, provider-neutral input.
 - `InvestorProfileEngine.infer()` is the pure deterministic inference boundary.
@@ -137,8 +137,8 @@ Any threshold or semantic change requires a methodology-version change. Any cont
 ## Verification
 
 ```powershell
-.\.venv\Scripts\python.exe -m ruff check src\dashboard\ai_brain tests\ai_brain
-.\.venv\Scripts\python.exe -m pytest tests\ai_brain\test_investor_profile.py -q
+.\.venv\Scripts\python.exe -m ruff check src\dashboard\rules_and_data tests\rules_and_data
+.\.venv\Scripts\python.exe -m pytest tests\rules_and_data\test_investor_profile.py -q
 .\.venv\Scripts\python.exe -m tools.check_architecture_boundaries
 ```
 

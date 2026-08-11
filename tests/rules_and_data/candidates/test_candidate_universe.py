@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from dashboard.ai_brain.candidates import (
+from dashboard.rules_and_data.candidates import (
     CandidateSourceAdapters,
     OutsideHoldingUniverseBuilder,
     canonical_hash,

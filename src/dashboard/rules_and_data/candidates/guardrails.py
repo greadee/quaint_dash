@@ -9,7 +9,7 @@ from decimal import Decimal
 from statistics import median
 from typing import Any
 
-from dashboard.ai_brain.candidates.models import (
+from dashboard.rules_and_data.candidates.models import (
     CANDIDATE_METHODOLOGY_VERSION,
     CANDIDATE_REASON_CODES_VERSION,
     CandidateEvidenceRef,
@@ -21,7 +21,7 @@ from dashboard.ai_brain.candidates.models import (
     CandidateSourceMatch,
     CandidateWarning,
 )
-from dashboard.ai_brain.candidates.source_adapters import candidate_source_evidence
+from dashboard.rules_and_data.candidates.source_adapters import candidate_source_evidence
 
 CANDIDATE_GUARDRAIL_POLICY_VERSION = "candidate-guardrails.v1"
 CANDIDATE_IDENTITY_SCHEMA_VERSION = "candidate-identity.v1"

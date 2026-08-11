@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import pytest
 
-from dashboard.ai_brain.candidates import (
+from dashboard.rules_and_data.candidates import (
     CANDIDATE_METHODOLOGY_VERSION,
     CANDIDATE_REASON_CODES_VERSION,
     CANDIDATE_REVIEW_SCHEMA_VERSION,
@@ -24,7 +24,7 @@ from dashboard.ai_brain.candidates import (
     canonical_json,
     freshness_policy_for_domain,
 )
-from dashboard.ai_brain.candidates.source_adapters import candidate_source_evidence
+from dashboard.rules_and_data.candidates.source_adapters import candidate_source_evidence
 from dashboard.db.db_conn import DB, init_db
 
 AS_OF = datetime(2026, 8, 8, 12, tzinfo=timezone.utc)

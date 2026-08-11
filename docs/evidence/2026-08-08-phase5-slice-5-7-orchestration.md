@@ -14,11 +14,11 @@ The service adds no public endpoint, transport model, provider client, recommend
 
 ## Changed Files
 
-- `src/dashboard/ai_brain/candidates/orchestration.py`
-- `src/dashboard/ai_brain/candidates/models.py`
-- `src/dashboard/ai_brain/candidates/persistence.py`
-- `src/dashboard/ai_brain/candidates/__init__.py`
-- `tests/ai_brain/candidates/test_candidate_orchestration.py`
+- `src/dashboard/rules_and_data/candidates/orchestration.py`
+- `src/dashboard/rules_and_data/candidates/models.py`
+- `src/dashboard/rules_and_data/candidates/persistence.py`
+- `src/dashboard/rules_and_data/candidates/__init__.py`
+- `tests/rules_and_data/candidates/test_candidate_orchestration.py`
 - `docs/candidate_contracts.md`
 - `docs/adr/adr_ph13_candidate_engine_boundary.md`
 - `docs/evidence/2026-08-08-phase5-slice-5-7-orchestration.md`

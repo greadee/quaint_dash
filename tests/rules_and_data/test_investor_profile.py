@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from dashboard.ai_brain import (
+from dashboard.rules_and_data import (
     INVESTOR_PROFILE_METHODOLOGY_VERSION,
     INVESTOR_PROFILE_SCHEMA_VERSION,
     EvidenceRef,

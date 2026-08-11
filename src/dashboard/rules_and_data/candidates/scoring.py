@@ -8,13 +8,13 @@ from datetime import date, datetime, time, timezone
 from decimal import Decimal, ROUND_HALF_EVEN
 from typing import Any
 
-from dashboard.ai_brain.candidates.canonical import (
+from dashboard.rules_and_data.candidates.canonical import (
     candidate_id,
     candidate_review_id,
     canonical_hash,
 )
-from dashboard.ai_brain.candidates.guardrails import CandidateGuardrailPolicy
-from dashboard.ai_brain.candidates.models import (
+from dashboard.rules_and_data.candidates.guardrails import CandidateGuardrailPolicy
+from dashboard.rules_and_data.candidates.models import (
     CANDIDATE_METHODOLOGY_VERSION,
     CANDIDATE_REASON_CODES_VERSION,
     CANDIDATE_REVIEW_SCHEMA_VERSION,
@@ -26,23 +26,23 @@ from dashboard.ai_brain.candidates.models import (
     CandidateScoreComponent,
     CandidateWarning,
 )
-from dashboard.ai_brain.candidates.portfolio_sources import (
+from dashboard.rules_and_data.candidates.portfolio_sources import (
     PORTFOLIO_ANALYTICS_SCHEMA_VERSION,
     candidate_profile_conflict,
     candidate_profile_evidence,
 )
-from dashboard.ai_brain.candidates.screen_adapters import (
+from dashboard.rules_and_data.candidates.screen_adapters import (
     MOMENTUM_SCREEN_SCHEMA_VERSION,
     QUALITY_SCREEN_SCHEMA_VERSION,
     VALUE_SCREEN_SCHEMA_VERSION,
 )
-from dashboard.ai_brain.candidates.source_adapters import candidate_source_evidence
-from dashboard.ai_brain.candidates.universe import (
+from dashboard.rules_and_data.candidates.source_adapters import candidate_source_evidence
+from dashboard.rules_and_data.candidates.universe import (
     CandidateAssetIdentityResolver,
     CandidatePoolItem,
     CandidatePoolResult,
 )
-from dashboard.ai_brain.models import InvestorProfile
+from dashboard.rules_and_data.models import InvestorProfile
 
 CANDIDATE_SCORING_POLICY_VERSION = "candidate-scoring.v1"
 CANDIDATE_METRIC_SCHEMA_VERSION = "candidate-score-inputs.v1"

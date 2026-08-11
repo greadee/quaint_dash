@@ -7,11 +7,11 @@ from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from typing import Any
 
-from dashboard.ai_brain.candidates.models import (
+from dashboard.rules_and_data.candidates.models import (
     CandidateSourceMatch,
     CandidateSourceWatermark,
 )
-from dashboard.ai_brain.candidates.source_adapters import (
+from dashboard.rules_and_data.candidates.source_adapters import (
     CandidateNomination,
     SourceAdapterResult,
     candidate_source_evidence,

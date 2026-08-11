@@ -13,7 +13,7 @@ evidence-backed research candidates from stored local data. It does not make
 investment recommendations, assess suitability, size or execute trades, call a
 provider, expose an HTTP endpoint, render a candidate UI, or invoke an LLM.
 
-The primary contract is `dashboard.ai_brain.candidates.CandidateRunService`.
+The primary contract is `dashboard.rules_and_data.candidates.CandidateRunService`.
 It composes the frozen Phase 4 investor profile, the resolved outside-holding
 pool, deterministic scoring, freshness guardrails, immutable persistence, and
 replay identity under `candidate-engine.deterministic.v3`.
@@ -31,7 +31,7 @@ replay identity under `candidate-engine.deterministic.v3`.
 | Freshness and insufficient-evidence policy | `guardrails.py` and `test_candidate_guardrails.py` |
 | Immutable, reproducible runs | `persistence.py` and `test_candidate_persistence.py` |
 | Frozen-input orchestration and idempotent replay | `orchestration.py` and `test_candidate_orchestration.py` |
-| Phase 4 prerequisite | `investor_profile.py` and `tests/ai_brain/test_investor_profile.py` |
+| Phase 4 prerequisite | `investor_profile.py` and `tests/rules_and_data/test_investor_profile.py` |
 
 ## Final Verification
 

@@ -7,7 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from dashboard.ai_brain.candidates.models import (
+from dashboard.rules_and_data.candidates.models import (
     CandidateEvidenceRef,
     CandidateHighlight,
     CandidateMissingMetric,

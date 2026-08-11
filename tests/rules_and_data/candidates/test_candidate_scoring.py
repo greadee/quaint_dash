@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from dashboard.ai_brain.candidates import (
+from dashboard.rules_and_data.candidates import (
     CANDIDATE_METHODOLOGY_VERSION,
     CandidateScoringEngine,
     CandidateSourceAdapters,
@@ -18,7 +18,7 @@ from dashboard.ai_brain.candidates import (
     speculative_score_from_volatility,
     value_score_from_margin,
 )
-from dashboard.ai_brain.models import (
+from dashboard.rules_and_data.models import (
     INVESTOR_PROFILE_METHODOLOGY_VERSION,
     INVESTOR_PROFILE_SCHEMA_VERSION,
     AllocationMix,

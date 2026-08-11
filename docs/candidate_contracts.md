@@ -4,7 +4,7 @@ The Phase 5 candidate domain represents research-oriented outside-holding review
 
 ## Package Boundary
 
-The provider-neutral contract lives in `dashboard.ai_brain.candidates`:
+The provider-neutral contract lives in `dashboard.rules_and_data.candidates`:
 
 - `CandidateRun` records one point-in-time candidate evaluation and its reproducibility metadata.
 - `CandidateReview` records one canonical asset's candidate state in a run.
@@ -275,8 +275,8 @@ Through Slice 5.7, the candidate engine adds no:
 ## Verification
 
 ```powershell
-.\.venv\Scripts\python.exe -m ruff check src\dashboard\ai_brain\candidates tests\ai_brain\candidates
-.\.venv\Scripts\python.exe -m pytest tests\ai_brain\candidates -q
+.\.venv\Scripts\python.exe -m ruff check src\dashboard\rules_and_data\candidates tests\rules_and_data\candidates
+.\.venv\Scripts\python.exe -m pytest tests\rules_and_data\candidates -q
 .\.venv\Scripts\python.exe -m pytest tests\test_ticker_universe.py -q
 .\.venv\Scripts\python.exe -m tools.check_architecture_boundaries
 ```

@@ -8,7 +8,7 @@
 
 ## Result
 
-Phase 4's deterministic investor-profile contract and inference engine are now implemented under `src/dashboard/ai_brain`. The engine is pure backend code, uses no LLM or provider calls, preserves missing values, carries stable evidence IDs, rejects future evidence, and produces versioned deterministic output.
+Phase 4's deterministic investor-profile contract and inference engine are now implemented under `src/dashboard/rules_and_data`. The engine is pure backend code, uses no LLM or provider calls, preserves missing values, carries stable evidence IDs, rejects future evidence, and produces versioned deterministic output.
 
 ## Requirement Traceability
 
@@ -37,7 +37,7 @@ Phase 4's deterministic investor-profile contract and inference engine are now i
 
 ## Fixture Gate
 
-The required fixture classes are covered in `tests/ai_brain/test_investor_profile.py`:
+The required fixture classes are covered in `tests/rules_and_data/test_investor_profile.py`:
 
 - concentrated growth;
 - dividend/income;

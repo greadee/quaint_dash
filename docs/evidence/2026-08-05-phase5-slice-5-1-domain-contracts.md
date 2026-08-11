@@ -12,10 +12,10 @@ Slice 5.1 is complete. The repository now has immutable, provider-neutral contra
 
 ## Changed Files
 
-- `src/dashboard/ai_brain/candidates/__init__.py`
-- `src/dashboard/ai_brain/candidates/canonical.py`
-- `src/dashboard/ai_brain/candidates/models.py`
-- `tests/ai_brain/candidates/test_candidate_contracts.py`
+- `src/dashboard/rules_and_data/candidates/__init__.py`
+- `src/dashboard/rules_and_data/candidates/canonical.py`
+- `src/dashboard/rules_and_data/candidates/models.py`
+- `tests/rules_and_data/candidates/test_candidate_contracts.py`
 - `docs/candidate_contracts.md`
 - `docs/adr/adr_ph13_candidate_engine_boundary.md`
 - `docs/evidence/2026-08-05-phase5-slice-5-1-domain-contracts.md`

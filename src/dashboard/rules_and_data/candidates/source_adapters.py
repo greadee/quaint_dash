@@ -6,11 +6,11 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 from typing import Any
 
-from dashboard.ai_brain.candidates.canonical import (
+from dashboard.rules_and_data.candidates.canonical import (
     candidate_evidence_id,
     canonical_hash,
 )
-from dashboard.ai_brain.candidates.models import (
+from dashboard.rules_and_data.candidates.models import (
     CandidateEvidenceRef,
     CandidateSourceMatch,
     CandidateSourceWatermark,

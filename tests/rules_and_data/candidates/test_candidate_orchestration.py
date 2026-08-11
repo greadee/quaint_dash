@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from dashboard.ai_brain.candidates import (
+from dashboard.rules_and_data.candidates import (
     CANDIDATE_SOURCE_FAMILIES,
     CandidateInputCompatibilityError,
     CandidateRunRequest,
@@ -16,7 +16,7 @@ from dashboard.ai_brain.candidates import (
     OutsideHoldingUniverseBuilder,
     canonical_json,
 )
-from dashboard.ai_brain.models import (
+from dashboard.rules_and_data.models import (
     INVESTOR_PROFILE_METHODOLOGY_VERSION,
     INVESTOR_PROFILE_SCHEMA_VERSION,
     AllocationMix,

@@ -10,7 +10,7 @@ from decimal import Decimal, ROUND_HALF_EVEN
 from enum import Enum
 from typing import Any, Iterable
 
-from dashboard.ai_brain.models import (
+from dashboard.rules_and_data.models import (
     INVESTOR_PROFILE_METHODOLOGY_VERSION,
     INVESTOR_PROFILE_SCHEMA_VERSION,
     AllocationMix,

@@ -195,7 +195,7 @@ Rejected. Phase 5 completes the deterministic backend candidate contract. Read-o
 
 ## Implementation Status
 
-Slice 5.1 implements the provider-neutral contracts and canonical evidence protocol under `src/dashboard/ai_brain/candidates`. The frozen schema, methodology, reason-code, identity, timestamp, decimal, ordering, and volatile-field rules are documented in `docs/candidate_contracts.md` and covered by pure contract tests.
+Slice 5.1 implements the provider-neutral contracts and canonical evidence protocol under `src/dashboard/rules_and_data/candidates`. The frozen schema, methodology, reason-code, identity, timestamp, decimal, ordering, and volatile-field rules are documented in `docs/candidate_contracts.md` and covered by pure contract tests.
 
 Slice 5.2 implements repeatable DuckDB schema initialization and immutable candidate-run persistence. Query-critical run and review fields are structured; canonical versioned review payloads preserve score components, highlights, and nested evidence associations. Reads verify normalized rows and canonical hashes before returning domain models.
 

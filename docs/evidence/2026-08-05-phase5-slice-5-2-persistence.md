@@ -14,10 +14,10 @@ Slice 5.2 is complete. Candidate runs and their review audit graph now persist t
 
 - `src/dashboard/db/migrations/candidate_runs.sql`
 - `src/dashboard/db/db_conn.py`
-- `src/dashboard/ai_brain/candidates/persistence.py`
-- `src/dashboard/ai_brain/candidates/serialization.py`
-- `src/dashboard/ai_brain/candidates/__init__.py`
-- `tests/ai_brain/candidates/test_candidate_persistence.py`
+- `src/dashboard/rules_and_data/candidates/persistence.py`
+- `src/dashboard/rules_and_data/candidates/serialization.py`
+- `src/dashboard/rules_and_data/candidates/__init__.py`
+- `tests/rules_and_data/candidates/test_candidate_persistence.py`
 - `tests/test_production_schema_contracts.py`
 - `docs/candidate_contracts.md`
 - `docs/adr/adr_ph13_candidate_engine_boundary.md`

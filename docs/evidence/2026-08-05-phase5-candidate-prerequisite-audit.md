@@ -130,11 +130,11 @@ The original gate result above is preserved as audit history. Commit `7035661` w
 - `InvestorProfile` carries stable profile identity, schema and methodology versions, a UTC point-in-time timestamp, and an input snapshot hash.
 - `EvidenceRef` validates stable content-derived IDs, source schema, payload hash, status, and timezone-aware `as_of`; future evidence is rejected.
 - Stated preferences remain separate from observed behavior and do not produce a suitability conclusion.
-- The required six portfolio classes and determinism, stale-evidence, future-evidence, and malformed-input invariants are covered by `tests/ai_brain/test_investor_profile.py`.
-- The architecture boundary includes `src/dashboard/ai_brain` in the framework-independent backend core.
+- The required six portfolio classes and determinism, stale-evidence, future-evidence, and malformed-input invariants are covered by `tests/rules_and_data/test_investor_profile.py`.
+- The architecture boundary includes `src/dashboard/rules_and_data` in the framework-independent backend core.
 
 ```text
-python -m pytest tests/ai_brain/test_investor_profile.py tests/test_architecture_boundaries.py -q
+python -m pytest tests/rules_and_data/test_investor_profile.py tests/test_architecture_boundaries.py -q
 15 passed
 
 python -m tools.check_architecture_boundaries

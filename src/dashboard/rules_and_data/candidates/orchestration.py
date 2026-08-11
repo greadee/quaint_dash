@@ -8,14 +8,14 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Callable
 
-from dashboard.ai_brain.candidates.canonical import (
+from dashboard.rules_and_data.candidates.canonical import (
     candidate_review_id,
     candidate_run_id,
     canonical_hash,
     is_sha256,
 )
-from dashboard.ai_brain.candidates.guardrails import CANDIDATE_GUARDRAIL_POLICY_VERSION
-from dashboard.ai_brain.candidates.models import (
+from dashboard.rules_and_data.candidates.guardrails import CANDIDATE_GUARDRAIL_POLICY_VERSION
+from dashboard.rules_and_data.candidates.models import (
     CANDIDATE_EVIDENCE_SCHEMA_VERSION,
     CANDIDATE_METHODOLOGY_VERSION,
     CANDIDATE_REASON_CODES_VERSION,
@@ -24,36 +24,36 @@ from dashboard.ai_brain.candidates.models import (
     CandidateReview,
     CandidateRun,
 )
-from dashboard.ai_brain.candidates.persistence import CandidateRunRepository
-from dashboard.ai_brain.candidates.portfolio_sources import (
+from dashboard.rules_and_data.candidates.persistence import CandidateRunRepository
+from dashboard.rules_and_data.candidates.portfolio_sources import (
     BUSINESS_CLASSIFICATION_SCHEMA_VERSION,
     BUSINESS_PEER_SCHEMA_VERSION,
     PORTFOLIO_GAP_POLICY_VERSION,
     PROFILE_THEME_SCHEMA_VERSION,
 )
-from dashboard.ai_brain.candidates.scoring import (
+from dashboard.rules_and_data.candidates.scoring import (
     CANDIDATE_SCORING_POLICY_VERSION,
     CandidateScoringEngine,
 )
-from dashboard.ai_brain.candidates.screen_adapters import (
+from dashboard.rules_and_data.candidates.screen_adapters import (
     MOMENTUM_SCREEN_SCHEMA_VERSION,
     QUALITY_SCREEN_SCHEMA_VERSION,
     SCREEN_POLICY_VERSION,
     VALUE_SCREEN_SCHEMA_VERSION,
 )
-from dashboard.ai_brain.candidates.source_adapters import (
+from dashboard.rules_and_data.candidates.source_adapters import (
     ALL_UNIVERSE_SCHEMA_VERSION,
     BENCHMARK_CONSTITUENT_SCHEMA_VERSION,
     CANDIDATE_SOURCE_ADAPTER_VERSION,
     STOCK_RANKING_SCHEMA_VERSION,
     WATCHLIST_SCHEMA_VERSION,
 )
-from dashboard.ai_brain.candidates.universe import (
+from dashboard.rules_and_data.candidates.universe import (
     IDENTITY_METHODOLOGY_VERSION,
     CandidatePoolResult,
     OutsideHoldingUniverseBuilder,
 )
-from dashboard.ai_brain.models import (
+from dashboard.rules_and_data.models import (
     INVESTOR_PROFILE_METHODOLOGY_VERSION,
     INVESTOR_PROFILE_SCHEMA_VERSION,
     InvestorProfile,

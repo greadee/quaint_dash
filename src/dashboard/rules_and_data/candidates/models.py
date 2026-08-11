@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-from dashboard.ai_brain.candidates.canonical import (
+from dashboard.rules_and_data.candidates.canonical import (
     candidate_evidence_id,
     candidate_id,
     candidate_review_id,

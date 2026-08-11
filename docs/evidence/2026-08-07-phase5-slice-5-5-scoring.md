@@ -12,15 +12,15 @@ Slice 5.5 implements all three required screen families and the frozen profile-f
 
 ## Changed Files
 
-- `src/dashboard/ai_brain/candidates/screen_adapters.py`
-- `src/dashboard/ai_brain/candidates/scoring.py`
-- `src/dashboard/ai_brain/candidates/models.py`
-- `src/dashboard/ai_brain/candidates/portfolio_sources.py`
-- `src/dashboard/ai_brain/candidates/universe.py`
-- `src/dashboard/ai_brain/candidates/__init__.py`
-- `tests/ai_brain/candidates/test_candidate_screens.py`
-- `tests/ai_brain/candidates/test_candidate_scoring.py`
-- `tests/ai_brain/candidates/test_candidate_universe.py`
+- `src/dashboard/rules_and_data/candidates/screen_adapters.py`
+- `src/dashboard/rules_and_data/candidates/scoring.py`
+- `src/dashboard/rules_and_data/candidates/models.py`
+- `src/dashboard/rules_and_data/candidates/portfolio_sources.py`
+- `src/dashboard/rules_and_data/candidates/universe.py`
+- `src/dashboard/rules_and_data/candidates/__init__.py`
+- `tests/rules_and_data/candidates/test_candidate_screens.py`
+- `tests/rules_and_data/candidates/test_candidate_scoring.py`
+- `tests/rules_and_data/candidates/test_candidate_universe.py`
 - `docs/candidate_contracts.md`
 - `docs/adr/adr_ph13_candidate_engine_boundary.md`
 - `docs/evidence/2026-08-07-phase5-slice-5-5-scoring.md`

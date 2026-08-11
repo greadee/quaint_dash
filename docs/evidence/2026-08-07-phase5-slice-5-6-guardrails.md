@@ -14,12 +14,12 @@ The candidate methodology advances to `candidate-engine.deterministic.v2` and re
 
 ## Changed Files
 
-- `src/dashboard/ai_brain/candidates/guardrails.py`
-- `src/dashboard/ai_brain/candidates/models.py`
-- `src/dashboard/ai_brain/candidates/scoring.py`
-- `src/dashboard/ai_brain/candidates/__init__.py`
-- `tests/ai_brain/candidates/test_candidate_guardrails.py`
-- `tests/ai_brain/candidates/test_candidate_scoring.py`
+- `src/dashboard/rules_and_data/candidates/guardrails.py`
+- `src/dashboard/rules_and_data/candidates/models.py`
+- `src/dashboard/rules_and_data/candidates/scoring.py`
+- `src/dashboard/rules_and_data/candidates/__init__.py`
+- `tests/rules_and_data/candidates/test_candidate_guardrails.py`
+- `tests/rules_and_data/candidates/test_candidate_scoring.py`
 - `docs/candidate_contracts.md`
 - `docs/adr/adr_ph13_candidate_engine_boundary.md`
 - `docs/evidence/2026-08-07-phase5-slice-5-6-guardrails.md`

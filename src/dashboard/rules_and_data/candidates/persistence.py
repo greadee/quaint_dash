@@ -9,18 +9,18 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from dashboard.ai_brain.candidates.canonical import (
+from dashboard.rules_and_data.candidates.canonical import (
     canonical_hash,
     canonical_json,
     normalize_decimal,
 )
-from dashboard.ai_brain.candidates.models import (
+from dashboard.rules_and_data.candidates.models import (
     CandidateEvidenceRef,
     CandidateReview,
     CandidateRun,
     CandidateSourceWatermark,
 )
-from dashboard.ai_brain.candidates.serialization import candidate_review_from_json
+from dashboard.rules_and_data.candidates.serialization import candidate_review_from_json
 
 
 class CandidatePersistenceError(RuntimeError):

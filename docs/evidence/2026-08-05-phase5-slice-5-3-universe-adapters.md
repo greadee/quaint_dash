@@ -15,10 +15,10 @@ Slice 5.3 implements read-only adapters for persisted rankings, active watchlist
 - `src/dashboard/assets/__init__.py`
 - `src/dashboard/assets/identity.py`
 - `src/dashboard/ingestion/ticker_universe.py`
-- `src/dashboard/ai_brain/candidates/source_adapters.py`
-- `src/dashboard/ai_brain/candidates/universe.py`
-- `src/dashboard/ai_brain/candidates/__init__.py`
-- `tests/ai_brain/candidates/test_candidate_universe.py`
+- `src/dashboard/rules_and_data/candidates/source_adapters.py`
+- `src/dashboard/rules_and_data/candidates/universe.py`
+- `src/dashboard/rules_and_data/candidates/__init__.py`
+- `tests/rules_and_data/candidates/test_candidate_universe.py`
 - `docs/candidate_contracts.md`
 - `docs/adr/adr_ph13_candidate_engine_boundary.md`
 - `docs/evidence/2026-08-05-phase5-slice-5-3-universe-adapters.md`

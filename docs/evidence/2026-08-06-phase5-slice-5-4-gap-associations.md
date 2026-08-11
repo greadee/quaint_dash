@@ -12,12 +12,12 @@ Slice 5.4 implements every planned portfolio-gap and association source. It read
 
 ## Changed Files
 
-- `src/dashboard/ai_brain/candidates/portfolio_sources.py`
-- `src/dashboard/ai_brain/candidates/source_adapters.py`
-- `src/dashboard/ai_brain/candidates/universe.py`
-- `src/dashboard/ai_brain/candidates/__init__.py`
-- `tests/ai_brain/candidates/test_candidate_portfolio_sources.py`
-- `tests/ai_brain/candidates/test_candidate_universe.py`
+- `src/dashboard/rules_and_data/candidates/portfolio_sources.py`
+- `src/dashboard/rules_and_data/candidates/source_adapters.py`
+- `src/dashboard/rules_and_data/candidates/universe.py`
+- `src/dashboard/rules_and_data/candidates/__init__.py`
+- `tests/rules_and_data/candidates/test_candidate_portfolio_sources.py`
+- `tests/rules_and_data/candidates/test_candidate_universe.py`
 - `docs/candidate_contracts.md`
 - `docs/adr/adr_ph13_candidate_engine_boundary.md`
 - `docs/evidence/2026-08-06-phase5-slice-5-4-gap-associations.md`

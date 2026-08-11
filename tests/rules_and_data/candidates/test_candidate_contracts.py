@@ -7,7 +7,7 @@ from decimal import Decimal
 
 import pytest
 
-from dashboard.ai_brain.candidates import (
+from dashboard.rules_and_data.candidates import (
     CANDIDATE_EVIDENCE_SCHEMA_VERSION,
     CANDIDATE_METHODOLOGY_VERSION,
     CANDIDATE_REASON_CODES_VERSION,

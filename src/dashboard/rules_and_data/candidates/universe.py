@@ -6,22 +6,22 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from dashboard.ai_brain.candidates.models import (
+from dashboard.rules_and_data.candidates.models import (
     CandidateEvidenceRef,
     CandidateSourceMatch,
     CandidateSourceWatermark,
     CandidateWarning,
 )
-from dashboard.ai_brain.candidates.portfolio_sources import (
+from dashboard.rules_and_data.candidates.portfolio_sources import (
     CandidatePortfolioSourceAdapters,
 )
-from dashboard.ai_brain.candidates.screen_adapters import CandidateScreenAdapters
-from dashboard.ai_brain.candidates.source_adapters import (
+from dashboard.rules_and_data.candidates.screen_adapters import CandidateScreenAdapters
+from dashboard.rules_and_data.candidates.source_adapters import (
     CandidateNomination,
     CandidateSourceAdapters,
     SourceAdapterResult,
 )
-from dashboard.ai_brain.models import InvestorProfile
+from dashboard.rules_and_data.models import InvestorProfile
 from dashboard.assets import cdr_underlying_symbol
 
 IDENTITY_METHODOLOGY_VERSION = "candidate-economic-exposure.v1"

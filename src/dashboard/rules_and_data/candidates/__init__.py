@@ -1,6 +1,6 @@
 """Provider-neutral deterministic candidate-engine contracts."""
 
-from dashboard.ai_brain.candidates.canonical import (
+from dashboard.rules_and_data.candidates.canonical import (
     VOLATILE_HASH_FIELDS,
     candidate_evidence_id,
     candidate_id,
@@ -9,7 +9,7 @@ from dashboard.ai_brain.candidates.canonical import (
     canonical_hash,
     canonical_json,
 )
-from dashboard.ai_brain.candidates.models import (
+from dashboard.rules_and_data.candidates.models import (
     CANDIDATE_EVIDENCE_SCHEMA_VERSION,
     CANDIDATE_METHODOLOGY_VERSION,
     CANDIDATE_REASON_CODES_VERSION,
@@ -27,14 +27,14 @@ from dashboard.ai_brain.candidates.models import (
     CandidateSourceWatermark,
     CandidateWarning,
 )
-from dashboard.ai_brain.candidates.orchestration import (
+from dashboard.rules_and_data.candidates.orchestration import (
     CANDIDATE_ORCHESTRATION_POLICY_VERSION,
     CandidateInputCompatibilityError,
     CandidateInputFailure,
     CandidateRunRequest,
     CandidateRunService,
 )
-from dashboard.ai_brain.candidates.guardrails import (
+from dashboard.rules_and_data.candidates.guardrails import (
     CANDIDATE_GUARDRAIL_POLICY_VERSION,
     CANDIDATE_IDENTITY_SCHEMA_VERSION,
     CANDIDATE_LIQUIDITY_SCHEMA_VERSION,
@@ -51,14 +51,14 @@ from dashboard.ai_brain.candidates.guardrails import (
     evidence_age_days,
     freshness_policy_for_domain,
 )
-from dashboard.ai_brain.candidates.persistence import (
+from dashboard.rules_and_data.candidates.persistence import (
     CandidatePersistenceConflict,
     CandidatePersistenceError,
     CandidatePersistenceIntegrityError,
     CandidateRunRepository,
     ensure_candidate_schema,
 )
-from dashboard.ai_brain.candidates.portfolio_sources import (
+from dashboard.rules_and_data.candidates.portfolio_sources import (
     BENCHMARK_EXPOSURE_SCHEMA_VERSION,
     BUSINESS_CLASSIFICATION_SCHEMA_VERSION,
     BUSINESS_PEER_SCHEMA_VERSION,
@@ -69,7 +69,7 @@ from dashboard.ai_brain.candidates.portfolio_sources import (
     candidate_profile_conflict,
     candidate_profile_evidence,
 )
-from dashboard.ai_brain.candidates.scoring import (
+from dashboard.rules_and_data.candidates.scoring import (
     CANDIDATE_METRIC_SCHEMA_VERSION,
     CANDIDATE_OVERLAP_SCHEMA_VERSION,
     CANDIDATE_SCORING_POLICY_VERSION,
@@ -83,15 +83,15 @@ from dashboard.ai_brain.candidates.scoring import (
     speculative_score_from_volatility,
     value_score_from_margin,
 )
-from dashboard.ai_brain.candidates.screen_adapters import (
+from dashboard.rules_and_data.candidates.screen_adapters import (
     MOMENTUM_SCREEN_SCHEMA_VERSION,
     QUALITY_SCREEN_SCHEMA_VERSION,
     SCREEN_POLICY_VERSION,
     VALUE_SCREEN_SCHEMA_VERSION,
     CandidateScreenAdapters,
 )
-from dashboard.ai_brain.candidates.serialization import candidate_review_from_json
-from dashboard.ai_brain.candidates.source_adapters import (
+from dashboard.rules_and_data.candidates.serialization import candidate_review_from_json
+from dashboard.rules_and_data.candidates.source_adapters import (
     ALL_UNIVERSE_SCHEMA_VERSION,
     BENCHMARK_CONSTITUENT_SCHEMA_VERSION,
     CANDIDATE_SOURCE_ADAPTER_VERSION,
@@ -102,7 +102,7 @@ from dashboard.ai_brain.candidates.source_adapters import (
     CandidateSourceAdapters,
     SourceAdapterResult,
 )
-from dashboard.ai_brain.candidates.universe import (
+from dashboard.rules_and_data.candidates.universe import (
     IDENTITY_METHODOLOGY_VERSION,
     BlockedCandidateIdentity,
     CandidateAssetIdentityResolver,
