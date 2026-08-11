@@ -306,4 +306,4 @@ Broker sync crosses external API access, encrypted credentials, provider-state p
 - `BrokerPortfolioIntegrationService` is the only broker service that projects mapped provider transactions into the local ledger.
 - `dashboard.models.commands.broker.BrokerCommands` is the application-facing lifecycle and orchestration boundary.
 - `dashboard.brokers.cli` owns broker command parsing and presentation.
-- The package relationships are documented in `docs/classes/plantuml-code/broker_sync_ph4.puml`.
+- The historical package relationships are preserved in `docs/archive/diagrams/classes/plantuml-code/broker_sync_ph4.puml`.

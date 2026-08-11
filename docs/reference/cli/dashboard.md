@@ -35,7 +35,7 @@ broker snaptrade <command>
 ```
 Register SnapTrade users, create read-only connection portal URLs, sync broker accounts, map broker accounts to portfolios, and import mapped broker transactions.
 
-Detailed broker command reference: [Broker Commands](broker_cmds.md)
+Detailed broker command reference: [Broker Commands](broker.md)
 
 ## Command Help
 ```

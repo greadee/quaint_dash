@@ -90,4 +90,5 @@ Focused backend proof:
 .\.venv\Scripts\python.exe -m pytest tests\ingestion_sentiment -q
 ```
 
-For web-facing or readiness-affecting work, also run the repo data-health workflow from `AGENTS.md`.
+For web-facing or readiness-affecting work, also run the repository workflow in the
+[testing guide](../development/testing.md#full-data-health-workflow).

@@ -1,63 +1,47 @@
-# Phase 1.5 Architecture Blueprint
+# Architecture
 
-This folder is the entry point for the modular boundary plan that sits between
-the Phase 1 feature inventory and any later refactor. It defines the target
-module structure, ownership rules, public contracts, migration sequence, and
-checks needed before moving features.
+Start with the current implementation. The boundary and migration documents that follow describe
+how the code should evolve without implying that every target module already exists.
 
-Phase 1.5 does not move broad features. The current web app, API routes,
-workers, database schema, and provider integrations remain the source of truth
-until a feature is migrated through the documented strangler sequence.
+## Current System
 
-## Required Inputs Reviewed
+- [Architecture overview](overview.md): runtime, persistence, ingestion, broker, analytics, and
+  background-worker flows.
+- [Current-state assessment](current-state.md): implemented package boundaries, strengths, and
+  remaining coupling.
+- [Codebase map](codebase-map.md): repository and package ownership.
+- [Current database schema](database/current_schema.md): live DuckDB domains and source-of-truth
+  rules.
+- [Data provenance](data-provenance.md) and [security boundaries](security-boundaries.md).
+- [Current and target diagrams](diagrams/README.md).
 
-- Phase 1 inventory, hierarchy, and data-dependency analysis
-- Existing overview: [architecture.md](../architecture.md)
-- Data safety: [data_safety.md](../data_safety.md)
-- ADR index: [../adr/index.md](../adr/index.md)
-- CI: [../../.github/workflows/ci.yaml](../../.github/workflows/ci.yaml)
-- Web scripts: [../../web/package.json](../../web/package.json)
-- Python config: [../../pyproject.toml](../../pyproject.toml)
-- Environment template: [../../.env.example](../../.env.example)
+## Contracts And Ownership
 
-## Blueprint Index
+- [Module catalog](module-catalog.md)
+- [Module ownership](module-ownership.md)
+- [Dependency rules](dependency-rules.md)
+- [API boundaries](api-boundaries.md)
+- [Public interfaces](public-interfaces.md)
+- [Domain models](domain-models.md)
+- [Platform capabilities](platform-capabilities.md)
+- [Testing strategy](testing-strategy.md)
+- [Naming conventions](naming-conventions.md)
+- [Where should this code go?](where-should-this-code-go.md)
 
-- [Current State](current-state.md)
-- [Target State](target-state.md)
-- [Module Catalog](module-catalog.md)
-- [Module Ownership](module-ownership.md)
-- [Dependency Rules](dependency-rules.md)
-- [Public Interfaces](public-interfaces.md)
-- [Domain Models](domain-models.md)
-- [Data Provenance](data-provenance.md)
-- [Platform Capabilities](platform-capabilities.md)
-- [API Boundaries](api-boundaries.md)
-- [Transitional Architecture](transitional-architecture.md)
-- [Security Boundaries](security-boundaries.md)
-- [Testing Strategy](testing-strategy.md)
-- [Naming Conventions](naming-conventions.md)
-- [Migration Roadmap](migration-roadmap.md)
-- [Phase 2 Migration Log](phase-2-migration-log.md)
-- [Pilot Report](pilot-report.md)
-- [Where Should This Code Go?](where-should-this-code-go.md)
-- [Phase 1.5 Completion Report](phase-1.5-completion-report.md)
+## Evolution Roadmap
 
-## Diagram Index
+These documents are directional. They describe the intended modular architecture and migration
+sequence; they are not a claim that the target structure is complete.
 
-- [Current-state architecture](diagrams/current_state_architecture.mmd)
-- [Target-state architecture](diagrams/target_state_architecture.mmd)
-- [Module dependency](diagrams/module_dependency.mmd)
-- [Platform interaction](diagrams/platform_interaction.mmd)
-- [API boundary](diagrams/api_boundary.mmd)
-- [Data flow](diagrams/data_flow.mmd)
-- [Ingestion pipeline](diagrams/ingestion_pipeline.mmd)
-- [AI insight pipeline](diagrams/ai_insight_pipeline.mmd)
-- [Transitional migration](diagrams/transitional_migration.mmd)
-- [Repository/package map](diagrams/repository_package_map.mmd)
-- [Domain ownership map](diagrams/domain_ownership_map.mmd)
-- [Security trust boundary](diagrams/security_trust_boundary.mmd)
+- [Target state](target-state.md)
+- [Transitional architecture](transitional-architecture.md)
+- [Migration roadmap](migration-roadmap.md)
 
-## Status
+## Decisions And History
 
-Accepted for Phase 1.5 planning. Implementation migrations remain future work
-unless a migration milestone explicitly starts Phase 2.
+- [Architecture decision record index](decisions/index.md)
+- [Historical reports and generated phase diagrams](../archive/README.md)
+
+The architecture contracts were initially drafted during Phase 1.5. Current behavior is governed
+by the implementation, tests, and current-system documents above. Historical reports are retained
+for context but are not onboarding instructions.

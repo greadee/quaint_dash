@@ -1,220 +1,159 @@
-# Investment Dashboard Project
-Author: Connor Proulx
+# Quaint Dash
 
-Local-first investment dashboard built in Python, DuckDB, FastAPI, and React. The system allows
-users to create and manage portfolios, track transactions and positions, run analytics, ingest
-market/provider data, inspect broker sync state, and review the dashboard in a browser.
+Quaint Dash is a local-first investment intelligence workspace for managing portfolios, validating
+the data behind them, and researching the assets that drive their results. It combines a React
+application with a FastAPI service and DuckDB so portfolio records, analytics, market data, and
+operational state remain inspectable on the user's machine.
 
-The project emphasizes separation of concerns, function-dependent layers, UML class diagrams, architecture decision records, CI-backed testing, and phase planning.
+The project is built around one constraint: the interface may explain and visualize financial
+facts, but it does not invent them. Returns, risk, valuation, rankings, readiness, and portfolio
+weights come from stored data and deterministic Python services, with missing inputs reported
+explicitly.
 
-I am building this project to help consolidate, and manage my own personal finances, as well as familiarize myself with software engineering practices as I am actively learning in CMPUT 301: Software Engineering at the University of Alberta (W2026).
-<br>
+## Application Workflow
 
+| Workspace | What it supports |
+| --- | --- |
+| **Overview** | Total market value, portfolio and broker coverage, movers, recent news, and actions that need attention |
+| **Portfolios** | Aggregate allocation, individual portfolio analysis, holdings, activity, exposures, performance, risk, fundamentals, and optimization previews |
+| **Asset Research** | Price history, holding context, activity, news, fundamentals, valuation analytics, and Business Strength evidence |
+| **Signals** | Ranked factor evidence with separate strength, confidence, portfolio priority, lifecycle, and user-review state |
+| **Compare** | Side-by-side price, growth, valuation, quality, profitability, and balance-sheet evidence |
+| **Benchmarks** | Core, sector, industry, and theme index performance, composition, exposures, relative metrics, and freshness |
+| **News and Sentiment** | Normalized financial news plus held-stock and popular-name retail-attention snapshots |
+| **Brokers** | Read-only account linking, portfolio mapping, import previews, reconciliation, synchronization, and sync history |
+| **Operations** | Ingestion queues, worker controls, provider state, retry history, and valuation, projection, and ranking readiness |
 
-## Setup 
-Open up Command Prompt on Windows, or Terminal on Mac/Linux and:
-#### Grab your own local copy:
-```
-git clone https://github.com/greadee/quaint-dash.git 
-cd quaint-dash
-```
-#### Standalone Environment
-```
-python -m venv .venv
-.venv\Scripts\activate
-```
-#### Build dependencies:
-```
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
-```
-Or use the project wrapper, which also installs web dependencies:
+## Portfolio Operations And Analytics
+
+Quaint Dash treats transactions as the durable portfolio ledger. Positions are derived from that
+ledger or projected from mapped broker accounts, which keeps manual records, imports, and
+reconciliation traceable.
+
+The portfolio workspace includes:
+
+- aggregate and per-portfolio market value, allocation, and holdings;
+- asset-class, sector, country, industry, and currency exposure views;
+- transaction activity and broker-to-ledger provenance;
+- transaction-aware time-weighted performance and money-weighted investor return;
+- CAGR, volatility, Sharpe, Sortino, drawdown, alpha, beta, correlation, and excess-return metrics;
+- valuation rollups, including multiples, margin of safety, dividend yield, expected CAGR, and
+  holding-level contribution;
+- DCF and dividend-discount evidence, implied growth, quality, profitability, leverage, and
+  statement-derived fundamentals;
+- deterministic forward projections and simulation bands;
+- constrained target-allocation previews that never create a trade or overwrite a position; and
+- holding grades and Business Strength scorecards with methodology, evidence, freshness, and
+  missing-input detail.
+
+Unavailable or stale inputs stay visible as unavailable or stale. They are not silently displayed
+as zero, and hypothetical current-weight backtests remain separate from actual ledger performance.
+
+## Research And Monitoring
+
+Asset pages connect portfolio context to stored price history, fundamentals, news, and auditable
+Business Strength scoring. Compare and benchmark workspaces make relative evidence inspectable
+without turning a factor score into a recommendation.
+
+Signals distinguish magnitude from confidence and portfolio relevance. News is normalized,
+attributed, classified, and filterable. Retail sentiment is an optional research input with
+provider health and freshness surfaced through Operations. Deterministic investor-profile and
+outside-holding candidate components exist as internal backend foundations; they do not expose a
+recommendation, suitability, LLM, or trading workflow.
+
+## Data And Operations
+
+Market history, corporate calendars, fundamentals, live prices, benchmark data, financial news,
+and social sentiment use provider-neutral ingestion services backed by persisted jobs. Work is
+bounded by symbol caps, date ranges, rate limits, retry rules, and per-run call budgets.
+
+Background workers are safe-off by default. The Operations workspace can start or tick bounded
+workers, inspect pending/running/failed jobs, retry failures, and verify whether portfolios have
+the data required for valuation, projections, risk, and rankings. Provider entitlement failures
+remain explicit and sensitive values are redacted before errors are persisted.
+
+Broker support is read-only. Quaint Dash uses SnapTrade's connection portal, stores encrypted local
+user secrets, and requires explicit account-to-portfolio mapping before transactions can be
+imported into the local ledger.
+
+## Engineering Approach
+
+- **Backend-owned truth:** Python services calculate financial metrics; React formats API DTOs.
+- **Local-first storage:** DuckDB stores portfolio, provider, analytics, broker, and operational
+  evidence.
+- **Versioned API:** FastAPI exposes the same application services to the browser and future
+  clients.
+- **Deterministic core:** scoring, rules, eligibility, and calculations do not depend on an LLM.
+- **Explicit provenance:** source, freshness, missing-input, and failure context travel with the
+  data where the domain supports them.
+- **Read-only financial connections:** no trade execution or automatic target-weight application.
+- **Verification:** Ruff, pytest, ESLint, TypeScript, Vitest, Vite builds, API health checks, and
+  full data-health scans cover the backend and browser workflows.
+
+## Technology
+
+- Python, FastAPI, Pydantic, DuckDB, pandas, NumPy, SciPy, and Uvicorn
+- React, TypeScript, Vite, React Query, Recharts, Vitest, and Playwright
+- Provider adapters for Yahoo Finance, Financial Modeling Prep, Finnhub, Reddit, X, SnapTrade, and
+  financial-news sources, enabled only when configured
+
+## Quick Start
+
+The repository includes Windows-friendly workflow commands:
 
 ```cmd
+git clone https://github.com/greadee/quaint_dash.git
+cd quaint_dash
 scripts\qd.cmd setup
+scripts\qd.cmd launch
 ```
-#### (Dev) Linting and testing:
-```
-ruff check 
-pytest
-```
-<br>
 
-## Contributor Docs
+The API runs at `http://127.0.0.1:8000`, interactive API documentation is available at
+`http://127.0.0.1:8000/api/docs`, and Vite runs at `http://127.0.0.1:5173`.
 
-- [Contributor onboarding](docs/onboarding.md)
-- [Environment setup](docs/environment_setup.md)
-- [Testing and verification](docs/testing.md)
-- [Codebase map](docs/codebase_map.md)
-- [Architecture overview](docs/architecture.md)
-- [Phase 1.5 architecture blueprint](docs/architecture/README.md)
-- [Contributing guide](CONTRIBUTING.md)
-- [Current schema ER diagrams](docs/erd/current_schema.md)
-- [Data safety checklist](docs/data_safety.md)
-- [ADR index](docs/adr/index.md)
-
-The fastest local workflows are:
+For a manual setup:
 
 ```cmd
-scripts\qd.cmd api
-scripts\qd.cmd web
-scripts\qd.cmd verify
-scripts\qd.cmd smoke
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+cd web
+npm.cmd install
 ```
 
-Copy `.env.example` to `.env` for local credentials. Keep `.env`, local databases, logs, and raw
-broker/provider exports out of Git.
+Copy `.env.example` to `.env` only when provider or broker integrations are needed. Local databases,
+credentials, logs, raw provider payloads, and broker exports must remain outside Git.
 
-Before broad feature refactors, use the Phase 1.5 blueprint to identify the target module owner,
-allowed dependencies, compatibility adapter, and verification path.
+## Current Boundaries
 
-## Usage 
+Quaint Dash is currently a single-user localhost application. DuckDB remains the application
+database, dated FX ingestion is not yet complete, background work requires explicit configuration,
+and authentication, hosted deployment, native clients, LLM features, and trading are deferred.
 
-#### Run:
-```
-dashboard           # or python -m dashboard
-```
-#### Dashboard Commands: [Dashboard Commands](docs/usage/cmds/dashboard_cmds.md)
-#### Portfolio Commands: [Portfolio Commands](docs/usage/cmds/portfolio_cmds.md)
-#### Broker Commands: [Broker Commands](docs/usage/cmds/broker_cmds.md)
-#### Web Application: [Phase 5 Web Application](docs/usage/web_app.md)
-<br>
+## Documentation
 
-## Records 
-### Phase 0: Project and CLI setup
-    - Github Actions
-    - basic CLI setup and smoke test
+Start with the [documentation index](docs/README.md), which opens progressively from product
+behavior into feature, operations, development, and architecture detail.
 
-#### Architectural Decision Records: [Main Decisions](docs/adr/adr_ph0.md)
---- 
-<br>
+- [Product and application flow](docs/product/README.md)
+- [Web application and metric semantics](docs/product/web-app.md)
+- [Feature index](docs/features/README.md)
+- [Operations and data health](docs/operations/README.md)
+- [Contributor onboarding](docs/development/onboarding.md)
+- [Testing and verification](docs/development/testing.md)
+- [Architecture index](docs/architecture/README.md)
+- [Current database schema](docs/architecture/database/current_schema.md)
+- [CLI reference](docs/reference/README.md)
+- [Architecture decisions](docs/architecture/decisions/index.md)
+- [Historical reports and diagrams](docs/archive/README.md)
 
-### Phase 1: Data Modelling and CLI refinement
+## Project Context
 
-    - DB schema, queries
-    - Domain models and storage layer
-    - Normalized and validated transaction import for csv and manual entry
-    - Refactor CLI into robust Unix-style terminal.
-    - CLI cmds for displaying Portfolio, Position, Transaction data. 
-    - CLI Formatters for displaying CLI cmds
+Quaint Dash is developed by Connor Proulx as a practical portfolio-management tool and an ongoing
+software-engineering project. It demonstrates full-stack product development, financial-domain
+modeling, provider integration, data provenance, deterministic analytics, operational tooling,
+architecture documentation, and CI-backed testing.
 
-#### Architectural Decision Records: [Main Decisions](docs/adr/adr_ph1.md)
---- 
-<br>
+## License
 
-### Phase 2: Metric Ingestion
-
-```
-- Portfolio and watchlist ticker universe tables for ingestion scope
-- Price-history ingestion for daily OHLCV, dividends, and splits through queued backfill jobs
-- Corporate calendar and fundamentals ingestion for earnings events and financial statements
-- Fundamentals subscriptions, recurring refreshes, and historical backfills
-- Trading calendar ingestion for market-aware scheduling
-- Live price ingestion with Finnhub regular-session streaming and FMP extended-hours polling
-- Benchmark index ingestion for core, sector, industry, and theme benchmarks
-- Unified ingestion job listing, scheduling, and processing commands
-- Shared provider rate limiters, per-run call budgets, symbol caps, and failure recording
-```
-
-#### Architectural Decision Records: [Main Decisions](docs/adr/adr_ph2.md)
----
-<br>
-
-### Phase 3: Analytics
-
-```
-- Calculation-first analytics over existing portfolio, price, dividend, benchmark, and financial statement data
-- Risk and return metrics including CAGR, volatility, Sharpe, Sortino, max drawdown, alpha, beta, correlation, and excess CAGR
-- Intrinsic value models including dividend discount, discounted cash flow, margin of safety, expected CAGR, and implied priced-in growth
-- Valuation depth from stored statement JSON, including growth, margin, leverage, profitability, payout, multiple, and DCF scenario metrics
-- ETF analytics including expense ratio, distribution yield, tracking error, top holdings, exposures, and direct-holding overlap
-- Forecast analytics including valuation mean reversion, dividend growth projection, blended expected CAGR, and deterministic simulation bands
-- Portfolio analytics with weighted synthetic return series from current positions
-- Portfolio valuation posture with weighted valuation multiples, margin of safety, dividend yield, expected CAGR, and holding-level return contributions
-- Explicit missing-input reporting when dividends, fundamentals, benchmarks, or positions are unavailable
-- Default benchmark selection from stored ETF profile, benchmark metadata, or asset/portfolio geography and currency
-- Optional analytics snapshot storage for future AI-layer context, disabled by default
-- Dashboard CLI commands for analytics reports, JSON output, storage status, storage toggle, and storage refresh
-- Daily snapshot refresh behavior with same-day portfolio-change refreshes when storage is enabled
-- AI-ready report context with structured facts, explanations, anomaly flags, and snapshot fact comparisons
-- Stable analytics report payload schema: `phase3.analytics.v1`
-```
-
-#### Architectural Decision Records: [Main Decisions](docs/adr/adr_ph3.md)
----
-<br>
-
-### Phase 4: Broker Sync
-
-```
-- Read-only broker account linking through SnapTrade
-- Hosted connection portal URLs; broker credentials are never collected by this app
-- SnapTrade user registration with encrypted local user-secret storage
-- Signed direct SnapTrade REST client for register, portal, connections, accounts, positions, and activities
-- Provider-neutral broker sync domain models and repository tables
-- Broker sync run tracking for account, position, and transaction refreshes
-- Manual broker-account-to-portfolio mapping
-- Idempotent import of mapped broker transactions into the local transaction ledger
-- Broker-to-ledger provenance through broker_portfolio_txn_map
-- Dashboard CLI commands for broker registration, portal creation, sync, account listing, mapping, and import
-```
-
-#### Architectural Decision Records: [Main Decisions](docs/adr/adr_ph4.md)
----
-<br>
-
-### Phase 5: API-First Web Application
-
-```
-- Versioned FastAPI backend over existing portfolio, analytics, broker, and ingestion services
-- Request-scoped DuckDB connections with serialized web writes
-- React and TypeScript browser dashboard focused on portfolio analysis
-- Asset detail, broker account, and ingestion operations pages
-- Stable Phase 3 analytics payload reuse and redacted broker responses
-- Dedicated portfolio-management routes for aggregate, portfolio list, fundamentals, portfolio
-  detail, holdings, performance, risk, optimization preview, and asset detail
-- Backend-owned portfolio performance, risk, fundamentals, and constrained optimization preview
-  endpoints; the browser does not calculate authoritative CAGR, Sharpe, beta, or target weights
-- Local-first runtime designed for future hosted, mobile, and desktop clients
-```
-
-#### Architectural Decision Records: [Main Decisions](docs/adr/adr_ph5.md)
----
-<br>
-
-### Current architecture and safety baseline
-
-The current API/web/schema/safety baseline is captured in
-[ADR PH9](docs/adr/adr_ph9_current_architecture_safety.md). The normalized ADR status table is in
-[docs/adr/index.md](docs/adr/index.md).
-
-## Diagrams
-
-
-### UML Class Diagrams:
-<br>
-
-App Architecture: 
-
-![App Architecture](docs/classes/to-display/app_ph2.svg)
-- [Phase 2 Ingestion Architecture](docs/classes/to-display/ingestion_ph2.svg)
-- [Phase 3 Analytics Architecture](docs/classes/to-display/analytics_ph3.svg)
-- [Phase 4 Broker-Sync Architecture](docs/classes/to-display/broker_sync_ph4.svg)
-- [Phase 1 Display Formatters](docs/classes/to-display/formatters_ph1.svg)
-
-### Database E-R:
-<br>
-
-- [Phase 2 ER overview](docs/erd/to-display/erd_ph2.svg)
-- [Core portfolio and ticker universe ER](docs/erd/to-display/erd_ph2_core.svg)
-- [Ingestion and fundamentals ER](docs/erd/to-display/erd_ph2_ingestion.svg)
-- [Live price and trading calendar ER](docs/erd/to-display/erd_ph2_live_calendar.svg)
-- [Benchmark index ER](docs/erd/to-display/erd_ph2_benchmarks.svg)
-- [Current schema ER diagrams](docs/erd/current_schema.md)
-- [Current architecture and process diagrams](docs/architecture.md)
-
-## License: 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-
-
-
+MIT

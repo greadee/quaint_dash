@@ -1,7 +1,7 @@
 # Module Ownership Matrix
 
-Every Phase 1 feature group has a target owner. Feature IDs remain in this
-matrix as stable migration references.
+Every inventoried feature group has a target owner. Feature IDs remain in this matrix as stable
+migration references.
 
 | Feature IDs | Current Location | Owning Module | Supporting Modules | Presentation Owner | Data/API Owner | Classification | Adapter Needed | Migration |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -32,7 +32,7 @@ matrix as stable migration references.
 | Manual refresh/retry controls | operations route/API/application command facade | Operations/Data Quality | Background Jobs, Provider Adapters | Web Operations | Operations command API/application command | Web/admin only | Worker command facade created for start/stop/tick; broader manual refresh still pending | A started |
 | Monte Carlo/forecasting | analytics/API/future | Simulations | Portfolio, Market Prices, Risk | Desktop future/web preview | Simulation API | Desktop preferred, server/shared core | Yes | E |
 | AI ticker insight/news synthesis | experimental/future | AI Insights | News, Market Prices, Asset Research | Platform display | AI API/worker | AI service, desktop/server preferred | Yes | F |
-| Deterministic investor profile | `src/dashboard/rules_and_data` | Investor Intelligence | Portfolio, Holdings, Risk, Valuation, Sentiment, Watchlists | No presentation owner in Phase 4 | Pure profile contract/engine | Shared backend core | Source adapter still required | E started |
+| Deterministic investor profile | `src/dashboard/rules_and_data` | Investor Intelligence | Portfolio, Holdings, Risk, Valuation, Sentiment, Watchlists | No current presentation owner | Pure profile contract/engine | Shared backend core | Implemented deterministic core; source adapters remain bounded | E started |
 
 ## Unclear Or Deferred Ownership
 

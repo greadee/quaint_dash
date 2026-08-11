@@ -34,7 +34,7 @@ Commands used during this pass:
 ```cmd
 git ls-files data tmp '*.db' '*.sqlite' '*.duckdb' '*.log' '.env' '.env.example'
 git ls-files | rg "(^data/|^tmp/|\.db$|\.sqlite$|\.duckdb$|\.log$|\.env$)"
-rg "(api[_-]?key|secret|token|password|bearer|\.duckdb|\.sqlite|account number|routing number|private key)" -i --glob "!web/node_modules/**" --glob "!web/dist/**" --glob "!docs/classes/to-display/**" --glob "!docs/erd/to-display/**" --glob "!*.svg" --glob "!*.png" --glob "!*.lock" .
+rg "(api[_-]?key|secret|token|password|bearer|\.duckdb|\.sqlite|account number|routing number|private key)" -i --glob "!web/node_modules/**" --glob "!web/dist/**" --glob "!docs/archive/diagrams/**" --glob "!*.svg" --glob "!*.png" --glob "!*.lock" .
 ```
 
 Findings:

@@ -27,20 +27,20 @@ metrics. The browser consumes typed API payloads and formats/visualizes them.
 
 Document the current architecture through:
 
-- `docs/onboarding.md`
-- `docs/codebase_map.md`
-- `docs/architecture.md`
-- `docs/erd/current_schema.md`
-- `docs/environment_setup.md`
-- `docs/testing.md`
-- `docs/data_safety.md`
-- `docs/adr/index.md`
+- `docs/development/onboarding.md`
+- `docs/architecture/codebase-map.md`
+- `docs/architecture/overview.md`
+- `docs/architecture/database/current_schema.md`
+- `docs/development/environment.md`
+- `docs/development/testing.md`
+- `docs/operations/data-safety.md`
+- `docs/architecture/decisions/index.md`
 
 Default provider-heavy API workers to safe-off unless explicitly enabled by environment variables.
 Keep `.env.example` as the committed placeholder-only template and keep real credentials in ignored
 local `.env` files or external secret stores.
 
-Preserve older ADR files as history. Use `docs/adr/index.md` as the normalized status and
+Preserve older ADR files as history. Use `docs/architecture/decisions/index.md` as the normalized status and
 supersession index rather than renumbering historical duplicate ADR IDs.
 
 ## Consequences

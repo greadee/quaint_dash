@@ -1,6 +1,6 @@
 # Deterministic Candidate Contracts
 
-The Phase 5 candidate domain represents research-oriented outside-holding reviews. It does not assign recommendation actions, determine suitability, size trades, or call providers.
+The candidate domain represents research-oriented outside-holding reviews. It does not assign recommendation actions, determine suitability, size trades, or call providers.
 
 ## Package Boundary
 
@@ -15,7 +15,7 @@ The provider-neutral contract lives in `dashboard.rules_and_data.candidates`:
 - `CandidateSourceWatermark` records source coverage at the run boundary.
 - `CandidateRunService` composes the frozen invocation, adapters, scoring, guardrails, and immutable run repository without exposing a transport boundary.
 
-The domain models, identity functions, and canonical serializer import no database, API, provider, ranking, analytics, or UI module. `CandidateRunRepository` is the candidate-owned DuckDB infrastructure boundary added in Slice 5.2. Source, scoring, and guardrail services query stored repository tables through narrow read-only connection boundaries.
+The domain models, identity functions, and canonical serializer import no database, API, provider, ranking, analytics, or UI module. `CandidateRunRepository` is the candidate-owned DuckDB infrastructure boundary. Source, scoring, and guardrail services query stored repository tables through narrow read-only connection boundaries.
 
 ## Versions
 
@@ -63,7 +63,7 @@ For outside-holding exclusion, direct repository assets and documented CDR wrapp
 
 ## Source Adapters And Outside-Holding Pool
 
-Slice 5.3 adds deterministic read-only adapters for:
+Deterministic read-only adapters cover:
 
 - the latest persisted stock-ranking snapshot at or before `as_of`;
 - active watchlist rows updated at or before `as_of`;
@@ -76,13 +76,13 @@ Ranking and benchmark composition records are dated snapshots. Watchlist, asset 
 
 ## Portfolio Gap And Association Policy
 
-Slice 5.4 adds five deterministic source families:
+Five deterministic source families cover:
 
 - sector gaps compare the latest frozen portfolio analytics exposure snapshot with one explicit benchmark exposure snapshot;
 - geography gaps use the same policy for country exposure;
 - peer associations require common effective-dated `business_strength_peer_member` membership;
 - industry associations require common effective-dated `asset_business_classification.industry` values;
-- themes require an observed Phase 4 theme tilt, an explicit versioned theme-to-index alias, and a stored theme benchmark composition.
+- themes require an observed investor-profile theme tilt, an explicit versioned theme-to-index alias, and a stored theme benchmark composition.
 
 Gap nomination is deliberately narrow. Portfolio and benchmark exposure totals must each be between 95% and 105%. At least 75% must have known classifications. `Unknown`, `Unclassified`, `Other`, and `Broad Market` never become positive gap dimensions. The portfolio must have at least 40% in one known sector or 60% in one known country. A benchmark dimension must carry at least 5%, and its gap versus the portfolio must be at least 10 percentage points.
 
@@ -92,7 +92,7 @@ Current asset labels and peer-group definitions remain mutable even where member
 
 ## Deterministic Screens
 
-Slice 5.5 adds three read-only screen sources:
+Three read-only screen sources cover:
 
 - quality requires a latest stored business-strength score of at least 70 with confidence and completeness each at least 60;
 - value averages available DCF and dividend-discount margins of safety, maps -25% to 0 and +50% to 100, and requires a normalized score of at least 65;
@@ -104,7 +104,7 @@ Scores must come from snapshots at or before `as_of`. The adapters do not calcul
 
 The versioned `candidate-scoring.v1` policy constructs three independent score states.
 
-Profile fit uses five observed Phase 4 dimensions plus bounded source support:
+Profile fit uses five observed investor-profile dimensions plus bounded source support:
 
 | Component | Weight |
 | --- | ---: |
@@ -119,7 +119,7 @@ Each alignment is `100 - absolute(candidate score - observed profile score)`, bo
 
 Diversification models a fixed 5% hypothetical allocation for comparison only. It scales the existing sector or country exposure to 95%, adds 5% to the candidate classification, and measures the HHI reduction against the maximum possible reduction at that allocation size. Both sector and geography require 95%-105% total exposure, at least 75% known classification, and a known candidate classification. The final diversification score weights sector and geography equally. It does not size a trade or claim that the hypothetical allocation should occur.
 
-Redundancy builds economic-exposure maps from the frozen portfolio positions and stored ETF look-through rows where applicable. It is the sum of the minimum candidate and portfolio weights for shared economic exposures, bounded to 0-100. Direct and equivalent holdings remain exclusions before scoring. An ETF without look-through holdings has an unavailable redundancy score instead of zero. ETF holdings are a mutable current-state source. Slice 5.6 therefore leaves overlap evidence `unknown` when an undated ETF look-through row participates and downgrades the review. A score of 50 or more also moves an otherwise complete review to `downgraded`; it is not silently subtracted from another score.
+Redundancy builds economic-exposure maps from the frozen portfolio positions and stored ETF look-through rows where applicable. It is the sum of the minimum candidate and portfolio weights for shared economic exposures, bounded to 0-100. Direct and equivalent holdings remain exclusions before scoring. An ETF without look-through holdings has an unavailable redundancy score instead of zero. ETF holdings are a mutable current-state source, so the policy leaves overlap evidence `unknown` when an undated ETF look-through row participates and downgrades the review. A score of 50 or more also moves an otherwise complete review to `downgraded`; it is not silently subtracted from another score.
 
 Valuation, quality, momentum, risk, and sentiment highlights preserve their own bounded 0-100 source metric and evidence. An absent highlight produces a noncritical missing metric and no synthetic zero-valued highlight.
 
@@ -132,11 +132,11 @@ Final ordering is:
 5. distinct evidence-domain coverage descending;
 6. canonical asset ID ascending.
 
-Profile identity/version/coverage conflicts and missing critical score evidence block ordering. Raw ranking magnitude is source evidence only and is not a fit component, so it cannot bypass profile conflict, unavailable critical scores, or a material redundancy downgrade. Slice 5.5 does not tune these definitions from production outcomes.
+Profile identity/version/coverage conflicts and missing critical score evidence block ordering. Raw ranking magnitude is source evidence only and is not a fit component, so it cannot bypass profile conflict, unavailable critical scores, or a material redundancy downgrade. These definitions are versioned and are not tuned from production outcomes.
 
 ## Freshness And Guardrail Policy
 
-Slice 5.6 applies `candidate-guardrails.v1` after scoring and before final ordering. Freshness is evaluated against the review's frozen `data_as_of`, never the wall clock. Calendar age is defined by evidence type:
+`candidate-guardrails.v1` applies after scoring and before final ordering. Freshness is evaluated against the review's frozen `data_as_of`, never the wall clock. Calendar age is defined by evidence type:
 
 | Evidence type | Current through | Block after |
 | --- | ---: | ---: |
@@ -167,14 +167,14 @@ A stale positive highlight combined with current negative evidence produces `gua
 
 ## Orchestration And Run State
 
-Slice 5.7 adds the internal `CandidateRunService`. Its frozen `CandidateRunRequest` contains one positive portfolio ID, one UTC whole-second `as_of`, one completed Phase 4 profile, and normalized source parameters. Search terms and benchmark IDs are deduplicated and sorted. Request IDs, clocks, and runtime measurements are not material inputs.
+The internal `CandidateRunService` accepts a frozen `CandidateRunRequest` containing one positive portfolio ID, one UTC whole-second `as_of`, one completed investor profile, and normalized source parameters. Search terms and benchmark IDs are deduplicated and sorted. Request IDs, clocks, and runtime measurements are not material inputs.
 
 The service executes all twelve stored-source families through `OutsideHoldingUniverseBuilder`, applies `CandidateScoringEngine` and `CandidateGuardrailPolicy`, derives the final run identity, persists through `CandidateRunRepository`, reads the immutable row back, and returns `CandidateRun`. Source reads and persistence share one DuckDB transaction so a run cannot combine before-and-after views of concurrent source writes. It has no provider, network, recommendation, trade, API, or UI dependency.
 
 The `candidate-engine.deterministic.v3` input snapshot hash includes:
 
 - run, review, evidence, adapter, screen, scoring, guardrail, identity, and orchestration versions;
-- normalized portfolio scope, `as_of`, source parameters, and the complete material Phase 4 profile;
+- normalized portfolio scope, `as_of`, source parameters, and the complete material investor profile;
 - all source watermarks, pool candidates, held-exposure exclusions, blocked identities, and source limitations;
 - the evidence, score-input states, missing metrics, freshness states, and guardrail states resolved before final run IDs are rebound.
 
@@ -219,7 +219,7 @@ Evidence includes:
 
 Evidence newer than a review's `data_as_of` is invalid. Source matches, numeric score components, highlights, and warnings require evidence. A review with no evidence is invalid, including blocked reviews.
 
-Freshness states are material run output. Slice 5.6 derives them from evidence-type thresholds and the frozen review boundary. Replaying the same evidence at the same `data_as_of` yields the same freshness and guardrail output.
+Freshness states are material run output derived from evidence-type thresholds and the frozen review boundary. Replaying the same evidence at the same `data_as_of` yields the same freshness and guardrail output.
 
 ## Canonical Serialization
 
@@ -267,7 +267,7 @@ Reads rebuild domain models, verify canonical review payload hashes, compare typ
 
 ## Current Explicit Exclusions
 
-Through Slice 5.7, the candidate engine adds no:
+The current candidate engine adds no:
 
 - API or transport model;
 - recommendation action, LLM call, provider call, or UI.

@@ -1,7 +1,7 @@
-# Phase 5 Web Application
+# Web Application
 
-Phase 5 adds a local-first FastAPI backend and React browser interface while preserving the
-existing CLI.
+The primary application surface is a local-first React browser interface backed by versioned
+FastAPI endpoints and DuckDB. The CLI remains available for direct administration and diagnostics.
 
 ## Development
 
@@ -80,10 +80,11 @@ dashboard-web
 FastAPI serves the compiled application from `web/dist`. Build output and installed Node
 packages are intentionally excluded from Git.
 
-## Portfolio Management Routes
+## Application Routes
 
-The committed React app serves these portfolio routes:
+The committed React app serves these workspaces:
 
+- `/`
 - `/portfolios?tab=aggregate`
 - `/portfolios?tab=portfolios`
 - `/portfolios?tab=fundamentals`
@@ -97,8 +98,17 @@ The committed React app serves these portfolio routes:
 - `/assets/{asset_id}?tab=chart`
 - `/assets/{asset_id}?tab=news`
 - `/assets/{asset_id}?tab=fundamentals`
+- `/assets/{asset_id}?tab=business-strength`
+- `/news`
+- `/retail-sentiment`
 - `/signals`
 - `/signals/{signal_id}`
+- `/compare`
+- `/benchmarks`
+- `/benchmarks/{benchmark_id}`
+- `/brokers`
+- `/operations`
+- `/settings`
 
 The portfolio UI uses backend DTOs for performance, risk, fundamentals, and optimization. The
 browser may format values and draw charts, but the Python/DuckDB backend is the source of truth
@@ -124,7 +134,7 @@ portfolio priority, evidence grouping, freshness, and alert/review state.
 Unavailable values are rendered as unavailable/null with missing-input context. They should not be
 displayed as zero unless the backend returns a real zero.
 
-## Portfolio API Surface
+## Core API Surface
 
 The portfolio UI currently uses:
 
@@ -263,7 +273,8 @@ This is the fast preflight for the broader full data health workflow above.
 - The application is single-user and binds to localhost by default.
 - DuckDB remains the application database.
 - Broker connections remain read-only.
-- Ingestion actions are bounded synchronous requests.
+- Ingestion actions run through bounded API commands, persisted queues, and safe-off background
+  workers.
 - Authentication, hosted deployment, hosted workers, AI features, native clients, and trading are
   deferred.
 - Cross-currency support now has a committed `fx_rate` schema foundation, but provider ingestion

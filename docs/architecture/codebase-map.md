@@ -16,8 +16,8 @@ test folders under `tests/` and `web/src/`.
   profiling, news operations, and portfolio metric hydration audits.
 - `scripts/`: Windows-friendly workflow wrapper. Prefer `scripts\qd.cmd` for setup, launch,
   verification, health, and smoke checks.
-- `docs/`: ADRs, architecture docs, usage guides, ER diagrams, class/component diagrams, process
-  notes, and evidence notes.
+- `docs/`: progressively layered product, feature, operations, development, architecture,
+  reference, and historical documentation.
 - `data/`, `tmp/`, local logs, `.env`, `.venv`, and generated build outputs: local-only runtime
   artifacts; they are intentionally ignored by Git.
 
@@ -42,6 +42,9 @@ test folders under `tests/` and `web/src/`.
   clustering, ranking, repository, and API service.
 - `dashboard.services`: transaction import, table formatting, asset metadata import, and business
   strength scoring services.
+- `dashboard.rules_and_data`: deterministic investor-profile observations and persisted
+  outside-holding candidate evaluation. It has no public API, UI, LLM, recommendation, or trading
+  responsibility.
 
 ## Browser ownership
 
@@ -54,7 +57,7 @@ test folders under `tests/` and `web/src/`.
 - `web/src/*Utils.ts` and `web/src/routes/route*.tsx`: shared formatting, pickers, analytics, and
   display helpers.
 
-## Low-risk consolidation completed
+## Compatibility Notes
 
 `src/dashboard/models/storage.py` had stale module-level benchmark and live-price helpers that had
 already moved into `dashboard.models.commands.ingestion.IngestionCommands` and
@@ -63,13 +66,12 @@ definitions only, while tests and CLI code call the command mixins through `Dash
 stale block and now-unused imports were removed without changing the public `DashboardManager`
 surface.
 
-## Current cleanup candidates
+## Current Structural Notes
 
 - ADR numbering has historical duplicates (`ADR-064`, `ADR-068`, `ADR-069`, `ADR-079`, `ADR-080`,
-  and `ADR-032`). Do not renumber old ADRs; use `docs/adr/index.md` as the normalized index.
-- Generated SVG diagrams under `docs/classes/to-display/` and `docs/erd/to-display/` are older
-  than some current schema and route surfaces. Prefer the Mermaid docs added in this pass for
-  current architecture, and regenerate display SVGs only when a render tool is available.
+  and `ADR-032`). Do not renumber old ADRs; use `docs/architecture/decisions/index.md` as the normalized index.
+- Generated phase-era SVG diagrams live under `docs/archive/diagrams/` and may lag the current
+  schema and route surfaces. Prefer the current Mermaid architecture and schema documents.
 - `src/dashboard/models/storage.py` remains a legacy facade with CLI-era methods plus command
   mixins. Larger decomposition would be risky and should be done as a separate behavior-preserving
   refactor with focused tests.

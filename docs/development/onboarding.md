@@ -33,8 +33,8 @@ npm.cmd install
 ## Environment setup
 
 Copy `.env.example` to `.env` and fill in only the credentials you need. Leave optional providers
-blank for normal local development. See `docs/environment_setup.md` for every currently documented
-setting and its source.
+blank for normal local development. See the [environment guide](environment.md) for every
+currently documented setting and its source.
 
 ## Run the app
 
@@ -67,13 +67,15 @@ The API binds to `http://127.0.0.1:8000`; API docs are at
 
 ## Database initialization
 
-`dashboard.db.db_conn.init_db()` runs `src/dashboard/db/schema.sql`, then applies these migration
-files:
+`dashboard.db.db_conn.init_db()` runs `src/dashboard/db/schema.sql`, which includes the current
+ticker-universe tables, then applies these migration files:
 
 - `src/dashboard/db/migrations/live_price_streaming.sql`
 - `src/dashboard/db/migrations/benchmark_indices.sql`
 - `src/dashboard/db/migrations/business_strength.sql`
 - `src/dashboard/db/migrations/financial_news.sql`
+- `src/dashboard/db/migrations/ingestion_job_recovery.sql`
+- `src/dashboard/db/migrations/candidate_runs.sql`
 
 It also seeds the static stock catalog with `dashboard.ingestion.stock_catalog.seed_stock_catalog`.
 The default DB path is `data/persistent_db.db`, controlled by `DASHBOARD_DB_PATH`.
@@ -89,6 +91,7 @@ The shared ingestion spine is the `ingestion_job` table plus domain-specific ser
 - Benchmark indices: `dashboard.ingestion.indices.*`
 - Live prices: `dashboard.ingestion.websocket.*`
 - News and retail sentiment: `dashboard.news.*` and `dashboard.ingestion_sentiment.*`
+- Deterministic investor observations and outside-holding research: `dashboard.rules_and_data.*`
 
 Routine background work is intentionally bounded. API workers are configured in
 `dashboard.api.ingestion_background`, `dashboard.api.market_freshness_background`,
@@ -101,8 +104,9 @@ work should remain explicit unless a worker config clearly bounds it.
 2. Add a provider implementation with explicit credentials, timeouts, rate limits, and redaction.
 3. Register it through the existing service factory or provider registry.
 4. Add synthetic tests that do not call the real provider.
-5. Document env vars in `.env.example` and `docs/environment_setup.md`.
-6. Add an ADR or update `docs/adr/index.md` if the provider changes architecture or data ownership.
+5. Document env vars in `.env.example` and [environment.md](environment.md).
+6. Add an ADR or update the [ADR index](../architecture/decisions/index.md) if the provider changes
+   architecture or data ownership.
 
 ## Adding an ingestion job
 
@@ -117,7 +121,7 @@ work should remain explicit unless a worker config clearly bounds it.
 1. Add behavior to the relevant mixin under `src/dashboard/models/commands/`.
 2. Wire parser/view handling in `src/dashboard/models/cli_view.py` or provider-specific CLI modules.
 3. Test through `tests/cli/` or the relevant service-level tests.
-4. Update `docs/usage/cmds/`.
+4. Update the relevant page under `docs/reference/cli/`.
 
 ## Adding a test
 

@@ -3,10 +3,8 @@
 This document reflects the current implementation in `src/dashboard`, `web/src`,
 `src/dashboard/db/schema.sql`, and `src/dashboard/db/migrations/`.
 
-For the Phase 1.5 target module boundaries, ownership matrix, dependency rules,
-public interface catalog, migration sequence, and diagrams, see
-[docs/architecture/README.md](architecture/README.md). This page remains the
-current-state architecture overview.
+For package ownership, dependency rules, future boundaries, migration material, and diagrams, see
+the [architecture index](README.md). This page describes the implemented runtime.
 
 ## Local-first system
 
@@ -24,6 +22,7 @@ flowchart LR
     Services --> Broker["broker sync"]
     Services --> News["news + sentiment services"]
     Services --> Ingestion["ingestion services"]
+    Services --> Rules["deterministic rules_and_data"]
     Ingestion --> Providers["Yahoo/FMP/Finnhub/Reddit/X/news providers"]
     Broker --> SnapTrade["SnapTrade"]
 ```
@@ -37,6 +36,8 @@ flowchart TD
     Init --> Bench["benchmark_indices.sql"]
     Init --> Strength["business_strength.sql"]
     Init --> NewsSchema["financial_news.sql"]
+    Init --> Recovery["ingestion_job_recovery.sql"]
+    Init --> Candidates["candidate_runs.sql"]
     Init --> Catalog["seed_stock_catalog(conn)"]
     APIReq["FastAPI request"] --> Dep["get_connection(request)"]
     Dep --> Lock["app.state.write_lock"]
@@ -47,6 +48,9 @@ flowchart TD
 
 The API opens and closes one DuckDB connection per request. Writes are serialized by the API
 process lock. CLI commands use a long-lived `DB` connection through `DashboardManager`.
+
+`portfolio_ticker` and `watchlist_ticker` are part of the base schema. The retained
+`ticker_universe.sql` migration documents and backfills the original introduction of those tables.
 
 ## CLI command flow
 
@@ -77,6 +81,20 @@ flowchart TD
 
 `position` is derived from transactions and refreshed by command/service code. `portfolio_ticker`
 keeps ingestion scope aligned with active holdings.
+
+## Deterministic investor and candidate flow
+
+```mermaid
+flowchart LR
+    Stored["stored portfolio and market evidence"] --> Profile["deterministic investor profile"]
+    Profile --> Candidate["CandidateRunService"]
+    Sources["versioned stored-source adapters"] --> Candidate
+    Candidate --> Score["scoring + guardrails"]
+    Score --> Runs[("immutable candidate runs")]
+```
+
+This internal `rules_and_data` flow does not call providers, expose an API or UI, determine
+suitability, recommend an action, invoke an LLM, or place a trade.
 
 ## Ingestion job and scheduler flow
 
@@ -173,4 +191,4 @@ flowchart LR
     IngestionRelated["ingestion/valuation/signals/operations change"] --> Health["full data-health workflow + browser scan"]
 ```
 
-See `docs/testing.md` for exact commands.
+See the [testing guide](../development/testing.md) for exact commands.

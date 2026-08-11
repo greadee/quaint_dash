@@ -52,7 +52,7 @@ naming conventions, migration sequence, ADR, and Mermaid diagrams.
 | --- | --- | --- | --- | --- |
 | `docs/architecture/*` | Central Phase 1.5 blueprint. | None. | Documentation drift if not maintained. | Link and content review. |
 | `docs/architecture/diagrams/*` | Required Mermaid architecture diagrams. | None. | Diagram drift. | Diagram files reviewed. |
-| `docs/adr/adr_ph10_modular_boundary_blueprint.md` | Record consequential architecture decision. | None. | ADR overlap mitigated by index links. | ADR index updated. |
+| `docs/architecture/decisions/adr_ph10_modular_boundary_blueprint.md` | Record consequential architecture decision. | None. | ADR overlap mitigated by index links. | ADR index updated. |
 | `tools/check_architecture_boundaries.py` | Lightweight import-boundary enforcement. | None at runtime. | Rule false positives if expanded carelessly. | Architecture check and pytest. |
 | `tests/test_architecture_boundaries.py` | CI coverage for boundary checker. | None. | Test maintenance with boundary changes. | Pytest. |
 | `web/src/routes/operationsViewModels.ts` | Pilot view-model boundary. | Intended none. | Formatting drift if duplicated. | Unit test and web tests/build. |

@@ -11,12 +11,12 @@ split before contracts are stable.
 
 ## Proposed Repository Structure
 
-The structure below is the target boundary. Only documentation and lightweight
-checks are created in Phase 1.5 unless noted.
+The structure below is the target boundary. Some application and deterministic-rules boundaries
+now exist, but the broader target package layout remains directional unless marked implemented.
 
 | Path | Purpose | Allowed Contents | Forbidden Contents | Status |
 | --- | --- | --- | --- | --- |
-| `src/dashboard/contracts` | Shared DTO/schema contracts for API, workers, desktop, mobile, and AI consumers. | Versioned request/response schemas, shared identifiers, provenance/freshness models. | Database rows, provider raw payloads, React props. | Future boundary, not created as empty code in Phase 1.5. |
+| `src/dashboard/contracts` | Shared DTO/schema contracts for API, workers, desktop, mobile, and AI consumers. | Versioned request/response schemas, shared identifiers, provenance/freshness models. | Database rows, provider raw payloads, React props. | Future boundary; not created as an empty package. |
 | `src/dashboard/domain` | Pure investment domain models and deterministic business rules. | Entities, value objects, metric formulas, scoring rules, invariants. | FastAPI, DuckDB connections, React, provider SDKs, environment reads. | Future boundary. |
 | `src/dashboard/application` | Use cases that orchestrate domain logic through interfaces. | Queries, commands, repository protocols, service interfaces, authorization checks. | UI rendering, provider-specific parsing, direct SQL details. | Future boundary. |
 | `src/dashboard/infrastructure` | Implementations of persistence, provider, cache, scheduler, and file adapters. | DuckDB repositories, provider clients, cache adapters, importer implementations. | Business meaning that belongs in domain, API response models. | Future boundary. |
@@ -35,7 +35,7 @@ Presentation depends on application contracts. Application depends on domain and
 interfaces. Infrastructure implements interfaces. API and workers are adapters.
 AI consumes deterministic results through contracts and may not replace them.
 
-## What Remains Unchanged In Phase 1.5
+## Compatibility Requirements During Migration
 
 - Runtime API routes and response meanings.
 - Database schema and migrations.
@@ -43,4 +43,3 @@ AI consumes deterministic results through contracts and may not replace them.
 - Web layout, styling, navigation, and calculations.
 - Background job behavior.
 - Authentication and environment variable names.
-

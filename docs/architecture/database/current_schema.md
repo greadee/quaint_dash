@@ -1,11 +1,9 @@
 # Current Schema ER Diagrams
 
-These diagrams are derived from `src/dashboard/db/schema.sql`,
-`src/dashboard/db/migrations/live_price_streaming.sql`,
-`src/dashboard/db/migrations/benchmark_indices.sql`,
-`src/dashboard/db/migrations/business_strength.sql`, and
-`src/dashboard/db/migrations/financial_news.sql`. They intentionally split the schema into scoped
-domains so the diagrams remain readable.
+These diagrams are derived from `src/dashboard/db/schema.sql` and every committed migration under
+`src/dashboard/db/migrations/`: live pricing, benchmark indices, Business Strength, financial
+news, ticker universe, ingestion-job recovery, and candidate runs. They intentionally split the
+schema into scoped domains so the diagrams remain readable.
 
 ## Core portfolio schema
 
@@ -289,10 +287,48 @@ Source of truth: benchmark universe and provider symbols live in `benchmark_inde
 `benchmark_index_symbol`; prices, composition, exposure, metrics, and sync-state tables are derived
 or ingested facts.
 
+## Deterministic Candidate-Run Schema
+
+```mermaid
+erDiagram
+    candidate_run ||--o{ candidate_source_watermark : records
+    candidate_run ||--o{ candidate_review : contains
+    candidate_review ||--o{ candidate_review_reason : explains
+    candidate_review ||--o{ candidate_source_match : traces
+    candidate_review ||--o{ candidate_evidence : supports
+    candidate_review ||--o{ candidate_missing_metric : reports
+    candidate_review ||--o{ candidate_warning : reports
+
+    candidate_run {
+      TEXT run_id PK
+      BIGINT portfolio_id
+      TEXT policy_version
+      TEXT status
+      TIMESTAMP created_at
+    }
+    candidate_review {
+      TEXT run_id FK
+      TEXT asset_id
+      TEXT review_state
+      DOUBLE score
+    }
+    candidate_evidence {
+      TEXT run_id FK
+      TEXT asset_id
+      TEXT metric_key
+      TEXT source_name
+      DOUBLE numeric_value
+    }
+```
+
+Source of truth: these tables persist deterministic outside-holding research runs, source
+watermarks, evidence, missing metrics, and warnings. They do not represent recommendations,
+suitability decisions, orders, or LLM output. See the [candidate engine guide](../../features/candidate-engine.md).
+
 ## Known schema gaps
 
 - `fx_rate` exists, but provider ingestion for dated FX rates is not implemented.
 - Business-strength tables are present in `business_strength.sql` and are documented separately in
-  `docs/business_strength_scorecard.md`.
-- Generated SVG ER diagrams under `docs/erd/to-display/` may lag the current schema. Prefer this
-  Mermaid document until those display assets are regenerated.
+  `docs/features/business-strength.md`.
+- Historical SVG ER diagrams under `docs/archive/diagrams/database/` may lag the current schema.
+  Prefer this document for the live schema.

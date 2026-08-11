@@ -1,7 +1,7 @@
 # Platform Capability Matrix
 
-Platform plans are based on Phase 1 feature inventory and current code. They are
-not implementation commitments for apps that do not exist yet.
+Platform plans are based on the current feature inventory and code. They are not implementation
+commitments for clients that do not exist yet.
 
 | Capability | Shared Core | Web | Desktop | Mobile | Server/Worker/AI | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -34,4 +34,3 @@ not implementation commitments for apps that do not exist yet.
 - Mobile consumes compact HTTP/read-model payloads and notification payloads.
 - Workers consume application commands and infrastructure repositories.
 - AI consumes deterministic application queries and evidence references.
-

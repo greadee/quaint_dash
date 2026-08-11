@@ -1,7 +1,7 @@
 # Naming Conventions
 
-Do not rename broad code in Phase 1.5. Use this standard for new boundaries and
-future migrations.
+Do not rename broad code without a behavior-preserving migration. Use this standard for new
+boundaries and future migrations.
 
 ## Canonical Terms
 
@@ -27,6 +27,5 @@ future migrations.
 - Domain entities: noun, such as `Portfolio`, `Position`, `Benchmark`.
 - Value objects: noun phrase, such as `Money`, `DateRange`, `DataFreshness`.
 - Widgets: page/capability key, such as `portfolio.performance.cagrCard`.
-- Feature IDs: stable uppercase domain prefix plus number, preserving Phase 1 ids.
+- Feature IDs: stable uppercase domain prefix plus number, preserving existing inventory IDs.
 - Tests: mirror module and behavior, such as `test_calculate_business_strength_handles_missing_inputs`.
-

@@ -18,8 +18,8 @@ Status vocabulary: Proposed, Accepted, Implemented, Superseded, Deprecated, Reje
 | ADR-008 | Keep database as source of truth for positions | Implemented | Current |  | `txn`, `position`, `portfolio_ticker`, API portfolio tests |
 | ADR-009 | CLI view layer separate from CLI | Implemented | Current |  | `src/dashboard/cli.py`, `src/dashboard/models/cli_view.py` |
 | ADR-010 | Introduce a Formatter class over pandas | Implemented | Current for CLI display |  | `src/dashboard/services/table_formatter.py` |
-| ADR-011 | Separate Formatter UML diagram | Implemented | Current as historical diagram |  | `docs/classes/plantuml-code/formatters_ph1.puml` |
-| ADR-012 | Choice of data providers | Implemented | Partially current; provider set expanded | ADR PH9 documents current provider mix | `src/dashboard/ingestion/`, `docs/environment_setup.md` |
+| ADR-011 | Separate Formatter UML diagram | Implemented | Current as historical diagram |  | `docs/archive/diagrams/classes/plantuml-code/formatters_ph1.puml` |
+| ADR-012 | Choice of data providers | Implemented | Partially current; provider set expanded | ADR PH9 documents current provider mix | `src/dashboard/ingestion/`, `docs/development/environment.md` |
 | ADR-013 | Finnhub websocket vs REST API | Implemented | Current for regular-session live stream |  | `src/dashboard/ingestion/websocket/` |
 | ADR-014 | Ingestion polling rates | Implemented | Current as principle; exact env knobs evolved | ADR PH9 documents safe worker defaults | `.env.example`, `src/dashboard/api/*background.py` |
 | ADR-015 | Ingestion scheduling rates | Implemented | Current as principle |  | `IngestionBackgroundConfig`, `MarketFreshnessConfig` |
@@ -69,7 +69,7 @@ Status vocabulary: Proposed, Accepted, Implemented, Superseded, Deprecated, Reje
 | ADR-061 | Calculation-first analytics layer | Implemented | Current |  | `src/dashboard/analytics/` |
 | ADR-062 | Existing data before new ingestion | Implemented | Current |  | analytics repository/services |
 | ADR-063 | Optional analytics snapshot storage | Implemented | Current |  | analytics persistence commands |
-| ADR-065 | AI-ready analytics context | Implemented | Current as local context payloads |  | analytics models and reports |
+| ADR-065 | AI-ready analytics context | Implemented | Current as deterministic local context payloads; no LLM integration |  | analytics models and reports |
 | ADR-066 | User-facing analytics commands and stable payloads | Implemented | Current |  | CLI analytics tests |
 | ADR-067 | Benchmark defaults and portfolio valuation rollups | Implemented | Current |  | benchmark default API tests |
 | ADR-064 | Daily and portfolio-change refresh cadence | Implemented | Current; duplicate number preserved |  | analytics persistence |
@@ -96,12 +96,12 @@ Status vocabulary: Proposed, Accepted, Implemented, Superseded, Deprecated, Reje
 | ADR-080 | Optimization is preview-only | Implemented | Current; duplicate number preserved |  | optimization preview route/tests |
 | ADR PH6 | Metric hydration identity | Accepted | Current |  | `valuation_asset_id`, comparison payload fields |
 | ADR PH7 | Deterministic business strength scorecard and sector-aware templates | Accepted | Current |  | business strength migration/service/docs |
-| ADR PH8 | Provider-neutral financial news terminal | Accepted | Current |  | `docs/news_terminal.md`, news migration/service/tests |
+| ADR PH8 | Provider-neutral financial news terminal | Accepted | Current |  | `docs/features/news.md`, news migration/service/tests |
 | ADR PH9 | Current architecture documentation and safe local operations | Accepted | Current |  | docs added in this pass, `.env.example`, worker defaults |
 | ADR PH10 | Modular boundary blueprint for Phase 1.5 | Accepted | Current |  | `docs/architecture/README.md`, boundary check, pilot report |
 | ADR PH11 | Operations status application boundary | Accepted | Current |  | `src/dashboard/application/operations.py`, Operations API tests |
 | ADR PH12 | Operations worker command boundary | Accepted | Current |  | `OperationsWorkerCommands`, Operations API tests |
-| ADR PH13 | Deterministic candidate engine boundary | Accepted | Current for Phase 5 contract work |  | `docs/adr/adr_ph13_candidate_engine_boundary.md`, Phase 5 prerequisite audit |
+| ADR PH13 | Deterministic candidate engine boundary | Implemented | Current deterministic backend boundary |  | `src/dashboard/rules_and_data`, `docs/features/candidate-engine.md` |
 
 ## Supersession notes
 
@@ -113,8 +113,8 @@ Status vocabulary: Proposed, Accepted, Implemented, Superseded, Deprecated, Reje
   queries without changing API response semantics.
 - ADR PH12 extends the Operations/Data Quality application boundary to process-local worker
   commands while preserving existing route behavior.
-- ADR PH13 freezes the deterministic candidate-engine ownership, vocabulary, point-in-time,
-  identity, precision, and hashing contracts before Phase 5 runtime implementation begins.
+- ADR PH13 governs the implemented deterministic candidate-engine ownership, vocabulary,
+  point-in-time, identity, precision, hashing, persistence, and orchestration contracts.
 - ADR-041 is partially superseded in practice because yfinance now does more than gap repair:
   current market freshness and benchmark proxy fallback use it.
 - ADR-073 remains true for explicit broker sync scheduling, but the API periodic background worker

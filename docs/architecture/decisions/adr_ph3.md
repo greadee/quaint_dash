@@ -262,4 +262,4 @@ Phase 3 grew from a small set of risk calculations into a broad analytics system
 - `AnalyticsStorageService` owns opt-in snapshot schema creation and refresh behavior.
 - Analytics dataclasses in `dashboard.analytics.models` define the stable internal report contracts.
 - `dashboard.analytics.__init__` re-exports the supported public API.
-- The package relationships are documented in `docs/classes/plantuml-code/analytics_ph3.puml`.
+- The historical package relationships are preserved in `docs/archive/diagrams/classes/plantuml-code/analytics_ph3.puml`.

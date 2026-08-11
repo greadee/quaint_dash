@@ -4,7 +4,7 @@
 
 - Included: shared identifiers, freshness/provenance contracts, dependency rules,
   architecture checks, Operations view-model pilot, widget id ownership.
-- Prerequisites: Phase 1 inventory and Phase 1.5 blueprint.
+- Prerequisites: current-state inventory and accepted boundary blueprint.
 - Movement: minimal; adapters and contracts only.
 - Tests: architecture boundary test, pilot unit test, existing lint/test/build.
 - Rollback: remove pilot adapter/import and boundary check.
@@ -71,4 +71,3 @@
 - Tests: platform integration, mobile payload, desktop bulk-analysis tests.
 - Rollback: platform-specific release gating.
 - Complexity: Very large.
-

@@ -1,6 +1,6 @@
 # Broker Commands
 
-Broker commands are available from the dashboard view. Phase 4 broker sync is read-only and currently uses SnapTrade.
+Broker commands are available from the dashboard view. Broker sync is read-only and currently uses SnapTrade.
 
 ## Environment
 

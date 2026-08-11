@@ -2,58 +2,56 @@
 
 ## Repository Shape
 
-The app is currently a Python backend plus a Vite/React web frontend:
+Quaint Dash is a Python backend and CLI with a Vite/React browser client:
 
-- `src/dashboard/api`: FastAPI routes, API models, and route-level orchestration.
-- `src/dashboard/db.py`: database connection helpers and persistence entry points.
-- `src/dashboard/models.py`: legacy CLI-facing repository facade.
-- `src/dashboard/analytics`: portfolio and asset analytics calculations.
-- `src/dashboard/services/business_strength`: business-strength scoring logic.
-- `src/dashboard/ingestion` and `src/dashboard/ingestion_sentiment`: background
-  ingestion pipelines and provider-sensitive refresh logic.
-- `src/dashboard/news`: news ingestion, sentiment, API service logic, and news
-  terminal support.
-- `src/dashboard/brokers`: broker import, sync, and portfolio mapping logic.
-- `web/src/routes`: page components, route view models, feature menus, and chart
-  composition.
-- `web/src/api.ts`: browser-side API client and DTO types.
-- `web/src/pageFeatureStore.ts`: widget visibility and per-page feature
-  customization.
+- `src/dashboard/api`: FastAPI routes, DTOs, application services, and API-owned workers.
+- `src/dashboard/db`: DuckDB connections, schema, migrations, and query constants.
+- `src/dashboard/models`: domain dataclasses, the legacy storage facade, CLI views, and commands.
+- `src/dashboard/analytics`: portfolio and asset analytics, repositories, and snapshots.
+- `src/dashboard/rules_and_data`: deterministic investor-profile and outside-holding candidate
+  evaluation. It has no LLM integration or public recommendation surface.
+- `src/dashboard/services/business_strength`: deterministic business-strength scoring.
+- `src/dashboard/ingestion` and `src/dashboard/ingestion_sentiment`: bounded market, fundamental,
+  benchmark, live-price, news, and social-sentiment ingestion.
+- `src/dashboard/news`: normalized news ingestion, ranking, storage, and API services.
+- `src/dashboard/brokers`: read-only broker linking, synchronization, mapping, and import.
+- `web/src/routes`: route components and route-specific view-model composition.
+- `web/src/api.ts`: typed browser API client and DTO contracts.
+- `web/src/pageFeatureStore.tsx`: persisted page visibility, ordering, and layout settings.
 
-## Important Coupling Findings
+## Implemented Boundaries
 
-The Phase 1 inventory shows strong user-facing capability coverage, but the
-implementation boundaries are mixed.
+- Python and DuckDB own calculations, persistence, provenance, and readiness state.
+- React owns navigation, interaction, formatting, and visualization of API payloads.
+- Request-scoped DuckDB connections and an API process lock serialize browser writes.
+- Provider work is bounded by explicit jobs, rate limits, call budgets, and safe-off workers.
+- Broker integrations are read-only; imports require an explicit account-to-portfolio mapping.
+- The deterministic rules layer is separate from any future LLM explanation layer. No LLM can
+  currently calculate metrics, choose candidates, make suitability decisions, or initiate trades.
 
-- API routes often orchestrate persistence, analytics, provider refresh, and
-  response shaping in one layer.
-- Web route files own both presentation and some view-model logic.
-- API response DTOs are used as convenient frontend contracts but are not
-  stable shared domain contracts.
-- Ingestion workers and Operations UI expose provider and scheduler details
-  directly enough that future mobile/desktop consumers would need adapters.
-- AI and deterministic analytics are not yet separated by an explicit contract.
-- Data freshness and provenance exist in several payloads and status routes, but
-  there is no single cross-platform model.
-- Naming differs by context: asset, ticker, security, holding, position, quote,
-  price, metric, and ratio are used with overlapping meanings.
+## Remaining Coupling
 
-## Existing Strengths To Preserve
+- The main API route module remains broad and combines many product surfaces.
+- Some route handlers still coordinate persistence, analytics, refresh, and response shaping.
+- `DashboardManager` remains a compatibility facade across CLI-era storage and command mixins.
+- Web route files combine component composition with some page-specific transformation logic.
+- API DTOs are stable for the browser but are not yet shared multi-client domain contracts.
+- Freshness and provenance are explicit in many payloads but do not use one universal model.
+- Asset, ticker, security, holding, position, quote, and metric naming still overlaps by context.
 
-- Financial calculations are backend-owned and should stay that way.
-- Provider fallbacks and readiness states are explicit enough to document.
-- CI already runs Python lint and tests.
-- The web app has route-level tests and a strong API client boundary.
-- ADRs preserve historical reasoning and should remain append-only.
-- The Phase 1 planning docs assign stable feature IDs across pages, widgets, and
-  supporting capabilities.
+## Strengths To Preserve
 
-## Documentation Gaps
+- Financial calculations are backend-owned and tested independently of the UI.
+- Transactions remain the durable portfolio ledger; positions are projections.
+- Missing and stale data remain explicit instead of being silently converted to zero.
+- Provider failures and entitlement limits are persisted with redacted errors.
+- Python and web verification run in CI, with focused route and API coverage.
+- Architecture decisions preserve reasoning and remain append-only.
 
-- Some current APIs are documented by implementation and tests rather than by
-  contract docs.
-- Existing diagrams do not show multi-platform or AI boundaries.
-- Temporary compatibility rules were not previously documented with deletion
-  criteria.
-- Feature-to-module ownership did not previously exist in a central matrix.
+## Next Architectural Work
 
+- Continue extracting application services from broad route and compatibility facades.
+- Formalize reusable provenance and freshness contracts for future clients.
+- Migrate only through tested compatibility boundaries described in the
+  [transitional architecture](transitional-architecture.md).
+- Keep future AI work optional and downstream of deterministic facts, rules, and guardrails.

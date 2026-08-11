@@ -1,7 +1,7 @@
 # Public Interface Specifications
 
-Interfaces listed here are target contracts. They are not all implemented in
-Phase 1.5.
+Interfaces listed here are target contracts. They are not all implemented; check the current
+package and API maps before depending on one.
 
 ## Portfolio
 
