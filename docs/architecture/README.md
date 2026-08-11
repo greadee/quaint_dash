@@ -11,9 +11,7 @@ until a feature is migrated through the documented strangler sequence.
 
 ## Required Inputs Reviewed
 
-- Phase 1 inventory: [feature_widget_segmentation_plan.md](../planning/feature_widget_segmentation_plan.md)
-- Phase 1 hierarchy diagram: [feature_hierarchy.mmd](../planning/feature_hierarchy.mmd)
-- Phase 1 data map: [data_dependency_map.mmd](../planning/data_dependency_map.mmd)
+- Phase 1 inventory, hierarchy, and data-dependency analysis
 - Existing overview: [architecture.md](../architecture.md)
 - Data safety: [data_safety.md](../data_safety.md)
 - ADR index: [../adr/index.md](../adr/index.md)

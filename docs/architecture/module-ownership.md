@@ -1,7 +1,7 @@
 # Module Ownership Matrix
 
-Every Phase 1 feature group has a target owner. Feature IDs are defined in
-[feature_widget_segmentation_plan.md](../planning/feature_widget_segmentation_plan.md).
+Every Phase 1 feature group has a target owner. Feature IDs remain in this
+matrix as stable migration references.
 
 | Feature IDs | Current Location | Owning Module | Supporting Modules | Presentation Owner | Data/API Owner | Classification | Adapter Needed | Migration |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
