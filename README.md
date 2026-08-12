@@ -108,9 +108,6 @@ scripts\qd.cmd setup
 scripts\qd.cmd launch
 ```
 
-The API runs at `http://127.0.0.1:8000`, interactive API documentation is available at
-`http://127.0.0.1:8000/api/docs`, and Vite runs at `http://127.0.0.1:5173`.
-
 For a manual setup:
 
 ```cmd
