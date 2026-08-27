@@ -5,8 +5,8 @@ import { Link, useSearchParams } from "react-router-dom";
 import { api, type NewsArticle, type NewsFeed } from "../api";
 import { EmptyRow, ErrorPanel, Loading, Pager, Signal, TabBar } from "./routeShared";
 import { formatTimestamp, percent } from "./routeFormatters";
+import { categoryMatchesPreset, type NewsPreset } from "./newsFilters";
 
-type NewsPreset = "all" | "breaking" | "earnings" | "corporate" | "macro" | "press";
 type Density = "comfortable" | "compact" | "ultra";
 
 const presets: { value: NewsPreset; label: string }[] = [
@@ -17,9 +17,6 @@ const presets: { value: NewsPreset; label: string }[] = [
   { value: "macro", label: "Market" },
   { value: "press", label: "Press" },
 ];
-
-const corporateCategories = new Set(["merger_acquisition", "buyback", "dividend", "stock_split", "capital_raise"]);
-const macroCategories = new Set(["macro", "central_bank", "economic_data", "government_policy"]);
 
 export function NewsTerminalPage() {
   const queryClient = useQueryClient();
@@ -197,11 +194,4 @@ function presetCategory(preset: NewsPreset) {
   if (preset === "earnings") return "earnings";
   if (preset === "press") return "press_release";
   return "";
-}
-
-export function categoryMatchesPreset(article: NewsArticle, preset: NewsPreset) {
-  const codes = new Set(article.categories.map((item) => item.category_code));
-  if (preset === "corporate") return [...codes].some((code) => corporateCategories.has(code));
-  if (preset === "macro") return [...codes].some((code) => macroCategories.has(code));
-  return true;
 }

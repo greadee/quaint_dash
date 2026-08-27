@@ -24,7 +24,8 @@ import { money, percent } from "./routeFormatters";
 import { ChartFrame, ChartTypeToggle, EmptyRow, ErrorPanel, HelpDisclosure, MetricLine } from "./routeShared";
 import type { HelpItem } from "./routeTypes";
 import { BenchmarkPicker, TickerPicker } from "./routePickers";
-import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar, usePageFeature } from "../pageFeatureStore";
+import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar } from "../pageFeatureStore";
+import { usePageFeature } from "../pageFeatureHooks";
 
 export function ComparePage() {
   const [params, setParams] = useSearchParams();

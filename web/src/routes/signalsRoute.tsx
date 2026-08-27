@@ -6,7 +6,8 @@ import { api, type SignalDetailResponse, type SignalRow } from "../api";
 import { money, number, percent, signedNumber } from "./routeFormatters";
 import { EmptyRow, ErrorPanel, Loading } from "./routeShared";
 import type { AppNotification } from "./routeTypes";
-import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar, usePageFeature } from "../pageFeatureStore";
+import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar } from "../pageFeatureStore";
+import { usePageFeature } from "../pageFeatureHooks";
 
 const actionErrorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 

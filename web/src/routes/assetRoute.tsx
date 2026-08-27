@@ -8,7 +8,8 @@ import { AssetAnalyticsPanel } from "./routeAnalytics";
 import { money, percent } from "./routeFormatters";
 import { ChartFrame, ChartTypeToggle, EmptyRow, ErrorPanel, Loading, RangeSelector, ScoreGauge, TabBar } from "./routeShared";
 import type { AppNotification } from "./routeTypes";
-import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar, usePageFeature, usePageFeatureControls } from "../pageFeatureStore";
+import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar } from "../pageFeatureStore";
+import { usePageFeature, usePageFeatureControls } from "../pageFeatureHooks";
 
 type AssetDetailTab = "chart" | "news" | "fundamentals" | "business-strength";
 type ChartType = "line" | "bar";

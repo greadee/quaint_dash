@@ -3,7 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Activity, MessageSquare, RefreshCw, TrendingDown, TrendingUp } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api, type RetailSentimentOverviewItem, type StockRankingItem } from "../api";
-import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar, usePageFeature } from "../pageFeatureStore";
+import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar } from "../pageFeatureStore";
+import { usePageFeature } from "../pageFeatureHooks";
 import { money, percent, signedNumber } from "./routeFormatters";
 import { EmptyRow, ErrorPanel, Loading, Metric } from "./routeShared";
 

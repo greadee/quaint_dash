@@ -62,7 +62,8 @@ import {
   type SortDirection,
 } from "./benchmarkUtils";
 import { ChartFrame, ChartTypeToggle } from "./routes/routeShared";
-import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar, usePageFeature } from "./pageFeatureStore";
+import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar } from "./pageFeatureStore";
+import { usePageFeature } from "./pageFeatureHooks";
 
 type Notify = (message: string, tone?: "success" | "error") => void;
 

@@ -7,7 +7,8 @@ import { api, type HoldingSignal, type NewsArticle, type OptimizationPreview, ty
 import { AnalyticsBlock, DataIssueList, ExposureBars } from "./routeAnalytics";
 import { formatTimestamp, money, number, percent } from "./routeFormatters";
 import { ChartFrame, ChartTypeToggle, EmptyRow, ErrorPanel, Loading, Metric, RangeSelector, Signal, TabBar } from "./routeShared";
-import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar, usePageFeature, usePageFeatureControls } from "../pageFeatureStore";
+import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar } from "../pageFeatureStore";
+import { usePageFeature, usePageFeatureControls } from "../pageFeatureHooks";
 
 type PortfolioTopTab = "aggregate" | "portfolios" | "fundamentals";
 type PortfolioDetailTab = "overview" | "holdings" | "performance" | "risk" | "optimization" | "fundamentals" | "activity";

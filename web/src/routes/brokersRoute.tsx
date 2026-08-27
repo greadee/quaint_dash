@@ -37,7 +37,8 @@ import {
 import { formatActionResult, formatTimestamp, money, number } from "./routeFormatters";
 import { EmptyRow, ErrorPanel, Loading, TabBar } from "./routeShared";
 import type { AppNotification } from "./routeTypes";
-import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar, usePageFeature } from "../pageFeatureStore";
+import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar } from "../pageFeatureStore";
+import { usePageFeature } from "../pageFeatureHooks";
 
 type BrokerTab = "accounts" | "import" | "history" | "settings";
 type AccountFilter = "all" | "unmapped" | "import_ready" | "attention";

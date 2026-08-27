@@ -5,7 +5,8 @@ import { api, type DataReadinessWorkerStatus, type IngestionBackgroundStatus, ty
 import { boundedInt, dateRange, formatActionResult, formatCount, formatDuration, formatTimestamp, percent, signedNumber } from "./routeFormatters";
 import { EmptyRow, ErrorPanel, HelpDisclosure, Loading, Signal } from "./routeShared";
 import type { HelpItem } from "./routeTypes";
-import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar, usePageFeature } from "../pageFeatureStore";
+import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar } from "../pageFeatureStore";
+import { usePageFeature } from "../pageFeatureHooks";
 import { backgroundStatusDetail, dataReadinessStatusDetail, marketFreshnessStatusDetail } from "./operationsViewModels";
 
 type StockRankingFactor = "aggregate" | "share_price_momentum" | "news_sentiment" | "retail_sentiment" | "earnings_momentum" | "institutional_buying";
