@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 import pandas as pd
 import pytest
 
+import dashboard.api.data_readiness_background as data_readiness_background
 from dashboard.api.data_readiness_background import (
     DataReadinessConfig,
     DataReadinessWorker,
@@ -1238,6 +1239,31 @@ def test_yfinance_statement_fallback_uses_annual_and_older_finite_values():
         "freeCashFlow": 123.0,
         "operatingCashFlow": 150.0,
     }
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_yfinance_hydration_closes_thread_caches(monkeypatch, raises):
+    cleanup_calls = []
+
+    def load_summary(_conn, _asset_id):
+        if raises:
+            raise RuntimeError("provider failure")
+        return True
+
+    monkeypatch.setattr(data_readiness_background, "_load_yfinance_summary", load_summary)
+    monkeypatch.setattr(
+        data_readiness_background,
+        "_close_yfinance_thread_caches",
+        lambda: cleanup_calls.append("closed"),
+    )
+
+    if raises:
+        with pytest.raises(RuntimeError, match="provider failure"):
+            data_readiness_background._hydrate_yfinance_summary(None, "AAPL")
+    else:
+        assert data_readiness_background._hydrate_yfinance_summary(None, "AAPL") is True
+
+    assert cleanup_calls == ["closed"]
 
 
 def test_readiness_does_not_treat_company_description_funds_as_a_fund(tmp_path):

@@ -375,6 +375,30 @@ def _schedule_missing_inputs(
 
 def _hydrate_yfinance_summary(conn, asset_id: str) -> bool:
     try:
+        return _load_yfinance_summary(conn, asset_id)
+    finally:
+        _close_yfinance_thread_caches()
+
+
+def _close_yfinance_thread_caches() -> None:
+    try:
+        from yfinance import cache as yf_cache
+    except Exception:
+        return
+
+    for manager_name in ("_TzDBManager", "_CookieDBManager", "_ISINDBManager"):
+        manager = getattr(yf_cache, manager_name, None)
+        close_db = getattr(manager, "close_db", None)
+        if not callable(close_db):
+            continue
+        try:
+            close_db()
+        except Exception:
+            LOGGER.debug("Unable to close yfinance cache manager %s", manager_name, exc_info=True)
+
+
+def _load_yfinance_summary(conn, asset_id: str) -> bool:
+    try:
         import yfinance as yf
 
         ticker = yf.Ticker(yahoo_symbol_for_asset_id(asset_id))
