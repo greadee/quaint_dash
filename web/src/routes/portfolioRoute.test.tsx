@@ -23,23 +23,25 @@ vi.mock("../api", () => ({ api: apiMock }));
 
 vi.mock("recharts", () => {
   const passthrough = ({ children }: { children?: ReactNode }) => <div>{children}</div>;
+  const svgPassthrough = ({ children }: { children?: ReactNode }) => <svg>{children}</svg>;
+  const svgGroupPassthrough = ({ children }: { children?: ReactNode }) => <g>{children}</g>;
   return {
     ResponsiveContainer: passthrough,
-    BarChart: passthrough,
-    Bar: passthrough,
-    LineChart: passthrough,
-    Line: passthrough,
-    PieChart: passthrough,
-    Pie: passthrough,
-    RadarChart: passthrough,
-    Radar: passthrough,
-    PolarGrid: passthrough,
-    PolarAngleAxis: passthrough,
-    PolarRadiusAxis: passthrough,
-    Cell: passthrough,
-    Tooltip: passthrough,
-    XAxis: passthrough,
-    YAxis: passthrough,
+    BarChart: svgPassthrough,
+    Bar: svgGroupPassthrough,
+    LineChart: svgPassthrough,
+    Line: svgGroupPassthrough,
+    PieChart: svgPassthrough,
+    Pie: svgGroupPassthrough,
+    RadarChart: svgPassthrough,
+    Radar: svgGroupPassthrough,
+    PolarGrid: svgGroupPassthrough,
+    PolarAngleAxis: svgGroupPassthrough,
+    PolarRadiusAxis: svgGroupPassthrough,
+    Cell: svgGroupPassthrough,
+    Tooltip: svgGroupPassthrough,
+    XAxis: svgGroupPassthrough,
+    YAxis: svgGroupPassthrough,
   };
 });
 
