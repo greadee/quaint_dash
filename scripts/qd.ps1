@@ -30,6 +30,8 @@ $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $WebRoot = Join-Path $Root "web"
 $VenvPython = Join-Path $Root ".venv\Scripts\python.exe"
 $Python = if (Test-Path $VenvPython) { $VenvPython } else { "python" }
+$LockFile = Join-Path $Root "requirements.lock"
+$PipVersion = "26.2.1"
 
 function Invoke-InRoot {
     param([scriptblock] $Block)
@@ -129,10 +131,17 @@ switch ($Command) {
     }
     "setup" {
         Invoke-Step "install Python dev dependencies" {
-            Invoke-InRoot { Invoke-Native $Python @("-m", "pip", "install", "-e", ".[dev]") }
+            Invoke-InRoot {
+                Invoke-Native $Python @("-m", "pip", "install", "--upgrade", "pip==$PipVersion")
+                Invoke-Native $Python @("-m", "pip", "install", "--require-hashes", "-r", $LockFile)
+                Invoke-Native $Python @(
+                    "-m", "pip", "install", "--no-build-isolation", "--no-deps", "-e", "."
+                )
+                Invoke-Native $Python @("-m", "pip", "check")
+            }
         }
         Invoke-Step "install web dependencies" {
-            Invoke-InWeb { Invoke-Native "npm.cmd" @("install") }
+            Invoke-InWeb { Invoke-Native "npm.cmd" @("ci") }
         }
     }
     "api" {

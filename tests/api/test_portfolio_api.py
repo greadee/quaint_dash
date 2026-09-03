@@ -32,8 +32,6 @@ def test_portfolio_management_endpoints_are_backend_driven_and_deterministic(tmp
     db_path = tmp_path / "portfolio_management.db"
     app = create_app(db_path)
     db = DB(db_path)
-    # DuckDB 1.5.x can intermittently assert inside its parallel window executor.
-    db.conn.execute("SET threads = 1")
     db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name, base_ccy) VALUES (1, 'Core', 'USD')")
     db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
     db.conn.execute(

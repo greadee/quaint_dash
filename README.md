@@ -112,10 +112,11 @@ For a manual setup:
 
 ```cmd
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m pip install --upgrade pip==26.2.1
+.\.venv\Scripts\python.exe -m pip install --require-hashes -r requirements.lock
+.\.venv\Scripts\python.exe -m pip install --no-build-isolation --no-deps -e .
 cd web
-npm.cmd install
+npm.cmd ci
 ```
 
 Copy `.env.example` to `.env` only when provider or broker integrations are needed. Local databases,

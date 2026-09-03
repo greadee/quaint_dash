@@ -19,16 +19,20 @@ readiness, broker, benchmark, or holdings metrics.
 scripts\qd.cmd setup
 ```
 
-This installs Python dev dependencies from `pyproject.toml` and Node dependencies from
-`web/package.json`. If you need to do it manually:
+This installs the exact Python dependency set from `requirements.lock` and the exact Node
+dependency set from `web/package-lock.json`. If you need to do it manually:
 
 ```cmd
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m pip install --upgrade pip==26.2.1
+.\.venv\Scripts\python.exe -m pip install --require-hashes -r requirements.lock
+.\.venv\Scripts\python.exe -m pip install --no-build-isolation --no-deps -e .
 cd web
-npm.cmd install
+npm.cmd ci
 ```
+
+`pyproject.toml` remains the dependency-policy source. Regenerate `requirements.lock` only after
+an intentional dependency change, using the pinned command recorded in the lock-file header.
 
 ## Environment setup
 

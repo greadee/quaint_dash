@@ -56,7 +56,10 @@ class DB:
 def connect_database(path: str | Path) -> duckdb.DuckDBPyConnection:
     """Open a DuckDB connection without racing another in-process open call."""
     with _CONNECT_LOCK:
-        return duckdb.connect(str(path))
+        connection = duckdb.connect(str(path))
+        # DuckDB 1.5.x can assert in its parallel window executor for dashboard queries.
+        connection.execute("SET threads = 1")
+        return connection
 
 
 def init_db(db: DB):

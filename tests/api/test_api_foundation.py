@@ -8,6 +8,14 @@ from dashboard.api.app import API_VERSION, create_app, _run_startup_broker_sync_
 from dashboard.db.db_conn import connect_database
 
 
+def test_database_connections_use_stable_single_thread_execution(tmp_path):
+    conn = connect_database(tmp_path / "api.db")
+    try:
+        assert conn.execute("SELECT current_setting('threads')").fetchone() == (1,)
+    finally:
+        conn.close()
+
+
 def test_health_reports_api_and_database_status(tmp_path):
     app = create_app(tmp_path / "api.db")
 

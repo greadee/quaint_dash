@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.25"]
+requires = ["hatchling==1.32.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -15,7 +15,7 @@ authors = [
 ]
 
 dependencies = [
-  "duckdb>=1.0.0",
+  "duckdb==1.5.5",
   "fastapi>=0.115.0",
   "python-dotenv",
   "yfinance",
@@ -29,6 +29,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "editables==0.5",
+  "hatchling==1.32.0",
   "pytest>=8.0.0",
   "pytest-cov>=5.0.0",
   "httpx2>=2.0.0",

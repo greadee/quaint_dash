@@ -23,7 +23,9 @@ Quaint Dash is a Python backend and CLI with a Vite/React browser client:
 
 - Python and DuckDB own calculations, persistence, provenance, and readiness state.
 - React owns navigation, interaction, formatting, and visualization of API payloads.
-- Request-scoped DuckDB connections and an API process lock serialize browser writes.
+- Request-scoped DuckDB connections and an API process lock serialize browser writes. The shared
+  connection factory uses one DuckDB execution thread to avoid an upstream parallel window
+  executor assertion while preserving request-level connection isolation.
 - Provider work is bounded by explicit jobs, rate limits, call budgets, and safe-off workers.
 - Broker integrations are read-only; imports require an explicit account-to-portfolio mapping.
 - The deterministic rules layer is separate from any future LLM explanation layer. No LLM can

@@ -40,7 +40,9 @@ scripts\qd.cmd smoke
 Install the Python environment and start the API:
 
 ```powershell
-python -m pip install -e ".[dev]"
+python -m pip install --upgrade pip==26.2.1
+python -m pip install --require-hashes -r requirements.lock
+python -m pip install --no-build-isolation --no-deps -e .
 dashboard-web
 ```
 
