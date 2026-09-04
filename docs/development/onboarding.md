@@ -66,6 +66,18 @@ Two-terminal launch helper:
 scripts\qd.cmd launch
 ```
 
+One-click Windows launcher:
+
+```cmd
+scripts\qd.cmd install-desktop
+```
+
+The install command creates a **Quaint Dash** shortcut on the current user's desktop. Opening it
+builds `web/dist` when necessary, starts or reuses the local API, waits until the health endpoint is
+ready, and opens `http://127.0.0.1:8000`. The API serves the built browser application directly, so
+the Vite development server is not needed. Restore the minimized service window and press `Ctrl+C`
+to stop the application cleanly.
+
 The API binds to `http://127.0.0.1:8000`; API docs are at
 `http://127.0.0.1:8000/api/docs`. Vite binds to `http://127.0.0.1:5173`.
 

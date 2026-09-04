@@ -108,6 +108,17 @@ scripts\qd.cmd setup
 scripts\qd.cmd launch
 ```
 
+For a one-click local application after setup, install the Windows desktop shortcut once:
+
+```cmd
+scripts\qd.cmd install-desktop
+```
+
+Double-click **Quaint Dash** on the desktop after that. The shortcut builds the browser assets when
+they are missing, starts or reuses the local service at `http://127.0.0.1:8000`, waits for its
+health check, and opens the dashboard. The service runs in a minimized PowerShell window; restore
+that window and press `Ctrl+C` for a clean shutdown.
+
 For a manual setup:
 
 ```cmd
