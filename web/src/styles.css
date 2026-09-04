@@ -1050,6 +1050,64 @@ header {
   outline: 3px solid #78a88e;
   outline-offset: 2px;
 }
+.create-portfolio-panel {
+  margin-bottom: 18px;
+  padding: 20px 22px;
+  display: grid;
+  gap: 18px;
+}
+.create-portfolio-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 24px;
+}
+.create-portfolio-heading h2 {
+  margin: 4px 0 0;
+  font-size: 20px;
+}
+.create-portfolio-heading > p {
+  max-width: 520px;
+  margin: 0;
+  color: var(--dash-text-soft, #68736f);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.create-portfolio-form {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(130px, 180px) auto;
+  gap: 12px;
+  align-items: end;
+}
+.create-portfolio-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--dash-text-soft, #68736f);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .7px;
+}
+.create-portfolio-form input {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.create-portfolio-actions {
+  display: flex;
+  gap: 8px;
+}
+.create-portfolio-actions button {
+  min-height: 42px;
+  white-space: nowrap;
+}
+.create-portfolio-error {
+  margin: -4px 0 0;
+  color: #ff8f8f;
+  font-size: 13px;
+}
 .portfolio-layout-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1430,7 +1488,12 @@ header {
 }
 @media (max-width: 900px) { .app-shell { display: block; }.sidebar { transform: translateX(-100%); transition: transform .2s; }.sidebar-open { transform: translateX(0); }.mobile-close { display: block; position: absolute; right: 12px; top: 22px; color: white; background: transparent; border: 0; }.mobile-menu { display: flex; margin-right: 14px; padding: 7px; }.metric-grid { grid-template-columns: repeat(2,1fr); }.page { padding: 25px 18px 50px; } header { padding: 0 18px; }.detail-grid, .account-grid, .insight-grid, .broker-grid, .setup-steps, .quick-connect, .advanced-grid, .update-grid, .overview-focus-grid, .tranche-grid, .allocation-pie-layout, .compare-grid, .compare-control form, .compare-control-row, .analytics-detail-grid, .model-grid, .data-health-grid, .operations-grid, .background-status-grid, .benchmark-layout, .benchmark-filters, .benchmark-summary-grid, .benchmark-data-grid, .benchmark-data-grid.wide, .benchmark-picker, .ticker-picker, .benchmark-associations, .settings-grid, .signal-control-bar, .signal-priority-grid, .signal-evidence-grid, .signal-detail-grid, .benchmarks-control-card, .benchmark-snapshot-grid, .benchmark-two-column, .benchmark-detail-grid { grid-template-columns: 1fr; }.factor-tabs { justify-content: flex-start; }.benchmark-list-panel { border-right: 0; border-bottom: 1px solid #e0e3dd; }.benchmark-table-wrap { display: none; }.benchmark-mobile-list { display: grid; }.benchmark-comparison-chart { height: 320px; padding-left: 8px; padding-right: 8px; }.benchmark-risk-panel .benchmark-detail-metrics { grid-template-columns: 1fr; }.benchmark-status-list p, .benchmark-ranking a { grid-template-columns: 1fr; gap: 4px; }.benchmarks-admin-actions { justify-content: flex-start; }.compare-workspace-toolbar { position: static; }.compare-workspace-toolbar form { display: grid; }.compare-chart { height: 320px; padding-left: 8px; padding-right: 8px; }.signal-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }.holding-signal-row { grid-template-columns: 34px 1fr auto; align-items: start; }.signal-meter, .signal-facts, .signal-components { grid-column: 2 / -1; }.signal-facts { justify-content: start; text-align: left; }.signal-summary-strip { grid-template-columns: repeat(2, minmax(0,1fr)); }.mobile-filter-button { display: inline-flex; }.signal-filter-panel { position: fixed; inset: auto 0 0; max-height: 82vh; overflow-y: auto; z-index: 45; grid-template-columns: 1fr; padding: 16px; background: var(--mono-50); border: 1px solid var(--mono-200); border-radius: 12px 12px 0 0; box-shadow: 0 -18px 42px rgba(0,0,0,.18); transform: translateY(105%); transition: transform .2s; }.signal-filter-panel.open { transform: translateY(0); }.signal-filter-heading { display: flex; justify-content: space-between; align-items: center; }.signal-table-wrap { display: none; }.signal-mobile-list { display: grid; }.signal-priority-item { grid-template-columns: 1fr; }.signal-evidence-panel { padding: 14px; }.signal-detail-actions a, .signal-detail-actions button, .signal-mobile-card button, .benchmark-mobile-card button, .benchmark-mobile-card a { min-height: 44px; justify-content: center; } }
 @media (max-width: 700px) { .readiness-row { grid-template-columns: 1fr; align-items: start; }.readiness-row .pill { justify-self: start; } }
-@media (max-width: 900px) { .portfolio-layout-grid { grid-template-columns: 1fr; } }
+@media (max-width: 900px) {
+  .portfolio-layout-grid,
+  .create-portfolio-form { grid-template-columns: 1fr; }
+  .create-portfolio-heading { flex-direction: column; gap: 8px; }
+  .create-portfolio-actions { justify-content: flex-end; }
+}
 @media (max-width: 900px) {
   .broker-hero,
   .broker-section-heading,

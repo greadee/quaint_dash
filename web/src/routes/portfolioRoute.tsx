@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useId, useState, type CSSProperties } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { Activity, ArrowUpRight, BarChart3, CircleDollarSign, ShieldCheck, WalletCards } from "lucide-react";
+import { useCallback, useEffect, useId, useState, type CSSProperties, type FormEvent } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Activity, ArrowUpRight, BarChart3, CircleDollarSign, Plus, ShieldCheck, WalletCards, X } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { Bar, BarChart, Cell, Line, LineChart, Pie, PieChart, PolarAngleAxis, PolarGrid, PolarRadiusAxis, Radar, RadarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, type HoldingSignal, type NewsArticle, type OptimizationPreview, type Portfolio, type PortfolioFundamentals, type PortfolioMetricInsight, type PortfolioPerformance, type PortfolioRisk, type Position } from "../api";
@@ -50,6 +50,10 @@ const piePalette = [
 const MARKET_REFRESH_REFETCH_MS = 60_000;
 export function PortfolioWorkspacePage() {
   const [params, setParams] = useSearchParams();
+  const queryClient = useQueryClient();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [portfolioName, setPortfolioName] = useState("");
+  const [baseCurrency, setBaseCurrency] = useState("CAD");
   const selected = (params.get("tab") as PortfolioTopTab | null) ?? "aggregate";
   const gainView = ((params.get("gain") as GainView | null) ?? "total") === "unrealized" ? "unrealized" : "total";
   const portfolios = useQuery({ queryKey: ["portfolios"], queryFn: api.portfolios, refetchInterval: MARKET_REFRESH_REFETCH_MS });
@@ -62,13 +66,59 @@ export function PortfolioWorkspacePage() {
   const fundamentals = useQuery({ queryKey: ["portfolio-fundamentals", firstPortfolioId], queryFn: () => api.portfolioFundamentals(firstPortfolioId!), enabled: resolvedSelected === "fundamentals" && Boolean(firstPortfolioId) && features.isEnabled("portfolio.workspace.fundamentals") });
   const setTab = (tab: PortfolioTopTab) => setParams((current) => { const next = new URLSearchParams(current); next.set("tab", tab); return next; });
   const setGainView = (value: GainView) => setParams((current) => { const next = new URLSearchParams(current); next.set("gain", value); return next; });
+  const createPortfolio = useMutation({
+    mutationFn: () => api.createPortfolio(portfolioName.trim(), baseCurrency),
+    onSuccess: async () => {
+      setPortfolioName("");
+      setBaseCurrency("CAD");
+      setCreateOpen(false);
+      setTab("portfolios");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["portfolios"] }),
+        queryClient.invalidateQueries({ queryKey: ["portfolio-aggregate"] }),
+        queryClient.invalidateQueries({ queryKey: ["positions", "all"] }),
+      ]);
+    },
+  });
+  const submitPortfolio = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!portfolioName.trim() || baseCurrency.length !== 3 || createPortfolio.isPending) return;
+    createPortfolio.mutate();
+  };
+  const closeCreateForm = () => {
+    setCreateOpen(false);
+    setPortfolioName("");
+    setBaseCurrency("CAD");
+    createPortfolio.reset();
+  };
   if (portfolios.isLoading) return <Loading />;
   if (portfolios.error) return <ErrorPanel error={portfolios.error} />;
   return <div className="page">
     <div className="page-title">
       <div><p className="eyebrow">Portfolio management</p><h1>Portfolios</h1><p className="page-subtitle">Backend-sourced portfolio totals, holdings, fundamentals, risk, and optimization previews.</p></div>
-      <div className="actions"><PageLayoutButton pageId="portfolio.workspace" /><PageFeatureMenu pageId="portfolio.workspace" /></div>
+      <div className="actions">
+        <button className="primary" aria-expanded={createOpen} aria-controls="create-portfolio-panel" onClick={() => { createPortfolio.reset(); setCreateOpen((open) => !open); }}>
+          {createOpen ? <><X size={17} />Close</> : <><Plus size={17} />New portfolio</>}
+        </button>
+        <PageLayoutButton pageId="portfolio.workspace" />
+        <PageFeatureMenu pageId="portfolio.workspace" />
+      </div>
     </div>
+    {createOpen ? <section className="card create-portfolio-panel" id="create-portfolio-panel" aria-labelledby="create-portfolio-title">
+      <div className="create-portfolio-heading">
+        <div><p className="eyebrow">Standalone portfolio</p><h2 id="create-portfolio-title">Create a portfolio</h2></div>
+        <p>Create an independent portfolio now. You can connect a brokerage account later if you choose.</p>
+      </div>
+      <form className="create-portfolio-form" onSubmit={submitPortfolio} aria-busy={createPortfolio.isPending}>
+        <label>Portfolio name<input autoFocus required maxLength={100} value={portfolioName} onChange={(event) => setPortfolioName(event.target.value)} placeholder="e.g. Retirement" /></label>
+        <label>Base currency<input required minLength={3} maxLength={3} pattern="[A-Za-z]{3}" title="Use a three-letter currency code" value={baseCurrency} onChange={(event) => setBaseCurrency(event.target.value.replace(/[^a-z]/gi, "").toUpperCase())} /></label>
+        <div className="create-portfolio-actions">
+          <button type="button" onClick={closeCreateForm} disabled={createPortfolio.isPending}>Cancel</button>
+          <button type="submit" className="primary" disabled={!portfolioName.trim() || baseCurrency.length !== 3 || createPortfolio.isPending}>{createPortfolio.isPending ? "Creating..." : "Create portfolio"}</button>
+        </div>
+      </form>
+      {createPortfolio.error instanceof Error ? <p className="create-portfolio-error" role="alert">{createPortfolio.error.message}</p> : null}
+    </section> : null}
     <PageLayoutToolbar pageId="portfolio.workspace" />
     <TabBar tabs={visibleTopTabs} selected={resolvedSelected} onSelect={setTab} label="Portfolio workspace tabs" />
     <GainViewToggle value={gainView} onChange={setGainView} />

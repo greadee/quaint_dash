@@ -17,6 +17,7 @@ const apiMock = vi.hoisted(() => ({
   portfolioRisk: vi.fn(),
   portfolioFundamentals: vi.fn(),
   portfolioNews: vi.fn(),
+  createPortfolio: vi.fn(),
 }));
 
 vi.mock("../api", () => ({ api: apiMock }));
@@ -148,6 +149,33 @@ describe("PortfolioWorkspacePage", () => {
     expect(screen.getByText("NVIDIA")).toBeInTheDocument();
     expect(screen.getByText("Royal Bank")).toBeInTheDocument();
     expect(screen.getAllByText("25.0% return").length).toBeGreaterThan(0);
+  });
+
+  it("creates a standalone portfolio from the portfolio workspace", async () => {
+    const user = userEvent.setup();
+    const created = {
+      portfolio_id: 7,
+      name: "Retirement",
+      base_ccy: "USD",
+      market_value: 0,
+      book_cost: 0,
+      unrealized_gain: null,
+      position_count: 0,
+    };
+    apiMock.portfolios.mockResolvedValueOnce([]).mockResolvedValue([created]);
+    apiMock.createPortfolio.mockResolvedValue(created);
+
+    renderPortfolioWorkspace();
+
+    await user.click(await screen.findByRole("button", { name: "New portfolio" }));
+    await user.type(screen.getByRole("textbox", { name: "Portfolio name" }), "Retirement");
+    await user.clear(screen.getByRole("textbox", { name: "Base currency" }));
+    await user.type(screen.getByRole("textbox", { name: "Base currency" }), "usd");
+    await user.click(screen.getByRole("button", { name: "Create portfolio" }));
+
+    await waitFor(() => expect(apiMock.createPortfolio).toHaveBeenCalledWith("Retirement", "USD"));
+    expect(await screen.findByRole("link", { name: "Open Retirement portfolio" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Create a portfolio" })).not.toBeInTheDocument();
   });
 
   it("renders exposure allocation controls on an individual portfolio overview", async () => {
