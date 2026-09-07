@@ -102,6 +102,7 @@ Status vocabulary: Proposed, Accepted, Implemented, Superseded, Deprecated, Reje
 | ADR PH11 | Operations status application boundary | Accepted | Current |  | `src/dashboard/application/operations.py`, Operations API tests |
 | ADR PH12 | Operations worker command boundary | Accepted | Current |  | `OperationsWorkerCommands`, Operations API tests |
 | ADR PH13 | Deterministic candidate engine boundary | Implemented | Current deterministic backend boundary |  | `src/dashboard/rules_and_data`, `docs/features/candidate-engine.md` |
+| ADR PH14 | Evidence display safety vocabulary | Accepted | Current baseline for audit reconciliation |  | `src/dashboard/api/evidence_contract.py`, `tests/api/test_evidence_contract_baseline.py` |
 
 ## Supersession notes
 
@@ -115,6 +116,9 @@ Status vocabulary: Proposed, Accepted, Implemented, Superseded, Deprecated, Reje
   commands while preserving existing route behavior.
 - ADR PH13 governs the implemented deterministic candidate-engine ownership, vocabulary,
   point-in-time, identity, precision, hashing, persistence, and orchestration contracts.
+- ADR PH14 establishes display-only evidence vocabulary for audit remediation. It intentionally
+  leaves current financial calculations, persistence entities, and public API response models
+  unchanged until a compatible read-model migration is implemented.
 - ADR-041 is partially superseded in practice because yfinance now does more than gap repair:
   current market freshness and benchmark proxy fallback use it.
 - ADR-073 remains true for explicit broker sync scheduling, but the API periodic background worker
