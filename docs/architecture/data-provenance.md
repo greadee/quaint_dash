@@ -47,3 +47,15 @@ DataProvenance
 - Mobile and desktop clients should receive compact structured freshness, not
   only long Operations text.
 
+## Shared Display Policy
+
+ADR PH15 implements the first versioned presentation contract in
+`dashboard.api.evidence_contract`. It covers prices, news, financial statements, benchmarks, and
+monthly signals. The contract exposes source kind/name/health, observation and retrieval time,
+freshness, coverage, missing inputs, confidence, effectiveness sample size, action eligibility,
+and stable reason codes.
+
+This read model is deliberately separate from `DataProvenance` storage/source records. Routes
+derive it from facts they already have and attach it additively as they migrate. The policy cannot
+run ingestion, change a calculation, update a record, or make a provider request. See
+[ADR PH15](decisions/adr_ph15_evidence_freshness_policy.md) for thresholds and precedence.

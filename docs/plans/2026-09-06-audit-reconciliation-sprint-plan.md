@@ -22,7 +22,8 @@ The work is ordered to restore truthful product behavior first, repair underlyin
 - S0 baseline is committed as `5ad9210`.
 - S1's bounded implementation and isolated verification are complete: database ownership/lifecycle safeguards, phase-specific safe worker diagnostics, full queue counts/age/failure groups, and Operations presentation. See the [S1 verification record](../audits/2026-09-08-s1-runtime-verification.md) and [recovery runbook](../operations/runtime-recovery.md).
 - S1 acceptance exception: the historical `s.snapshot_date` error (INF-01) does not reproduce against the current production schema and DuckDB 1.5.5. No SQL change was justified. Regression coverage and persistent-within-session phase diagnostics are delivered, but the historical root cause and live operational closure remain unverified. Do not mark that incident fixed merely because these tests pass.
-- S2 is the next implementation slice. S6 still owns cross-page health reconciliation and the broader Operations experience; S9 retains the release/live-recovery gate. No production jobs were drained or workers enabled during S1 verification.
+- S6 still owns cross-page health reconciliation and the broader Operations experience; S9 retains the release/live-recovery gate. No production jobs were drained or workers enabled during S1 verification.
+- S2's shared `evidence-display.v1` policy is implemented locally as of 2026-09-08. It defines five type-specific freshness windows, source/coverage precedence, confidence-independent eligibility, safe compatibility adapters, and matching Python/TypeScript response shapes. Page-level adoption is intentionally deferred to S3–S7; no existing route response changed in S2. See the [S2 verification record](../audits/2026-09-08-s2-evidence-policy-verification.md).
 
 ### Recommended models
 

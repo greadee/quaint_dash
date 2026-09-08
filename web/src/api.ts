@@ -1166,6 +1166,22 @@ export type IngestionJob = {
   created_at: string;
   updated_at: string;
 };
+export type EvidenceDisplay = {
+  schema_version: "evidence-display.v1";
+  evidence_type: "price" | "news" | "financial_statement" | "benchmark" | "monthly_signal";
+  source_kind: "real" | "proxy" | "fixture" | "inferred" | "unknown";
+  source_name: string | null;
+  source_health: "healthy" | "degraded" | "blocked" | "unknown";
+  observed_at: string | null;
+  retrieved_at: string | null;
+  freshness_state: "current" | "warning" | "stale" | "blocked" | "unknown";
+  coverage_state: "complete" | "partial" | "missing" | "unsupported" | "unknown";
+  missing_inputs: string[];
+  confidence: number | null;
+  effectiveness_sample_size: number | null;
+  action_eligibility: "eligible" | "caution" | "blocked";
+  reason_codes: string[];
+};
 export type WorkerFailure = {
   worker_name: string;
   phase: string;

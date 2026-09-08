@@ -1,8 +1,7 @@
 """Public API request and response models."""
 
 from datetime import date, datetime
-from typing import Generic, TypeVar
-from typing import Any
+from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -23,6 +22,27 @@ class ErrorBody(BaseModel):
 
 class ErrorResponse(BaseModel):
     error: ErrorBody
+
+
+class EvidenceDisplayResponse(BaseModel):
+    """Versioned, display-only metadata for an existing response value."""
+
+    schema_version: Literal["evidence-display.v1"] = "evidence-display.v1"
+    evidence_type: Literal[
+        "price", "news", "financial_statement", "benchmark", "monthly_signal"
+    ]
+    source_kind: Literal["real", "proxy", "fixture", "inferred", "unknown"]
+    source_name: str | None = Field(default=None, max_length=120)
+    source_health: Literal["healthy", "degraded", "blocked", "unknown"]
+    observed_at: datetime | None = None
+    retrieved_at: datetime | None = None
+    freshness_state: Literal["current", "warning", "stale", "blocked", "unknown"]
+    coverage_state: Literal["complete", "partial", "missing", "unsupported", "unknown"]
+    missing_inputs: list[str] = Field(default_factory=list)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    effectiveness_sample_size: int | None = Field(default=None, ge=0)
+    action_eligibility: Literal["eligible", "caution", "blocked"]
+    reason_codes: list[str] = Field(default_factory=list)
 
 
 class Page(BaseModel, Generic[T]):
