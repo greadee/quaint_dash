@@ -65,6 +65,8 @@ pip-delete-this-directory.txt
 htmlcov/
 coverage/
 web/coverage/
+web/playwright-report/
+web/test-results/
 .vite/
 .tox/
 .nox/
