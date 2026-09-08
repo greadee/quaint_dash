@@ -45,6 +45,8 @@ def test_asset_detail_and_price_history(tmp_path):
     assert detail.status_code == 200
     assert detail.json()["name"] == "Apple Inc."
     assert detail.json()["latest_price"] == 125
+    assert detail.json()["evidence"]["source_kind"] == "fixture"
+    assert detail.json()["evidence"]["action_eligibility"] == "blocked"
     assert prices.json() == [{"date": "2026-01-03", "close": 125.0}]
 
 
@@ -95,6 +97,9 @@ def test_asset_and_portfolio_analytics_preserve_phase3_contract(tmp_path):
     assert asset.status_code == 200
     assert asset.json()["schema_version"] == "phase3.analytics.v1"
     assert asset.json()["report_type"] == "asset"
+    assert asset.json()["price_evidence"]["evidence_type"] == "price"
+    assert asset.json()["fundamental_evidence"]["evidence_type"] == "financial_statement"
+    assert asset.json()["fundamental_evidence"]["action_eligibility"] == "blocked"
     assert portfolio.status_code == 200
     assert portfolio.json()["schema_version"] == "phase3.analytics.v1"
     assert portfolio.json()["report_type"] == "portfolio"
@@ -147,6 +152,8 @@ def test_asset_analytics_exposes_projection_and_valuation_models(tmp_path):
 
     assert response.status_code == 200
     report = response.json()["report"]
+    assert response.json()["price_evidence"]["action_eligibility"] == "blocked"
+    assert response.json()["fundamental_evidence"]["action_eligibility"] == "blocked"
     assert report["discounted_cash_flow"]["intrinsic_value_per_share"] is not None
     assert report["dividend_discount"]["intrinsic_value_per_share"] is not None
     assert report["valuation_depth"]["dcf_scenarios"][1]["scenario_name"] == "base"

@@ -70,4 +70,38 @@ describe("AssetDetailPage", () => {
     expect(apiMock.prices).toHaveBeenCalledWith("NVDA", { range: "1Y" });
     expect(screen.getByRole("link", { name: /Compare/i })).toHaveAttribute("href", "/compare?symbols=NVDA");
   });
+
+  it("marks stale price and incomplete valuation outputs as audit-only", async () => {
+    apiMock.asset.mockResolvedValue({
+      asset_id: "NVDA",
+      symbol: "NVDA",
+      name: "NVIDIA",
+      sector: "Technology",
+      latest_price: 120,
+      currency: "USD",
+      evidence: {
+        evidence_type: "price", freshness_state: "stale", action_eligibility: "blocked",
+      },
+    });
+    apiMock.prices.mockResolvedValue([]);
+    apiMock.assetAnalytics.mockResolvedValue({
+      price_evidence: { evidence_type: "price", freshness_state: "stale", action_eligibility: "blocked" },
+      fundamental_evidence: { evidence_type: "financial_statement", freshness_state: "unknown", action_eligibility: "blocked" },
+      report: {
+        forecast: { blended_expected_cagr: 0.12, simulation: { expected_value: 175, expected_cagr: 0.08 } },
+        discounted_cash_flow: { intrinsic_value_per_share: 140, margin_of_safety: 0.14, inputs_used: {} },
+        dividend_discount: { intrinsic_value_per_share: null, inputs_used: {} },
+        valuation_depth: {}, risk: {}, relative: {},
+      },
+      ai_context: { anomalies: [] },
+    });
+    apiMock.assetActivity.mockResolvedValue({ items: [], total: 0, limit: 10, offset: 0 });
+    apiMock.assetNews.mockResolvedValue({ items: [], total: 0, limit: 10, offset: 0, sort: "recency", generated_at: "2026-06-30T14:40:00Z" });
+
+    renderAsset("/assets/NVDA?tab=fundamentals");
+
+    expect(await screen.findByText(/Missing, stale, or non-production financial evidence blocks decision use/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Audit only/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Not decision eligible/i).length).toBeGreaterThan(0);
+  });
 });

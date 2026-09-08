@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bell, Bookmark, BookmarkCheck, ExternalLink, RefreshCw, Search } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, type NewsArticle, type NewsFeed } from "../api";
-import { EmptyRow, ErrorPanel, Loading, Pager, Signal, TabBar } from "./routeShared";
+import { EmptyRow, ErrorPanel, EvidenceBadge, Loading, Pager, Signal, TabBar } from "./routeShared";
 import { formatTimestamp, percent } from "./routeFormatters";
 import { categoryMatchesPreset, type NewsPreset } from "./newsFilters";
 
@@ -165,7 +165,7 @@ export function NewsRow({ article, selected, onSelect, onSave, density = "compac
   const primaryAsset = article.assets[0];
   return <article className={`news-row ${selected ? "active" : ""} ${article.is_read ? "read" : ""}`} onClick={onSelect}>
     <button className="news-row-main" type="button">
-      <div className="news-row-headline"><strong>{article.headline}</strong>{article.is_breaking ? <span className="pill danger">Breaking</span> : null}{article.is_press_release ? <span className="pill">PR</span> : null}</div>
+      <div className="news-row-headline"><strong>{article.headline}</strong>{article.is_breaking ? <span className="pill danger">Breaking</span> : null}{article.is_press_release ? <span className="pill">PR</span> : null}<EvidenceBadge evidence={article.evidence} compact /></div>
       {density === "comfortable" && article.summary ? <p>{article.summary}</p> : null}
       <div className="news-row-meta"><span>{article.source_name}</span><span>{formatTimestamp(article.published_at)}</span><span>{primaryCategory}</span>{primaryAsset ? <span>{primaryAsset.symbol}</span> : null}<span>{percent(article.importance_score)}</span></div>
     </button>
@@ -174,9 +174,12 @@ export function NewsRow({ article, selected, onSelect, onSave, density = "compac
 }
 
 function NewsDetail({ article, onSave }: { article: NewsArticle; onSave: () => void }) {
+  const isSample = article.evidence?.source_kind === "fixture" || article.canonical_url?.includes("example.test");
   return <div className="news-detail">
     <div className="card-heading"><div><p className="eyebrow">{article.provider_name ?? article.provider_code}</p><h2>{article.headline}</h2></div><button className="icon-button" aria-label={article.is_saved ? "Unsave story" : "Save story"} onClick={onSave}>{article.is_saved ? <BookmarkCheck size={16} /> : <Bookmark size={16} />}</button></div>
     <p>{article.summary ?? "No provider summary is available for this story."}</p>
+    <EvidenceBadge evidence={article.evidence} />
+    {isSample ? <p className="compare-warning">Sample or fixture story. It is retained for interface verification and is not decisioning evidence.</p> : null}
     <div className="signal-grid">
       <Signal label="Published" value={formatTimestamp(article.published_at)} />
       <Signal label="Importance" value={percent(article.importance_score)} />
@@ -186,7 +189,7 @@ function NewsDetail({ article, onSave }: { article: NewsArticle; onSave: () => v
     <section><h3>Affected assets</h3>{article.assets.length ? <div className="chip-list">{article.assets.map((asset) => <Link key={asset.asset_id} to={`/asset/${asset.asset_id}`}>{asset.symbol}<span>{asset.match_method.replace(/_/g, " ")} {percent(asset.confidence_score)}</span></Link>)}</div> : <EmptyRow text="No mapped asset was resolved with sufficient confidence." />}</section>
     <section><h3>Categories</h3><div className="chip-list">{article.categories.map((category) => <span key={category.category_code}>{category.category_name}</span>)}</div></section>
     {article.cluster ? <section><h3>Related coverage</h3><p>{article.cluster.article_count} article{article.cluster.article_count === 1 ? "" : "s"} in this story cluster.</p></section> : null}
-    {article.canonical_url ? <a className="button-link" href={article.canonical_url} target="_blank" rel="noreferrer"><ExternalLink size={15} />Original source</a> : null}
+    {article.canonical_url && !isSample ? <a className="button-link" href={article.canonical_url} target="_blank" rel="noreferrer"><ExternalLink size={15} />Original source</a> : null}
   </div>;
 }
 

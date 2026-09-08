@@ -4,7 +4,7 @@ import { Bell, CheckCircle2, Info, Plus, RefreshCw, Save, SlidersHorizontal, X }
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, type SignalDetailResponse, type SignalRow } from "../api";
 import { money, number, percent, signedNumber } from "./routeFormatters";
-import { EmptyRow, ErrorPanel, Loading } from "./routeShared";
+import { EmptyRow, ErrorPanel, EvidenceBadge, Loading } from "./routeShared";
 import type { AppNotification } from "./routeTypes";
 import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar } from "../pageFeatureStore";
 import { usePageFeature } from "../pageFeatureHooks";
@@ -281,7 +281,9 @@ function SignalPrioritySection({ title, items, empty, onOpen }: { title: string;
       <button key={item.signal_id} onClick={() => onOpen(item.signal_id)} className="signal-priority-item">
         <div><strong>{item.ticker}</strong><span>{item.company_name ?? item.exchange ?? "Tracked asset"}</span></div>
         <p>{item.summary}</p>
-        <b>{percent(item.confidence)} confidence</b>
+        <EvidenceBadge evidence={item.evidence} compact />
+        <b>{item.evidence?.action_eligibility === "blocked" ? "Not decision eligible" : `${percent(item.confidence)} confidence`}</b>
+        {item.historical_efficacy.sample_size === 0 ? <span>No historical efficacy sample</span> : null}
         <span>{item.current_portfolio_weight === null || item.current_portfolio_weight === undefined ? "No current holding" : `${percent(item.current_portfolio_weight)} exposure`}</span>
         <span>{timeAgo(item.first_detected_at)}</span>
       </button>
@@ -303,7 +305,7 @@ function SignalFilterPanel({ filters, updateFilter, mobileOpen, onClose }: { fil
     <label>Min priority<select value={filters.min_priority ?? ""} onChange={(event) => updateFilter("min_priority", event.target.value)}><option value="">Any</option><option value="0.5">50%+</option><option value="0.65">65%+</option></select></label>
     <label>Sector<input value={filters.sector ?? ""} onChange={(event) => updateFilter("sector", event.target.value)} /></label>
     <label>Industry<input value={filters.industry ?? ""} onChange={(event) => updateFilter("industry", event.target.value)} /></label>
-    <label>Freshness<select value={filters.freshness ?? ""} onChange={(event) => updateFilter("freshness", event.target.value)}><option value="">Any</option><option value="fresh">Fresh</option><option value="stale">Stale</option></select></label>
+    <label>Legacy age filter<select value={filters.freshness ?? ""} onChange={(event) => updateFilter("freshness", event.target.value)}><option value="">Any</option><option value="fresh">Recent inputs (up to 31d)</option><option value="stale">Older inputs (31d+)</option></select></label>
     <label>Completeness<select value={filters.completeness ?? ""} onChange={(event) => updateFilter("completeness", event.target.value)}><option value="">Any</option><option value="complete">Complete</option><option value="incomplete">Incomplete</option></select></label>
     <label className="checkbox-label"><input type="checkbox" checked={filters.include_retail_sentiment === "true"} onChange={(event) => updateFilter("include_retail_sentiment", event.target.checked ? "true" : "")} />Include retail add-on</label>
     <label>Sort<select value={filters.sort ?? "priority"} onChange={(event) => updateFilter("sort", event.target.value)}><option value="priority">Portfolio priority</option><option value="triggered">Most recently triggered</option><option value="strength">Strength</option><option value="confidence">Confidence</option><option value="portfolio_weight">Portfolio weight</option><option value="score_change">Recent score change</option><option value="efficacy">Historical efficacy</option><option value="ticker">Ticker</option><option value="market_cap">Market cap</option></select></label>
@@ -323,6 +325,7 @@ function formatActiveFilter(key: string, value: string): string {
   if (key === "include_retail_sentiment") {
     return value === "true" ? "Retail sentiment included" : "Retail sentiment off";
   }
+  if (key === "freshness") return value === "stale" ? "Input age: 31d+" : "Input age: up to 31d";
   return `${labelize(key)}: ${value}`;
 }
 
@@ -333,11 +336,11 @@ function SignalTableRow({ item, expanded, detail, onOpen, onClose, onReview, onA
       <td><button className="link-button signal-name-button" onClick={onOpen}>{item.signal_name}</button><span className="cell-summary">{item.summary}</span></td>
       <td><SignalTone value={item.direction} /></td>
       <td className="numeric">{percent(item.strength)}</td>
-      <td className="numeric">{percent(item.confidence)}</td>
+      <td className="numeric">{item.evidence?.action_eligibility === "blocked" ? "blocked" : percent(item.confidence)}</td>
       <td>{signedNumber(item.raw_observed_value, 1)} vs {item.trigger_threshold ?? "watch"}</td>
       <td>{item.affected_portfolios.length ? `${item.affected_portfolios.length} portfolio(s), ${percent(item.current_portfolio_weight)}` : "No current holding"}</td>
       <td>{timeAgo(item.first_detected_at)}</td>
-      <td>{labelize(item.status)}</td>
+      <td>{item.evidence?.action_eligibility === "blocked" ? <EvidenceBadge evidence={item.evidence} compact /> : labelize(item.status)}</td>
       <td><div className="signal-actions"><Link to={`/signals/${encodeURIComponent(item.signal_id)}`}>Details</Link><button onClick={onOpen}>{expanded ? "Hide" : "Evidence"}</button></div></td>
     </tr>
     {expanded ? <tr className="signal-expanded-row"><td colSpan={10}><SignalEvidencePanel item={detail ?? item} onClose={onClose} onReview={onReview} onAlert={onAlert} onWatchlist={onWatchlist} /></td></tr> : null}
@@ -345,11 +348,13 @@ function SignalTableRow({ item, expanded, detail, onOpen, onClose, onReview, onA
 }
 
 function SignalEvidencePanel({ item, onClose, onReview, onAlert, onWatchlist }: { item: SignalRow | SignalDetailResponse; onClose: () => void; onReview: () => void; onAlert: () => void; onWatchlist: () => void }) {
+  const blocked = item.evidence?.action_eligibility === "blocked";
   return <div className="signal-evidence-panel">
     <div className="signal-evidence-heading">
       <div><strong>{item.ticker}: {item.signal_name}</strong><p>{item.summary}</p></div>
       <button onClick={onClose} aria-label="Close signal evidence"><X size={16}/></button>
     </div>
+    <div className={`status-banner ${blocked ? "danger" : "warning"}`}><EvidenceBadge evidence={item.evidence} /><span>{blocked ? "This signal is retained for audit history, but its source age or coverage blocks decision actions." : "Confidence is secondary to source age, coverage, and historical efficacy."}</span></div>
     <div className="signal-evidence-grid">
       <EvidenceList title="Supporting evidence" items={item.supporting_evidence} />
       <EvidenceList title="Contradicting evidence" items={item.contradicting_evidence} />
@@ -361,9 +366,9 @@ function SignalEvidencePanel({ item, onClose, onReview, onAlert, onWatchlist }: 
       <Link to={`/asset/${item.asset_id}`}>Open ticker</Link>
       <Link to={`/compare?symbols=${item.ticker}`}>Compare asset</Link>
       <Link to="/benchmarks">Benchmarks</Link>
-      <button onClick={onWatchlist}><Plus size={14}/>Watchlist</button>
-      <button onClick={onReview}><CheckCircle2 size={14}/>Mark reviewed</button>
-      <button onClick={onAlert}><Bell size={14}/>Create alert</button>
+      <button onClick={onWatchlist} disabled={blocked} title={blocked ? "Blocked by evidence policy" : undefined}><Plus size={14}/>Watchlist</button>
+      <button onClick={onReview} disabled={blocked} title={blocked ? "Blocked by evidence policy" : undefined}><CheckCircle2 size={14}/>Mark reviewed</button>
+      <button onClick={onAlert} disabled={blocked} title={blocked ? "Blocked by evidence policy" : undefined}><Bell size={14}/>Create alert</button>
     </div>
   </div>;
 }
@@ -406,7 +411,8 @@ function SignalMobileCard({
     <div><strong>{item.ticker}</strong><SignalTone value={item.direction} /></div>
     <h3>{item.signal_name}</h3>
     <p>{item.summary}</p>
-    <dl><div><dt>Confidence</dt><dd>{percent(item.confidence)}</dd></div><div><dt>Priority</dt><dd>{percent(item.portfolio_priority)}</dd></div><div><dt>Age</dt><dd>{timeAgo(item.first_detected_at)}</dd></div></dl>
+    <EvidenceBadge evidence={item.evidence} compact />
+    <dl><div><dt>Confidence</dt><dd>{item.evidence?.action_eligibility === "blocked" ? "secondary" : percent(item.confidence)}</dd></div><div><dt>Priority</dt><dd>{percent(item.portfolio_priority)}</dd></div><div><dt>Age</dt><dd>{timeAgo(item.data_as_of ?? item.first_detected_at)}</dd></div></dl>
     <div className="signal-mobile-actions">
       <Link to={`/signals/${encodeURIComponent(item.signal_id)}`}>Details</Link>
       <button onClick={onOpen}>{expanded ? "Hide evidence" : "Inspect evidence"}</button>
@@ -447,10 +453,11 @@ export function SignalDetailPage({ notify }: { notify: (message: string, tone?: 
   if (detail.isError) return <div className="page"><ErrorPanel error={detail.error} /></div>;
   if (!detail.data) return <div className="page"><EmptyRow text="Signal not found." /></div>;
   const item = detail.data;
+  const blocked = item.evidence?.action_eligibility === "blocked";
   return <div className="page">
     <div className="page-title">
       <div><p className="eyebrow">Signal detail</p><h1>{item.ticker} <small>{item.signal_name}</small></h1><p className="page-subtitle">{item.summary}</p></div>
-      <div className="actions"><Link className="button-link" to={`/signals?signal=${encodeURIComponent(item.signal_id)}`}>Back to explorer</Link><button className="primary" onClick={() => createAlert.mutate()}><Bell size={17}/>Create alert</button></div>
+      <div className="actions"><Link className="button-link" to={`/signals?signal=${encodeURIComponent(item.signal_id)}`}>Back to explorer</Link><button className="primary" disabled={blocked} title={blocked ? "Blocked by evidence policy" : undefined} onClick={() => createAlert.mutate()}><Bell size={17}/>Create alert</button></div>
     </div>
     <section className="card signal-detail-card">
       <SignalEvidencePanel item={item} onClose={() => undefined} onReview={() => notify("Use the explorer row to mark reviewed.")} onAlert={() => createAlert.mutate()} onWatchlist={() => notify("Open the explorer to add watchlist state.")} />

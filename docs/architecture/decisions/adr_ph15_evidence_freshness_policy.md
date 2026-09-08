@@ -19,7 +19,7 @@ retry behavior, or provider selection.
 ## Decision
 
 `dashboard.api.evidence_contract.evaluate_evidence` is the single shared evaluator for the first
-five decision-facing evidence types. It normalizes naive database timestamps as UTC and applies
+six decision-facing evidence types. It normalizes naive database timestamps as UTC and applies
 these elapsed-time display windows:
 
 | Evidence type | Current through | Warning through | Stale after |
@@ -29,6 +29,7 @@ these elapsed-time display windows:
 | Financial statement | 150 days | 240 days | 240 days |
 | Benchmark | 36 hours | 96 hours | 96 hours |
 | Monthly signal | 45 days | 75 days | 75 days |
+| Retail sentiment | 36 hours | 96 hours | 96 hours |
 
 These are initial display thresholds, not ingestion schedules or model inputs. Price and
 benchmark warning windows deliberately tolerate ordinary closed-market weekends without calling
@@ -69,7 +70,7 @@ migration remains in later slices so this policy does not silently alter existin
 
 ## Verification
 
-`tests/api/test_evidence_policy.py` executes exact boundary behavior for all five types, identical
+`tests/api/test_evidence_policy.py` executes exact boundary behavior for all six types, identical
 ages under different policies, UTC normalization, precedence against confidence, missing/future
 timestamps, no-efficacy state, response validation, additive compatibility, and adversarial raw
 payload rejection. The S0 calculation baseline continues to prove that evidence construction does

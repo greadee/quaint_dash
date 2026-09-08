@@ -29,7 +29,7 @@ class EvidenceDisplayResponse(BaseModel):
 
     schema_version: Literal["evidence-display.v1"] = "evidence-display.v1"
     evidence_type: Literal[
-        "price", "news", "financial_statement", "benchmark", "monthly_signal"
+        "price", "news", "financial_statement", "benchmark", "monthly_signal", "retail_sentiment"
     ]
     source_kind: Literal["real", "proxy", "fixture", "inferred", "unknown"]
     source_name: str | None = Field(default=None, max_length=120)
@@ -242,6 +242,7 @@ class PortfolioFundamentalHolding(BaseModel):
     margin_of_safety: float | None = None
     coverage_status: str
     missing_inputs: list[str] = Field(default_factory=list)
+    evidence: EvidenceDisplayResponse | None = None
 
 
 class PortfolioFundamentalsResponse(BaseModel):
@@ -262,6 +263,7 @@ class PortfolioFundamentalsResponse(BaseModel):
     missing_inputs: list[str] = Field(default_factory=list)
     metric_insights: list[PortfolioMetricInsight] = Field(default_factory=list)
     as_of: datetime
+    evidence: EvidenceDisplayResponse | None = None
 
 
 class OptimizationConstraints(BaseModel):
@@ -375,6 +377,7 @@ class AssetDetail(BaseModel):
     shares_outstanding: float | None
     market_beta: float | None
     latest_price: float | None
+    evidence: EvidenceDisplayResponse | None = None
 
 
 class AssetSearchResult(BaseModel):
@@ -493,6 +496,7 @@ class NewsArticleResponse(BaseModel):
     assets: list[NewsArticleAssetResponse] = Field(default_factory=list)
     categories: list[NewsArticleCategoryResponse] = Field(default_factory=list)
     cluster: NewsStoryClusterSummary | None = None
+    evidence: EvidenceDisplayResponse | None = None
 
 
 class NewsFeedResponse(BaseModel):
@@ -506,6 +510,7 @@ class NewsFeedResponse(BaseModel):
     provider_status: str = "unknown"
     provider_message: str | None = None
     is_cached: bool = True
+    evidence: EvidenceDisplayResponse | None = None
 
 
 class NewsRefreshResponse(BaseModel):
@@ -542,12 +547,16 @@ class NewsProviderHealthResponse(BaseModel):
 
 class NewsAlertRuleRequest(BaseModel):
     rule_name: str = Field(min_length=1, max_length=120)
-    target_scope: str = Field(default="custom", pattern="^(custom|asset|portfolio|watchlist|all_holdings)$")
+    target_scope: str = Field(
+        default="custom", pattern="^(custom|asset|portfolio|watchlist|all_holdings)$"
+    )
     keyword_query: str | None = Field(default=None, max_length=160)
     min_importance: float | None = Field(default=None, ge=0, le=1)
     sentiment_threshold: float | None = Field(default=None, ge=-1, le=1)
     breaking_only: bool = False
-    delivery_channel: str = Field(default="in_app", pattern="^(in_app|email|push|sms|slack|discord|webhook)$")
+    delivery_channel: str = Field(
+        default="in_app", pattern="^(in_app|email|push|sms|slack|discord|webhook)$"
+    )
     asset_ids: list[str] = Field(default_factory=list, max_length=50)
     portfolio_ids: list[int] = Field(default_factory=list, max_length=25)
 
@@ -688,6 +697,7 @@ class RetailSentimentOverviewItem(BaseModel):
     unusual_volume_flag: bool = False
     source_count: int = 0
     latest_posts: list[RetailSentimentOverviewPost] = Field(default_factory=list)
+    evidence: EvidenceDisplayResponse | None = None
 
 
 class RetailSentimentOverviewResponse(BaseModel):
@@ -696,6 +706,7 @@ class RetailSentimentOverviewResponse(BaseModel):
     summary: dict[str, int]
     holdings: list[RetailSentimentOverviewItem]
     popular: list[RetailSentimentOverviewItem]
+    evidence: EvidenceDisplayResponse | None = None
 
 
 class StockRankingSnapshotRefreshRequest(BaseModel):
@@ -814,6 +825,7 @@ class SignalRow(BaseModel):
     related_signal_ids: list[str] = Field(default_factory=list)
     reviewed: bool = False
     muted: bool = False
+    evidence: EvidenceDisplayResponse | None = None
 
 
 class SignalsSummaryResponse(BaseModel):
@@ -950,6 +962,7 @@ class ComparisonAssetProfile(BaseModel):
     returns: ComparisonReturns
     fundamentals: ComparisonFundamentals
     valuation: ValuationContext
+    evidence: EvidenceDisplayResponse | None = None
 
 
 class BenchmarkComparisonProfile(BaseModel):
@@ -961,6 +974,7 @@ class BenchmarkComparisonProfile(BaseModel):
     return_21d: float | None = None
     return_252d: float | None = None
     volatility_252d: float | None = None
+    evidence: EvidenceDisplayResponse | None = None
 
 
 class SectorComparisonValues(BaseModel):
@@ -1007,6 +1021,7 @@ class ComparisonHistorySeries(BaseModel):
     source: str | None = None
     points: list[ComparisonHistoryPoint] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    evidence: EvidenceDisplayResponse | None = None
 
 
 class ComparisonFreshness(BaseModel):
@@ -1020,6 +1035,8 @@ class ComparisonFreshness(BaseModel):
     provider: str
     stale: bool = False
     stale_reason: str | None = None
+    price_evidence: EvidenceDisplayResponse | None = None
+    fundamental_evidence: EvidenceDisplayResponse | None = None
 
 
 class ComparisonCoverage(BaseModel):
@@ -1057,6 +1074,8 @@ class ComparisonWorkspaceResponse(BaseModel):
     coverage: ComparisonCoverage
     fx_policy: ComparisonFxPolicy
     insights: list[str] = Field(default_factory=list)
+    single_asset_mode: bool = False
+    benchmark_selection_reason: str | None = None
 
 
 class BusinessStrengthMetricResponse(BaseModel):
@@ -1077,6 +1096,7 @@ class BusinessStrengthMetricResponse(BaseModel):
     historical_percentile: float | None = None
     confidence: float
     explanation: str
+    evidence: EvidenceDisplayResponse | None = None
 
 
 class BusinessStrengthCategoryResponse(BaseModel):
@@ -1089,6 +1109,7 @@ class BusinessStrengthCategoryResponse(BaseModel):
     completeness_score: float
     explanation: str
     metrics: list[BusinessStrengthMetricResponse] = Field(default_factory=list)
+    evidence: EvidenceDisplayResponse | None = None
 
 
 class BusinessStrengthScorecardResponse(BaseModel):
@@ -1121,6 +1142,7 @@ class BusinessStrengthScorecardResponse(BaseModel):
     peer_group: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     future_research_enabled: bool = False
+    evidence: EvidenceDisplayResponse | None = None
 
 
 class BusinessStrengthCompareRequest(BaseModel):
@@ -1193,6 +1215,7 @@ class BenchmarkIndexSummary(BaseModel):
     daily_price_last_success_at: datetime | None = None
     composition_last_success_at: datetime | None = None
     last_error: str | None = None
+    evidence: EvidenceDisplayResponse | None = None
 
 
 class BenchmarkAvailablePriceRange(BaseModel):
@@ -1248,6 +1271,7 @@ class BenchmarkPricePoint(BaseModel):
     source: str
     source_symbol: str
     is_proxy: bool
+    evidence: EvidenceDisplayResponse | None = None
 
 
 class BenchmarkDailyMetric(BaseModel):
@@ -1267,6 +1291,7 @@ class BenchmarkDailyMetric(BaseModel):
     high_52w: float | None = None
     low_52w: float | None = None
     drawdown_from_52w_high: float | None = None
+    evidence: EvidenceDisplayResponse | None = None
 
 
 class BenchmarkConstituent(BaseModel):
@@ -1323,7 +1348,9 @@ class BenchmarkSeedRequest(BaseModel):
 
 
 class BenchmarkRefreshRequest(BaseModel):
-    job_type: str = Field(pattern="^(daily_price|intraday_price|composition|metrics|relative_metrics)$")
+    job_type: str = Field(
+        pattern="^(daily_price|intraday_price|composition|metrics|relative_metrics)$"
+    )
     lookback_days: int = Field(default=10, ge=1, le=3650)
     interval: str = Field(default="5min", min_length=1, max_length=16)
     comparison_index_id: str = Field(default="SP500", min_length=1, max_length=64)

@@ -6,7 +6,7 @@ import { api, type RetailSentimentOverviewItem, type StockRankingItem } from "..
 import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar } from "../pageFeatureStore";
 import { usePageFeature } from "../pageFeatureHooks";
 import { money, percent, signedNumber } from "./routeFormatters";
-import { EmptyRow, ErrorPanel, Loading, Metric } from "./routeShared";
+import { EmptyRow, ErrorPanel, EvidenceBadge, Loading, Metric } from "./routeShared";
 
 export function RetailSentimentPage() {
   const [view, setView] = useState<"holdings" | "popular">("holdings");
@@ -38,6 +38,10 @@ export function RetailSentimentPage() {
   const holdings = sentiment.data?.holdings ?? [];
   const popular = sentiment.data?.popular ?? [];
   const activeItems = view === "holdings" ? holdings : popular;
+  const retailBlocked = sentiment.data?.evidence?.action_eligibility === "blocked";
+  useEffect(() => {
+    if (retailBlocked) setIncludeRetailRatings(false);
+  }, [retailBlocked]);
   return <div className="page retail-sentiment-page">
     <div className="page-title">
       <div>
@@ -50,13 +54,14 @@ export function RetailSentimentPage() {
         <PageFeatureMenu pageId="retailSentiment" />
         <button onClick={() => sentiment.refetch()} disabled={sentiment.isFetching}><RefreshCw size={17} />Refresh</button>
         <Link className="button-link" to="/operations"><MessageSquare size={17} />Ingestion</Link>
-        <Link className="button-link primary" to="/signals?include_retail_sentiment=true"><Activity size={17} />Signals with retail</Link>
+        {retailBlocked ? <span className="button-link disabled" title="Configure and ingest a supported social provider first"><Activity size={17} />Signals with retail unavailable</span> : <Link className="button-link primary" to="/signals?include_retail_sentiment=true"><Activity size={17} />Signals with retail</Link>}
       </div>
     </div>
     <PageLayoutToolbar pageId="retailSentiment" />
     <OptionalFeaturesEmpty pageId="retailSentiment" />
     {sentiment.isError ? <ErrorPanel error={sentiment.error} /> : null}
-    {showSummary ? <LayoutWidget pageId="retailSentiment" widgetId="retailSentiment.summary"><section className="metric-grid">
+    {sentiment.data?.evidence ? <div className={`status-banner ${retailBlocked ? "danger" : "warning"}`}><EvidenceBadge evidence={sentiment.data.evidence} /><span>{retailBlocked ? "No usable configured Reddit or X evidence is available. Stored social values are hidden until a supported provider is configured and posts are ingested." : "Retail sentiment is a secondary social-attention input; inspect source and age before use."}</span></div> : null}
+    {showSummary && !retailBlocked ? <LayoutWidget pageId="retailSentiment" widgetId="retailSentiment.summary"><section className="metric-grid">
       <Metric icon={<MessageSquare />} label="Held stocks with social data" value={`${sentiment.data?.summary.holding_with_sentiment_count ?? 0}`} detail={`${sentiment.data?.summary.holding_count ?? 0} held stocks scanned`} positive />
       <Metric icon={<TrendingUp />} label="Popular social names" value={`${sentiment.data?.summary.popular_count ?? 0}`} detail={`${sentiment.data?.summary.total_recent_posts ?? 0} recent posts counted`} positive />
       <Metric icon={<Activity />} label="Decision weight" value="Optional" detail="10% add-on when enabled" positive />
@@ -66,8 +71,9 @@ export function RetailSentimentPage() {
       <button className={view === "popular" ? "active" : ""} onClick={() => setView("popular")}>Popular stocks</button>
     </div>
     {sentiment.isLoading ? <Loading /> : null}
-    {view === "holdings" && showHoldings ? <LayoutWidget pageId="retailSentiment" widgetId="retailSentiment.holdings"><RetailSentimentTable title="Your holdings" items={holdings} empty="No held stocks have retail sentiment rows yet. Schedule retail sentiment ingestion from Operations." /></LayoutWidget> : null}
-    {view === "popular" && showPopular ? <LayoutWidget pageId="retailSentiment" widgetId="retailSentiment.popular"><RetailSentimentTable title="Popular stocks by social activity" items={popular} empty="No popular retail sentiment rows are stored yet. Run retail sentiment ingestion to populate this view." /></LayoutWidget> : null}
+    {retailBlocked ? <section className="card"><EmptyRow text="Retail sentiment is unavailable. Open Ingestion to configure Reddit or X and ingest current posts; no counts, confidence, coverage, or rating add-on is presented as real data." /></section> : null}
+    {view === "holdings" && showHoldings && !retailBlocked ? <LayoutWidget pageId="retailSentiment" widgetId="retailSentiment.holdings"><RetailSentimentTable title="Your holdings" items={holdings} empty="No held stocks have retail sentiment rows yet. Schedule retail sentiment ingestion from Operations." /></LayoutWidget> : null}
+    {view === "popular" && showPopular && !retailBlocked ? <LayoutWidget pageId="retailSentiment" widgetId="retailSentiment.popular"><RetailSentimentTable title="Popular stocks by social activity" items={popular} empty="No popular retail sentiment rows are stored yet. Run retail sentiment ingestion to populate this view." /></LayoutWidget> : null}
     <RatingsAddOnPanel
       direction={ratingDirection}
       includeRetail={includeRetailRatings}
@@ -76,8 +82,9 @@ export function RetailSentimentPage() {
       methodology={ratings.data?.methodology}
       onDirection={setRatingDirection}
       onIncludeRetail={setIncludeRetailRatings}
+      retailAvailable={!retailBlocked}
     />
-    {activeItems.length ? <section className="retail-sentiment-cards" aria-label="Retail sentiment details">
+    {!retailBlocked && activeItems.length ? <section className="retail-sentiment-cards" aria-label="Retail sentiment details">
       {activeItems.slice(0, 6).map((item) => <RetailSentimentCard key={`${view}-${item.asset_id}`} item={item} />)}
     </section> : null}
     {showMethodology ? <LayoutWidget pageId="retailSentiment" widgetId="retailSentiment.methodology"><p className="signal-methodology">{sentiment.data?.methodology ?? "Retail sentiment methodology loads with the server response."}</p></LayoutWidget> : null}
@@ -92,6 +99,7 @@ function RatingsAddOnPanel({
   methodology,
   onDirection,
   onIncludeRetail,
+  retailAvailable,
 }: {
   direction: "buy" | "sell";
   includeRetail: boolean;
@@ -100,6 +108,7 @@ function RatingsAddOnPanel({
   methodology?: string;
   onDirection: (value: "buy" | "sell") => void;
   onIncludeRetail: (value: boolean) => void;
+  retailAvailable: boolean;
 }) {
   return <section className="card retail-ratings-panel">
     <div className="section-heading">
@@ -109,9 +118,10 @@ function RatingsAddOnPanel({
           <button className={direction === "buy" ? "active" : ""} onClick={() => onDirection("buy")}>Buy</button>
           <button className={direction === "sell" ? "active" : ""} onClick={() => onDirection("sell")}>Sell</button>
         </div>
-        <label className="checkbox-label"><input type="checkbox" checked={includeRetail} onChange={(event) => onIncludeRetail(event.target.checked)} />Include retail</label>
+        <label className="checkbox-label" title={retailAvailable ? undefined : "Current supported retail evidence is unavailable"}><input type="checkbox" checked={includeRetail} disabled={!retailAvailable} onChange={(event) => onIncludeRetail(event.target.checked)} />Include retail</label>
       </div>
     </div>
+    {!retailAvailable ? <p className="compare-warning">Retail remains excluded because its evidence is not decision eligible.</p> : null}
     {methodology ? <p className="rating-methodology">{methodology}</p> : null}
     {isLoading ? <Loading compact /> : items.length ? <div className="table-wrap">
       <table className="data-table retail-rating-table">

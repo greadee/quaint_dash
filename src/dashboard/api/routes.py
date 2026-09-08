@@ -6,9 +6,31 @@ from threading import Lock
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
-from dashboard.application.operations import OperationsQueueQueries, OperationsStatusQueries, OperationsWorkerCommands, safe_ingestion_job
+from dashboard.application.operations import (
+    OperationsQueueQueries,
+    OperationsStatusQueries,
+    OperationsWorkerCommands,
+    safe_ingestion_job,
+)
 from dashboard.db.operations import OperationsQueueRepository
 from dashboard.api.dependencies import get_connection
+from dashboard.api.evidence_adapters import (
+    present_asset_analytics,
+    present_asset_detail,
+    present_benchmark_detail,
+    present_benchmark_metrics,
+    present_benchmark_prices,
+    present_benchmark_summary,
+    present_business_strength,
+    present_business_strength_compare,
+    present_comparison_workspace,
+    present_news_article,
+    present_news_feed,
+    present_portfolio_fundamentals,
+    present_retail_sentiment,
+    present_signal_detail,
+    present_signals_summary,
+)
 from dashboard.api.models import (
     ActionResult,
     AssetBenchmarkAssociationResponse,
@@ -109,10 +131,36 @@ from dashboard.api.services import (
 )
 from dashboard.ingestion.websocket.live_price_subscriptions import LivePriceSubscriptionResolver
 from dashboard.news.api_service import NewsApiService
-from dashboard.services.business_strength import BusinessStrengthAnalyzer, BusinessStrengthTemplateRegistry
+from dashboard.services.business_strength import (
+    BusinessStrengthAnalyzer,
+    BusinessStrengthTemplateRegistry,
+)
 from dashboard.services.business_strength.models import METHODOLOGY_VERSION
 
 router = APIRouter(prefix="/api/v1")
+
+
+def _asset_price_facts(conn, asset_id: str):
+    return conn.execute(
+        """
+        SELECT observed_at, source, retrieved_at
+        FROM (
+            SELECT trade_ts_utc AS observed_at, provider AS source, updated_at AS retrieved_at
+            FROM current_asset_price
+            WHERE asset_id = ?
+            UNION ALL
+            SELECT CAST(date AS TIMESTAMP) AS observed_at, ing_source AS source, ing_at AS retrieved_at
+            FROM asset_quote_daily
+            WHERE asset_id = ?
+              AND COALESCE(adj_close, close) IS NOT NULL
+        ) facts
+        ORDER BY observed_at DESC NULLS LAST, retrieved_at DESC NULLS LAST
+        LIMIT 1
+        """,
+        [asset_id, asset_id],
+    ).fetchone()
+
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -163,21 +211,23 @@ def news_feed(
     offset: int = Query(default=0, ge=0),
     conn=Depends(get_connection),
 ):
-    return NewsApiService(conn).feed(
-        q=q,
-        provider=provider,
-        source=source,
-        asset_id=asset_id,
-        portfolio_id=portfolio_id,
-        category=category,
-        sentiment=sentiment,
-        breaking=breaking,
-        press_release=press_release,
-        start_date=start_date,
-        end_date=end_date,
-        sort=sort,
-        limit=limit,
-        offset=offset,
+    return present_news_feed(
+        NewsApiService(conn).feed(
+            q=q,
+            provider=provider,
+            source=source,
+            asset_id=asset_id,
+            portfolio_id=portfolio_id,
+            category=category,
+            sentiment=sentiment,
+            breaking=breaking,
+            press_release=press_release,
+            start_date=start_date,
+            end_date=end_date,
+            sort=sort,
+            limit=limit,
+            offset=offset,
+        )
     )
 
 
@@ -187,7 +237,7 @@ def news_latest(
     offset: int = Query(default=0, ge=0),
     conn=Depends(get_connection),
 ):
-    return NewsApiService(conn).latest(limit=limit, offset=offset)
+    return present_news_feed(NewsApiService(conn).latest(limit=limit, offset=offset))
 
 
 @router.get("/news/breaking", response_model=NewsFeedResponse)
@@ -196,7 +246,7 @@ def news_breaking(
     offset: int = Query(default=0, ge=0),
     conn=Depends(get_connection),
 ):
-    return NewsApiService(conn).breaking(limit=limit, offset=offset)
+    return present_news_feed(NewsApiService(conn).breaking(limit=limit, offset=offset))
 
 
 @router.get("/news/search", response_model=NewsFeedResponse)
@@ -210,20 +260,22 @@ def news_search(
     offset: int = Query(default=0, ge=0),
     conn=Depends(get_connection),
 ):
-    return NewsApiService(conn).search(
-        q=q,
-        provider=provider,
-        start_date=start_date,
-        end_date=end_date,
-        sort=sort,
-        limit=limit,
-        offset=offset,
+    return present_news_feed(
+        NewsApiService(conn).search(
+            q=q,
+            provider=provider,
+            start_date=start_date,
+            end_date=end_date,
+            sort=sort,
+            limit=limit,
+            offset=offset,
+        )
     )
 
 
 @router.get("/news/articles/{article_id}", response_model=NewsArticleResponse)
 def news_article(article_id: int, conn=Depends(get_connection)):
-    return NewsApiService(conn).article(article_id)
+    return present_news_article(NewsApiService(conn).article(article_id))
 
 
 @router.post("/news/articles/{article_id}/read", response_model=NewsUserStateResponse)
@@ -273,7 +325,9 @@ def news_alert_rules(conn=Depends(get_connection)):
     return NewsApiService(conn).alert_rules()
 
 
-@router.post("/news/alerts", response_model=NewsAlertRuleResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/news/alerts", response_model=NewsAlertRuleResponse, status_code=status.HTTP_201_CREATED
+)
 def news_create_alert_rule(
     payload: NewsAlertRuleRequest,
     request: Request,
@@ -322,31 +376,36 @@ def signals_summary(
     triggered_after: date | None = None,
     triggered_before: date | None = None,
     include_retail_sentiment: bool = Query(default=False),
-    sort: str = Query(default="priority", pattern="^(priority|triggered|strength|confidence|portfolio_weight|score_change|efficacy|ticker|market_cap)$"),
+    sort: str = Query(
+        default="priority",
+        pattern="^(priority|triggered|strength|confidence|portfolio_weight|score_change|efficacy|ticker|market_cap)$",
+    ),
     limit: int = Query(default=25, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     conn=Depends(get_connection),
 ):
-    return PortfolioApiService(conn).signals_summary(
-        q=q,
-        portfolio_id=portfolio_id,
-        owned=owned,
-        category=category,
-        direction=direction,
-        status=status,
-        min_strength=min_strength,
-        min_confidence=min_confidence,
-        min_priority=min_priority,
-        sector=sector,
-        industry=industry,
-        freshness=freshness,
-        completeness=completeness,
-        triggered_after=triggered_after,
-        triggered_before=triggered_before,
-        include_retail_sentiment=include_retail_sentiment,
-        sort=sort,
-        limit=limit,
-        offset=offset,
+    return present_signals_summary(
+        PortfolioApiService(conn).signals_summary(
+            q=q,
+            portfolio_id=portfolio_id,
+            owned=owned,
+            category=category,
+            direction=direction,
+            status=status,
+            min_strength=min_strength,
+            min_confidence=min_confidence,
+            min_priority=min_priority,
+            sector=sector,
+            industry=industry,
+            freshness=freshness,
+            completeness=completeness,
+            triggered_after=triggered_after,
+            triggered_before=triggered_before,
+            include_retail_sentiment=include_retail_sentiment,
+            sort=sort,
+            limit=limit,
+            offset=offset,
+        )
     )
 
 
@@ -367,7 +426,7 @@ def refresh_signal_snapshots(
 
 @router.get("/signals/{signal_id:path}", response_model=SignalDetailResponse)
 def signal_detail(signal_id: str, conn=Depends(get_connection)):
-    return PortfolioApiService(conn).signal_detail(signal_id)
+    return present_signal_detail(PortfolioApiService(conn).signal_detail(signal_id))
 
 
 @router.put("/signals/{signal_id:path}/user-state", response_model=SignalUserState)
@@ -422,7 +481,9 @@ def retail_sentiment_overview(
     limit: int = Query(default=25, ge=1, le=100),
     conn=Depends(get_connection),
 ):
-    return PortfolioApiService(conn).retail_sentiment_overview(limit=limit)
+    overview = PortfolioApiService(conn).retail_sentiment_overview(limit=limit)
+    provider_status = CommandApiService(conn).retail_sentiment_status(limit=limit)
+    return present_retail_sentiment(overview, provider_status)
 
 
 @router.get("/holdings/signals", response_model=HoldingSignalsResponse)
@@ -470,46 +531,69 @@ def comparison_workspace(
     symbols: str = Query(min_length=1, max_length=240),
     benchmark: str | None = Query(default=None, min_length=1, max_length=64),
     period: str = Query(default="1Y", pattern="^(1D|1W|1M|3M|6M|YTD|1Y|3Y|5Y|10Y|MAX|Max)$"),
-    mode: str = Query(default="total-return", pattern="^(price-return|total-return|relative|drawdown|rolling-return|rolling-volatility)$"),
+    mode: str = Query(
+        default="total-return",
+        pattern="^(price-return|total-return|relative|drawdown|rolling-return|rolling-volatility)$",
+    ),
     currency: str = Query(default="native", pattern="^(native|USD|CAD)$"),
     conn=Depends(get_connection),
 ):
-    return ComparisonApiService(conn).workspace(
-        symbols=symbols,
-        benchmark_index_id=benchmark,
-        period=period.upper(),
-        mode=mode,
-        currency=currency.upper() if currency != "native" else currency,
+    return present_comparison_workspace(
+        ComparisonApiService(conn).workspace(
+            symbols=symbols,
+            benchmark_index_id=benchmark,
+            period=period.upper(),
+            mode=mode,
+            currency=currency.upper() if currency != "native" else currency,
+        ),
+        benchmark_requested=benchmark is not None,
     )
 
 
-@router.get("/assets/{asset_id:path}/business-strength", response_model=BusinessStrengthScorecardResponse)
+@router.get(
+    "/assets/{asset_id:path}/business-strength", response_model=BusinessStrengthScorecardResponse
+)
 def asset_business_strength(asset_id: str, conn=Depends(get_connection)):
-    return BusinessStrengthAnalyzer(conn).latest_or_run(asset_id)
+    return present_business_strength(BusinessStrengthAnalyzer(conn).latest_or_run(asset_id))
 
 
-@router.get("/assets/{asset_id:path}/business-strength/audit", response_model=BusinessStrengthScorecardResponse)
+@router.get(
+    "/assets/{asset_id:path}/business-strength/audit",
+    response_model=BusinessStrengthScorecardResponse,
+)
 def asset_business_strength_audit(asset_id: str, conn=Depends(get_connection)):
-    return BusinessStrengthAnalyzer(conn).latest_or_run(asset_id)
+    return present_business_strength(BusinessStrengthAnalyzer(conn).latest_or_run(asset_id))
 
 
-@router.get("/assets/{asset_id:path}/business-strength/history", response_model=list[BusinessStrengthScorecardResponse])
+@router.get(
+    "/assets/{asset_id:path}/business-strength/history",
+    response_model=list[BusinessStrengthScorecardResponse],
+)
 def asset_business_strength_history(asset_id: str, conn=Depends(get_connection)):
     analyzer = BusinessStrengthAnalyzer(conn)
     latest = analyzer.latest_or_run(asset_id)
-    return [latest]
+    return [present_business_strength(latest)]
 
 
-@router.post("/assets/{asset_id:path}/business-strength/recalculate", response_model=BusinessStrengthScorecardResponse)
-def recalculate_asset_business_strength(asset_id: str, request: Request, conn=Depends(get_connection)):
+@router.post(
+    "/assets/{asset_id:path}/business-strength/recalculate",
+    response_model=BusinessStrengthScorecardResponse,
+)
+def recalculate_asset_business_strength(
+    asset_id: str, request: Request, conn=Depends(get_connection)
+):
     with request.app.state.write_lock:
-        return BusinessStrengthAnalyzer(conn).run(asset_id)
+        return present_business_strength(BusinessStrengthAnalyzer(conn).run(asset_id))
 
 
 @router.post("/compare/business-strength", response_model=BusinessStrengthCompareResponse)
-def compare_business_strength(payload: BusinessStrengthCompareRequest, request: Request, conn=Depends(get_connection)):
+def compare_business_strength(
+    payload: BusinessStrengthCompareRequest, request: Request, conn=Depends(get_connection)
+):
     with request.app.state.write_lock:
-        return BusinessStrengthAnalyzer(conn).compare(payload.symbols)
+        return present_business_strength_compare(
+            BusinessStrengthAnalyzer(conn).compare(payload.symbols)
+        )
 
 
 @router.get("/business-strength/templates", response_model=list[BusinessStrengthTemplateResponse])
@@ -528,7 +612,9 @@ def business_strength_templates():
     ]
 
 
-@router.get("/business-strength/methodologies", response_model=list[BusinessStrengthMethodologyResponse])
+@router.get(
+    "/business-strength/methodologies", response_model=list[BusinessStrengthMethodologyResponse]
+)
 def business_strength_methodologies():
     return [
         BusinessStrengthMethodologyResponse(
@@ -552,7 +638,8 @@ def list_benchmarks(
     offset: int = Query(default=0, ge=0),
     conn=Depends(get_connection),
 ):
-    return BenchmarkApiService(conn).list_benchmarks(
+    service = BenchmarkApiService(conn)
+    items = service.list_benchmarks(
         q=q,
         category=category,
         region=region,
@@ -563,6 +650,7 @@ def list_benchmarks(
         limit=limit,
         offset=offset,
     )
+    return [present_benchmark_summary(item, service.get_benchmark(item.index_id)) for item in items]
 
 
 @router.get("/benchmarks/defaults/asset/{asset_id}", response_model=BenchmarkDefaultResponse)
@@ -570,19 +658,25 @@ def asset_default_benchmark(asset_id: str, conn=Depends(get_connection)):
     return BenchmarkApiService(conn).default_for_asset(asset_id)
 
 
-@router.get("/benchmarks/associations/asset/{asset_id}", response_model=AssetBenchmarkAssociationResponse)
+@router.get(
+    "/benchmarks/associations/asset/{asset_id}", response_model=AssetBenchmarkAssociationResponse
+)
 def asset_benchmark_associations(asset_id: str, conn=Depends(get_connection)):
     return BenchmarkApiService(conn).associations_for_asset(asset_id)
 
 
-@router.get("/benchmarks/defaults/portfolio/{portfolio_id}", response_model=BenchmarkDefaultResponse)
+@router.get(
+    "/benchmarks/defaults/portfolio/{portfolio_id}", response_model=BenchmarkDefaultResponse
+)
 def portfolio_default_benchmark(portfolio_id: int, conn=Depends(get_connection)):
     return BenchmarkApiService(conn).default_for_portfolio(portfolio_id)
 
 
 @router.get("/benchmarks/readiness", response_model=BenchmarkReadinessResponse)
 def benchmark_readiness(
-    category: str | None = Query(default=None, pattern="^(core_geo|sector|industry|theme|non_core|all)$"),
+    category: str | None = Query(
+        default=None, pattern="^(core_geo|sector|industry|theme|non_core|all)$"
+    ),
     conn=Depends(get_connection),
 ):
     return BenchmarkApiService(conn).readiness(category=category)
@@ -612,7 +706,7 @@ def benchmark_readiness_for_index(index_id: str, conn=Depends(get_connection)):
 
 @router.get("/benchmarks/{index_id}", response_model=BenchmarkIndexDetail)
 def benchmark_detail(index_id: str, conn=Depends(get_connection)):
-    return BenchmarkApiService(conn).get_benchmark(index_id)
+    return present_benchmark_detail(BenchmarkApiService(conn).get_benchmark(index_id))
 
 
 @router.get("/benchmarks/{index_id}/prices", response_model=list[BenchmarkPricePoint])
@@ -623,7 +717,9 @@ def benchmark_prices(
     limit: int = Query(default=365, ge=1, le=5000),
     conn=Depends(get_connection),
 ):
-    return BenchmarkApiService(conn).prices(index_id, start_date, end_date, limit)
+    return present_benchmark_prices(
+        BenchmarkApiService(conn).prices(index_id, start_date, end_date, limit)
+    )
 
 
 @router.get("/benchmarks/{index_id}/metrics", response_model=list[BenchmarkDailyMetric])
@@ -632,7 +728,10 @@ def benchmark_metrics(
     limit: int = Query(default=365, ge=1, le=5000),
     conn=Depends(get_connection),
 ):
-    return BenchmarkApiService(conn).metrics(index_id, limit)
+    service = BenchmarkApiService(conn)
+    return present_benchmark_metrics(
+        service.metrics(index_id, limit), service.get_benchmark(index_id)
+    )
 
 
 @router.get("/benchmarks/{index_id}/constituents", response_model=Page[BenchmarkConstituent])
@@ -645,7 +744,9 @@ def benchmark_constituents(
     sort: str = Query(default="weight_desc", max_length=32),
     conn=Depends(get_connection),
 ):
-    return BenchmarkApiService(conn).constituents(index_id, snapshot_date, source, limit, offset, sort)
+    return BenchmarkApiService(conn).constituents(
+        index_id, snapshot_date, source, limit, offset, sort
+    )
 
 
 @router.get("/benchmarks/{index_id}/exposures", response_model=list[BenchmarkExposure])
@@ -822,7 +923,21 @@ def portfolio_fundamentals(
     horizon_years: int = Query(default=5, ge=3, le=10),
     conn=Depends(get_connection),
 ):
-    return PortfolioApiService(conn).fundamentals(portfolio_id, horizon_years)
+    result = PortfolioApiService(conn).fundamentals(portfolio_id, horizon_years)
+    source_assets = list(
+        dict.fromkeys(item.valuation_asset_id or item.asset_id for item in result.holdings)
+    )
+    source_dates = {}
+    if source_assets:
+        placeholders = ", ".join("?" for _ in source_assets)
+        source_dates = dict(
+            conn.execute(
+                f"SELECT asset_id, MAX(period_end_date) FROM financial_statement "
+                f"WHERE asset_id IN ({placeholders}) GROUP BY asset_id",
+                source_assets,
+            ).fetchall()
+        )
+    return present_portfolio_fundamentals(result, source_dates=source_dates)
 
 
 @router.get("/portfolios/{portfolio_id}/news", response_model=NewsFeedResponse)
@@ -834,12 +949,14 @@ def portfolio_news(
     offset: int = Query(default=0, ge=0),
     conn=Depends(get_connection),
 ):
-    return NewsApiService(conn).portfolio_feed(
-        portfolio_id,
-        category=category,
-        sort=sort,
-        limit=limit,
-        offset=offset,
+    return present_news_feed(
+        NewsApiService(conn).portfolio_feed(
+            portfolio_id,
+            category=category,
+            sort=sort,
+            limit=limit,
+            offset=offset,
+        )
     )
 
 
@@ -898,12 +1015,14 @@ def asset_news(
     offset: int = Query(default=0, ge=0),
     conn=Depends(get_connection),
 ):
-    return NewsApiService(conn).asset_feed(
-        asset_id,
-        category=category,
-        sort=sort,
-        limit=limit,
-        offset=offset,
+    return present_news_feed(
+        NewsApiService(conn).asset_feed(
+            asset_id,
+            category=category,
+            sort=sort,
+            limit=limit,
+            offset=offset,
+        )
     )
 
 
@@ -919,7 +1038,14 @@ def search_assets(
 
 @router.get("/assets/{asset_id}", response_model=AssetDetail)
 def asset_detail(asset_id: str, conn=Depends(get_connection)):
-    return AssetApiService(conn).get_asset(asset_id)
+    asset = AssetApiService(conn).get_asset(asset_id)
+    facts = _asset_price_facts(conn, asset.asset_id)
+    return present_asset_detail(
+        asset,
+        observed_at=facts[0] if facts else None,
+        source=facts[1] if facts else None,
+        retrieved_at=facts[2] if facts else None,
+    )
 
 
 @router.get("/assets/{asset_id}/prices", response_model=list[PricePointResponse])
@@ -938,7 +1064,32 @@ def asset_analytics(
     benchmark_index_id: str | None = None,
     conn=Depends(get_connection),
 ):
-    return AssetApiService(conn).analytics(asset_id, benchmark_index_id)
+    service = AssetApiService(conn)
+    asset = service.get_asset(asset_id)
+    payload = service.analytics(asset.asset_id, benchmark_index_id)
+    statement_asset_id = asset.underlying_asset_id or asset.asset_id
+    statement = conn.execute(
+        """
+        SELECT COALESCE(period_end_date, report_date), source, ingested_at_utc
+        FROM financial_statement
+        WHERE asset_id = ?
+        ORDER BY COALESCE(period_end_date, report_date) DESC NULLS LAST,
+                 year DESC,
+                 quarter DESC
+        LIMIT 1
+        """,
+        [statement_asset_id],
+    ).fetchone()
+    price = _asset_price_facts(conn, asset.asset_id)
+    return present_asset_analytics(
+        payload,
+        observed_at=statement[0] if statement else None,
+        source=statement[1] if statement else None,
+        retrieved_at=statement[2] if statement else None,
+        price_observed_at=price[0] if price else None,
+        price_source=price[1] if price else None,
+        price_retrieved_at=price[2] if price else None,
+    )
 
 
 @router.get("/brokers/connections", response_model=list[BrokerConnectionResponse])
@@ -1016,7 +1167,9 @@ def broker_sync(payload: BrokerSyncRequest, request: Request, conn=Depends(get_c
 
 
 @router.post("/brokers/snaptrade/sync-due", response_model=ActionResult)
-def broker_sync_due(payload: BrokerDueRefreshRequest, request: Request, conn=Depends(get_connection)):
+def broker_sync_due(
+    payload: BrokerDueRefreshRequest, request: Request, conn=Depends(get_connection)
+):
     with request.app.state.write_lock:
         result = CommandApiService(conn).broker_snaptrade_sync_due(
             max_users=payload.max_users,
@@ -1053,7 +1206,9 @@ def broker_import(
     conn=Depends(get_connection),
 ):
     with request.app.state.write_lock:
-        result = CommandApiService(conn).broker_import_transactions(portfolio_id=payload.portfolio_id)
+        result = CommandApiService(conn).broker_import_transactions(
+            portfolio_id=payload.portfolio_id
+        )
     return ActionResult(result=CommandApiService.action_result(result))
 
 
@@ -1078,7 +1233,10 @@ def ingestion_jobs(
     limit: int = Query(default=100, ge=1, le=500),
     conn=Depends(get_connection),
 ):
-    return [safe_ingestion_job(job.model_dump()) for job in CommandApiService(conn).ingestion_jobs(job_status, domain, limit)]
+    return [
+        safe_ingestion_job(job.model_dump())
+        for job in CommandApiService(conn).ingestion_jobs(job_status, domain, limit)
+    ]
 
 
 @router.get("/ingestion/queue/status", response_model=IngestionQueueStatusResponse)

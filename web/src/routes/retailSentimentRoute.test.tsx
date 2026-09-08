@@ -109,4 +109,28 @@ describe("RetailSentimentPage", () => {
     expect(apiMock.stockRankings).toHaveBeenCalledWith(expect.objectContaining({ include_retail_sentiment: false }));
     expect(apiMock.retailSentimentOverview).toHaveBeenCalledWith(30);
   });
+
+  it("hides synthetic social metrics and disables rating inclusion when evidence is blocked", async () => {
+    apiMock.retailSentimentOverview.mockResolvedValue({
+      generated_at: "2026-07-08T12:00:00Z",
+      methodology: "Retail sentiment is unavailable.",
+      summary: { holding_count: 4, holding_with_sentiment_count: 4, popular_count: 8, total_recent_posts: 999 },
+      holdings: [],
+      popular: [],
+      evidence: {
+        schema_version: "evidence-display.v1", evidence_type: "retail_sentiment", source_kind: "unknown", source_name: null,
+        source_health: "blocked", observed_at: null, retrieved_at: "2026-07-08T12:00:00Z", freshness_state: "blocked",
+        coverage_state: "missing", missing_inputs: ["configured Reddit or X provider"], confidence: null,
+        effectiveness_sample_size: null, action_eligibility: "blocked", reason_codes: ["evidence.source_health.blocked"],
+      },
+    });
+    apiMock.stockRankings.mockResolvedValue({ items: [], methodology: "Retail excluded." });
+
+    renderRetailSentiment();
+
+    expect(await screen.findByText(/no usable configured Reddit or X evidence/i)).toBeInTheDocument();
+    expect(screen.queryByText("999 recent posts counted")).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /Include retail/i })).toBeDisabled();
+    expect(screen.getByText(/Signals with retail unavailable/i)).toBeInTheDocument();
+  });
 });

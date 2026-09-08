@@ -32,7 +32,9 @@ def test_portfolio_management_endpoints_are_backend_driven_and_deterministic(tmp
     db_path = tmp_path / "portfolio_management.db"
     app = create_app(db_path)
     db = DB(db_path)
-    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name, base_ccy) VALUES (1, 'Core', 'USD')")
+    db.conn.execute(
+        "INSERT INTO portfolio(portfolio_id, portfolio_name, base_ccy) VALUES (1, 'Core', 'USD')"
+    )
     db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
     db.conn.execute(
         """
@@ -111,7 +113,9 @@ def test_portfolio_management_endpoints_are_backend_driven_and_deterministic(tmp
 
     with TestClient(app) as client:
         performance = client.get("/api/v1/portfolios/1/performance?benchmark=SP500&range=MAX")
-        one_day_performance = client.get("/api/v1/portfolios/1/performance?benchmark=SP500&range=1D")
+        one_day_performance = client.get(
+            "/api/v1/portfolios/1/performance?benchmark=SP500&range=1D"
+        )
         risk = client.get("/api/v1/portfolios/1/risk?benchmark=SP500&risk_free_rate=0.02")
         fundamentals = client.get("/api/v1/portfolios/1/fundamentals?horizon_years=5")
         max_cagr = client.post(
@@ -132,13 +136,18 @@ def test_portfolio_management_endpoints_are_backend_driven_and_deterministic(tmp
     assert performance.json()["points"][0]["portfolio_return_index"] == 100
     assert performance.json()["benchmark"] == "SP500"
     assert one_day_performance.status_code == 200
-    assert [point["date"] for point in one_day_performance.json()["points"]] == ["2025-01-02", "2025-01-03"]
+    assert [point["date"] for point in one_day_performance.json()["points"]] == [
+        "2025-01-02",
+        "2025-01-03",
+    ]
     assert risk.status_code == 200
     assert risk.json()["risk_free_rate"] == 0.02
     assert "weight_balance_score" in risk.json()
     assert any(item["metric"] == "annualized_volatility" for item in risk.json()["metric_insights"])
     assert fundamentals.status_code == 200
     assert fundamentals.json()["weighted_expected_cagr"]["coverage"] > 0
+    assert fundamentals.json()["evidence"]["evidence_type"] == "financial_statement"
+    assert all(item["evidence"] for item in fundamentals.json()["holdings"])
     expected_cagr_insight = next(
         item
         for item in fundamentals.json()["metric_insights"]
@@ -167,7 +176,9 @@ def test_portfolio_performance_skips_incomplete_valuation_dates(tmp_path):
     db_path = tmp_path / "portfolio_performance.db"
     app = create_app(db_path)
     db = DB(db_path)
-    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name, base_ccy) VALUES (1, 'Core', 'USD')")
+    db.conn.execute(
+        "INSERT INTO portfolio(portfolio_id, portfolio_name, base_ccy) VALUES (1, 'Core', 'USD')"
+    )
     db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
     db.conn.execute(
         """
@@ -215,9 +226,7 @@ def test_broker_only_portfolio_performance_uses_current_position_proxy(tmp_path)
     db_path = tmp_path / "broker_performance.db"
     app = create_app(db_path)
     db = DB(db_path)
-    db.conn.execute(
-        "INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Broker')"
-    )
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Broker')")
     db.conn.execute(
         """
         INSERT INTO asset(asset_id, symbol, asset_type, ccy)
@@ -253,9 +262,7 @@ def test_broker_only_portfolio_performance_uses_current_position_proxy(tmp_path)
     payload = response.json()
     assert payload["observation_count"] == 3
     assert payload["missing_inputs"] == []
-    assert payload["methodology"].startswith(
-        "current-position historical valuation proxy"
-    )
+    assert payload["methodology"].startswith("current-position historical valuation proxy")
 
 
 def test_portfolio_rename_conflicts_with_existing_name(tmp_path):
@@ -1265,7 +1272,9 @@ def test_stock_rankings_rank_buy_and_sell_signals_from_stored_metrics(tmp_path):
 
     retail_addon_payload = retail_addon_response.json()
     assert retail_addon_response.status_code == 200
-    retail_catalog_row = next(item for item in retail_addon_payload["items"] if item["symbol"] == "AAAACAT")
+    retail_catalog_row = next(
+        item for item in retail_addon_payload["items"] if item["symbol"] == "AAAACAT"
+    )
     assert retail_addon_payload["include_retail_sentiment"] is True
     assert "small 10% social-attention add-on" in retail_addon_payload["methodology"]
     assert [component["name"] for component in retail_catalog_row["components"]] == [
@@ -1314,7 +1323,9 @@ def test_retail_sentiment_overview_lists_holdings_and_popular_social_names(tmp_p
         VALUES ('reddit', 't3_buyme', 'r/stocks', '$BUYME breakout thread', 'https://reddit.test/buyme', now(), 15, 6)
         """
     )
-    post_id = db.conn.execute("SELECT post_id FROM social_post WHERE source_post_id = 't3_buyme'").fetchone()[0]
+    post_id = db.conn.execute(
+        "SELECT post_id FROM social_post WHERE source_post_id = 't3_buyme'"
+    ).fetchone()[0]
     db.conn.execute(
         """
         INSERT INTO social_post_asset_mention(post_id, asset_id, ticker, relevance_score, mention_reason)
@@ -1332,11 +1343,14 @@ def test_retail_sentiment_overview_lists_holdings_and_popular_social_names(tmp_p
     assert "social-attention layer" in payload["methodology"]
     assert payload["summary"]["holding_count"] == 1
     assert payload["summary"]["holding_with_sentiment_count"] == 1
+    assert payload["evidence"]["action_eligibility"] == "blocked"
+    assert "configured Reddit or X provider" in payload["evidence"]["missing_inputs"]
     holding = payload["holdings"][0]
     assert holding["symbol"] == "BUYME"
     assert holding["sentiment_label"] == "Strongly bullish"
     assert holding["portfolio_names"] == ["Main"]
     assert holding["latest_posts"][0]["title"] == "$BUYME breakout thread"
+    assert holding["evidence"]["action_eligibility"] == "blocked"
     popular_symbols = [item["symbol"] for item in payload["popular"]]
     assert popular_symbols[0] == "LOUD"
 
@@ -1515,7 +1529,9 @@ def test_add_catalog_stock_to_watchlist_creates_untracked_asset(tmp_path):
 
     with TestClient(app) as client:
         response = client.post("/api/v1/watchlist/assets/CATONLY")
-        rankings = client.get("/api/v1/rankings/stocks?factor=aggregate&universe=tracked&direction=buy")
+        rankings = client.get(
+            "/api/v1/rankings/stocks?factor=aggregate&universe=tracked&direction=buy"
+        )
 
     assert response.status_code == 200
     assert response.json() == {
@@ -1523,7 +1539,10 @@ def test_add_catalog_stock_to_watchlist_creates_untracked_asset(tmp_path):
         "symbol": "CATONLY",
         "is_watchlisted": True,
     }
-    assert any(item["asset_id"] == "CATONLY" and item["is_watchlisted"] for item in rankings.json()["items"])
+    assert any(
+        item["asset_id"] == "CATONLY" and item["is_watchlisted"]
+        for item in rankings.json()["items"]
+    )
 
     db = DB(db_path)
     asset = db.conn.execute(

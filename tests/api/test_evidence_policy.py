@@ -41,6 +41,7 @@ def evidence(**overrides) -> EvidencePolicyInput:
         ("financial_statement", timedelta(days=150), timedelta(days=240)),
         ("benchmark", timedelta(hours=36), timedelta(hours=96)),
         ("monthly_signal", timedelta(days=45), timedelta(days=75)),
+        ("retail_sentiment", timedelta(hours=36), timedelta(hours=96)),
     ],
 )
 def test_each_evidence_type_has_explicit_boundary_behavior(

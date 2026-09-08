@@ -151,6 +151,7 @@ export type PortfolioFundamentalHolding = {
   margin_of_safety: number | null;
   coverage_status: string;
   missing_inputs: string[];
+  evidence?: EvidenceDisplay | null;
 };
 export type PortfolioFundamentals = {
   portfolio_id: number;
@@ -165,6 +166,7 @@ export type PortfolioFundamentals = {
   missing_inputs: string[];
   metric_insights?: PortfolioMetricInsight[];
   as_of: string;
+  evidence?: EvidenceDisplay | null;
 };
 export type OptimizationConstraints = {
   max_weight?: number;
@@ -234,6 +236,7 @@ export type Asset = {
   shares_outstanding: number | null;
   market_beta: number | null;
   latest_price: number | null;
+  evidence?: EvidenceDisplay | null;
 };
 
 export type AssetSearchResult = {
@@ -319,6 +322,7 @@ export type NewsArticle = {
   assets: NewsArticleAsset[];
   categories: NewsArticleCategory[];
   cluster: NewsStoryCluster | null;
+  evidence?: EvidenceDisplay | null;
 };
 export type NewsFeed = {
   items: NewsArticle[];
@@ -331,6 +335,7 @@ export type NewsFeed = {
   provider_status: string;
   provider_message: string | null;
   is_cached: boolean;
+  evidence?: EvidenceDisplay | null;
 };
 export type NewsRefreshResponse = {
   status: string;
@@ -547,6 +552,7 @@ export type SignalRow = {
   related_signal_ids: string[];
   reviewed: boolean;
   muted: boolean;
+  evidence?: EvidenceDisplay | null;
 };
 export type SignalSummaryMetric = {
   key: string;
@@ -687,6 +693,7 @@ export type ComparisonAsset = {
   returns: ComparisonReturns;
   fundamentals: ComparisonFundamentals;
   valuation: ValuationContext;
+  evidence?: EvidenceDisplay | null;
 };
 export type BenchmarkComparison = {
   index_id: string;
@@ -697,6 +704,7 @@ export type BenchmarkComparison = {
   return_21d: number | null;
   return_252d: number | null;
   volatility_252d: number | null;
+  evidence?: EvidenceDisplay | null;
 };
 export type SectorComparisonValues = {
   pe_ratio: number | null;
@@ -737,6 +745,7 @@ export type BenchmarkIndexSummary = {
   daily_price_last_success_at: string | null;
   composition_last_success_at: string | null;
   last_error: string | null;
+  evidence?: EvidenceDisplay | null;
 };
 export type BenchmarkSymbol = {
   provider: string;
@@ -771,6 +780,7 @@ export type BenchmarkPricePoint = {
   source: string;
   source_symbol: string;
   is_proxy: boolean;
+  evidence?: EvidenceDisplay | null;
 };
 export type BenchmarkDailyMetric = {
   metric_date: string;
@@ -789,6 +799,7 @@ export type BenchmarkDailyMetric = {
   high_52w: number | null;
   low_52w: number | null;
   drawdown_from_52w_high: number | null;
+  evidence?: EvidenceDisplay | null;
 };
 export type BenchmarkConstituent = {
   index_id: string;
@@ -885,6 +896,7 @@ export type ComparisonHistorySeries = {
   source: string | null;
   points: ComparisonHistoryPoint[];
   warnings: string[];
+  evidence?: EvidenceDisplay | null;
 };
 export type ComparisonFreshness = {
   latest_price_date: string | null;
@@ -897,6 +909,8 @@ export type ComparisonFreshness = {
   provider: string;
   stale: boolean;
   stale_reason: string | null;
+  price_evidence?: EvidenceDisplay | null;
+  fundamental_evidence?: EvidenceDisplay | null;
 };
 export type ComparisonCoverage = {
   requested_symbols: string[];
@@ -931,6 +945,8 @@ export type ComparisonWorkspaceResponse = {
   coverage: ComparisonCoverage;
   fx_policy: ComparisonFxPolicy;
   insights: string[];
+  single_asset_mode: boolean;
+  benchmark_selection_reason: string | null;
 };
 
 export type BusinessStrengthMetric = {
@@ -951,6 +967,7 @@ export type BusinessStrengthMetric = {
   historical_percentile: number | null;
   confidence: number;
   explanation: string;
+  evidence?: EvidenceDisplay | null;
 };
 
 export type BusinessStrengthCategory = {
@@ -963,6 +980,7 @@ export type BusinessStrengthCategory = {
   completeness_score: number;
   explanation: string;
   metrics: BusinessStrengthMetric[];
+  evidence?: EvidenceDisplay | null;
 };
 
 export type BusinessStrengthScorecard = {
@@ -995,6 +1013,7 @@ export type BusinessStrengthScorecard = {
   peer_group: string[];
   warnings: string[];
   future_research_enabled: boolean;
+  evidence?: EvidenceDisplay | null;
 };
 
 export type BusinessStrengthCompare = {
@@ -1168,7 +1187,7 @@ export type IngestionJob = {
 };
 export type EvidenceDisplay = {
   schema_version: "evidence-display.v1";
-  evidence_type: "price" | "news" | "financial_statement" | "benchmark" | "monthly_signal";
+  evidence_type: "price" | "news" | "financial_statement" | "benchmark" | "monthly_signal" | "retail_sentiment";
   source_kind: "real" | "proxy" | "fixture" | "inferred" | "unknown";
   source_name: string | null;
   source_health: "healthy" | "degraded" | "blocked" | "unknown";
@@ -1396,6 +1415,7 @@ export type RetailSentimentOverviewItem = {
   unusual_volume_flag: boolean;
   source_count: number;
   latest_posts: RetailSentimentOverviewPost[];
+  evidence?: EvidenceDisplay | null;
 };
 export type RetailSentimentOverview = {
   generated_at: string;
@@ -1403,6 +1423,7 @@ export type RetailSentimentOverview = {
   summary: Record<string, number>;
   holdings: RetailSentimentOverviewItem[];
   popular: RetailSentimentOverviewItem[];
+  evidence?: EvidenceDisplay | null;
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

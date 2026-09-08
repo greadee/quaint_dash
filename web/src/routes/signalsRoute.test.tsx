@@ -175,6 +175,15 @@ describe("Signals routes", () => {
     expect(apiMock.signals).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "confidence" }));
   });
 
+  it("labels the legacy 31-day input filter without overstating evidence staleness", async () => {
+    renderWithQuery(<StockRankingsPage notify={vi.fn()} />, "/signals?freshness=stale");
+
+    expect(await screen.findByRole("heading", { name: "Signals" })).toBeInTheDocument();
+    expect(screen.getByText("Legacy age filter")).toBeInTheDocument();
+    expect(screen.getByText("Input age: 31d+")).toBeInTheDocument();
+    expect(apiMock.signals).toHaveBeenLastCalledWith(expect.objectContaining({ freshness: "stale" }));
+  });
+
   it("lets retail sentiment be included as an optional signal add-on", async () => {
     const user = userEvent.setup();
 
@@ -252,5 +261,23 @@ describe("Signals routes", () => {
     expect(await screen.findByRole("heading", { name: /NVDA/i })).toBeInTheDocument();
     expect(await screen.findByText("Lifecycle")).toBeInTheDocument();
     expect(screen.getByText("NVIDIA shipment update")).toBeInTheDocument();
+  });
+
+  it("blocks alert and review writes when signal evidence is stale", async () => {
+    apiMock.signalDetail.mockResolvedValue({
+      ...signalDetail,
+      evidence: {
+        schema_version: "evidence-display.v1", evidence_type: "monthly_signal", source_kind: "inferred", source_name: "signal engine",
+        source_health: "healthy", observed_at: "2026-01-01T00:00:00Z", retrieved_at: "2026-01-01T01:00:00Z",
+        freshness_state: "stale", coverage_state: "complete", missing_inputs: [], confidence: 0.99,
+        effectiveness_sample_size: 12, action_eligibility: "blocked", reason_codes: ["evidence.freshness.monthly_signal.stale"],
+      },
+    });
+
+    renderSignalDetail();
+
+    expect(await screen.findByText(/retained for audit history/i)).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /Create alert/i })[0]).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Mark reviewed/i })).toBeDisabled();
   });
 });

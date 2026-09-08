@@ -60,6 +60,9 @@ def test_news_feed_filters_search_and_detail(tmp_path):
     assert feed.status_code == 200
     assert feed.json()["total"] == 3
     assert feed.json()["items"][0]["provider_code"] == "mock_news"
+    assert feed.json()["items"][0]["evidence"]["source_kind"] == "fixture"
+    assert feed.json()["items"][0]["evidence"]["action_eligibility"] == "blocked"
+    assert feed.json()["items"][0]["canonical_url"] is None
     assert search.status_code == 200
     assert search.json()["items"][0]["assets"][0]["asset_id"] == "MSFT"
     assert providers.status_code == 200
@@ -69,6 +72,7 @@ def test_news_feed_filters_search_and_detail(tmp_path):
     assert detail.status_code == 200
     assert detail.json()["article_id"] == article_id
     assert detail.json()["cluster"]["article_count"] == 1
+    assert detail.json()["evidence"]["action_eligibility"] == "blocked"
 
 
 def test_asset_and_portfolio_news_feeds_rank_context(tmp_path):

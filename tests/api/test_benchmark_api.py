@@ -185,6 +185,7 @@ def test_list_benchmarks_filters_and_latest_rollups(tmp_path):
     assert payload[0]["latest_close"] == 102
     assert payload[0]["composition_quality"] == "proxy"
     assert payload[0]["last_error"] == "proxy only"
+    assert payload[0]["evidence"]["action_eligibility"] == "blocked"
 
 
 def test_list_benchmarks_searches_proxy_symbols_without_changing_canonical_index(tmp_path):
@@ -210,8 +211,11 @@ def test_benchmark_detail_prices_metrics_constituents_and_exposures(tmp_path):
     assert detail.json()["symbols"][0]["provider_symbol"] == "^GSPC"
     assert detail.json()["sync_state"]["composition"]["last_error"] == "proxy only"
     assert detail.json()["available_price_range"]["first_price_date"] == "2026-01-01"
+    assert detail.json()["evidence"]["freshness_state"] == "stale"
     assert prices.json()[0]["date"] == "2026-01-01"
+    assert prices.json()[0]["evidence"]["action_eligibility"] == "blocked"
     assert metrics.json()[0]["return_252d"] == 0.15
+    assert metrics.json()[0]["evidence"]["freshness_state"] == "stale"
     assert constituents.json()["total"] == 2
     assert constituents.json()["items"][0]["constituent_symbol"] == "MSFT"
     assert exposures.json()[0]["dimension_value"] == "Technology"
@@ -377,7 +381,12 @@ def test_benchmark_association_suggests_expanded_industry_universe(tmp_path):
         [
             ("IND_INTERNET", "Internet Industry", "First Trust", "Internet industry"),
             ("IND_BANKS", "Banks Industry", "SPDR", "Bank industry"),
-            ("IND_PHARMACEUTICALS", "Pharmaceuticals Industry", "iShares", "Pharmaceuticals industry"),
+            (
+                "IND_PHARMACEUTICALS",
+                "Pharmaceuticals Industry",
+                "iShares",
+                "Pharmaceuticals industry",
+            ),
         ],
     )
     db.conn.executemany(
@@ -386,7 +395,13 @@ def test_benchmark_association_suggests_expanded_industry_universe(tmp_path):
         VALUES (?, ?, 'stock', 'USD', ?, ?, ?, 'US')
         """,
         [
-            ("GOOG", "GOOG", "Alphabet Inc.", "Communication Services", "Internet Content & Information"),
+            (
+                "GOOG",
+                "GOOG",
+                "Alphabet Inc.",
+                "Communication Services",
+                "Internet Content & Information",
+            ),
             ("JPM", "JPM", "JPMorgan Chase & Co.", "Financial Services", "Banks - Diversified"),
             ("LLY", "LLY", "Eli Lilly and Company", "Healthcare", "Medical - Pharmaceuticals"),
         ],
@@ -406,8 +421,7 @@ def test_benchmark_association_suggests_expanded_industry_universe(tmp_path):
     }
     assert {
         symbol: {
-            item["role"]: item["benchmark_index_id"]
-            for item in response.json()["associations"]
+            item["role"]: item["benchmark_index_id"] for item in response.json()["associations"]
         }["industry"]
         for symbol, response in responses.items()
     } == {
@@ -571,7 +585,9 @@ def test_bulk_harden_uses_category_and_reports_missing_count(tmp_path, monkeypat
             calls.append(("relative", index_id))
             return 0
 
-    monkeypatch.setattr("dashboard.api.services.create_index_ingestion_service", lambda _conn: FakeService())
+    monkeypatch.setattr(
+        "dashboard.api.services.create_index_ingestion_service", lambda _conn: FakeService()
+    )
 
     with _client_with_benchmarks(tmp_path) as client:
         response = client.post(

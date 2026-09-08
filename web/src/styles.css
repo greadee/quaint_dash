@@ -3332,3 +3332,47 @@ button:hover,
     background: rgba(255, 255, 255, 0.96);
   }
 }
+.evidence-badge {
+  align-items: center;
+  background: color-mix(in srgb, var(--surface, #fff) 82%, #d8dde4);
+  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+  border-radius: 999px;
+  color: var(--text-muted, #53606c);
+  display: inline-flex;
+  font-size: .74rem;
+  font-weight: 700;
+  line-height: 1.2;
+  padding: .3rem .55rem;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+.evidence-badge.eligible { color: var(--positive, #236846); }
+.evidence-badge.caution { color: var(--warning, #8a5b00); }
+.evidence-badge.blocked { color: var(--negative, #9a3434); }
+.evidence-badge.compact { font-size: .66rem; padding: .2rem .42rem; }
+.button-link.disabled { cursor: not-allowed; opacity: .58; }
+
+@media (max-width: 700px) {
+  .page-title,
+  .signals-title,
+  .benchmarks-title {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .page-title > div:first-child,
+  .page-title > .actions {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .page-title > .actions {
+    flex-wrap: wrap;
+  }
+
+  .status-banner {
+    align-items: flex-start;
+    grid-template-columns: 1fr;
+  }
+}

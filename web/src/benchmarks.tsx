@@ -61,7 +61,7 @@ import {
   type NormalizedSeries,
   type SortDirection,
 } from "./benchmarkUtils";
-import { ChartFrame, ChartTypeToggle } from "./routes/routeShared";
+import { ChartFrame, ChartTypeToggle, EvidenceBadge } from "./routes/routeShared";
 import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar } from "./pageFeatureStore";
 import { usePageFeature } from "./pageFeatureHooks";
 
@@ -122,7 +122,8 @@ export function BenchmarksWorkspacePage({ notify }: { notify: Notify }) {
     staleTime: 60000,
   });
   const baselineOptions = useMemo(() => allBenchmarks.data ?? [], [allBenchmarks.data]);
-  const defaultBaseline = baselineOptions.find((item) => item.index_id === "SP500")?.index_id ?? baselineOptions[0]?.index_id ?? "SP500";
+  const eligibleBaselines = baselineOptions.filter((item) => item.evidence?.action_eligibility !== "blocked");
+  const defaultBaseline = eligibleBaselines.find((item) => item.index_id === "SP500")?.index_id ?? eligibleBaselines[0]?.index_id ?? baselineOptions[0]?.index_id ?? "SP500";
   const baseline = (params.get("baseline") ?? defaultBaseline).toUpperCase();
 
   const fallbackSelected = useMemo(() => {
@@ -269,6 +270,7 @@ export function BenchmarksWorkspacePage({ notify }: { notify: Notify }) {
       </nav>
 
       {benchmarks.error ? <BenchmarkError message={actionErrorMessage(benchmarks.error)} /> : null}
+      {rows.length && rows.every((item) => item.evidence?.action_eligibility === "blocked") ? <div className="status-banner danger"><strong>Benchmark evidence blocked</strong><span>Every visible benchmark is proxy-backed, stale, or missing an observation. Metrics remain available for audit, but no row is treated as a current leader, winner, or default baseline.</span></div> : null}
       <PageLayoutToolbar pageId="benchmarks" />
       <OptionalFeaturesEmpty pageId="benchmarks" />
       {showSnapshot ? <LayoutWidget pageId="benchmarks" widgetId="benchmarks.snapshot"><BenchmarkSnapshot snapshot={snapshot} period={period} /></LayoutWidget> : null}
@@ -470,9 +472,10 @@ function SortableTh({ label, value, sort, direction, onSort, align }: { label: s
 }
 
 function BenchmarkRow({ item, selected, baseline, onToggle }: { item: BenchmarkIndexSummary; selected: boolean; baseline: boolean; onToggle: (id: string) => void }) {
+  const blocked = item.evidence?.action_eligibility === "blocked";
   return (
     <tr>
-      <td><button className={selected ? "selected mini-button" : "mini-button"} onClick={() => onToggle(item.index_id)} aria-pressed={selected}>{selected ? "Selected" : "Add"}</button></td>
+      <td><button className={selected ? "selected mini-button" : "mini-button"} disabled={blocked} title={blocked ? "Blocked by evidence policy" : undefined} onClick={() => onToggle(item.index_id)} aria-pressed={selected}>{selected ? "Selected" : blocked ? "Blocked" : "Add"}</button></td>
       <td><strong>{item.index_id}</strong><span>{item.index_name}</span>{baseline ? <em>Baseline</em> : null}</td>
       <td>{benchmarkCategoryLabel(item.index_category)}<span>{formatMissing(item.region)} / {item.currency}</span></td>
       <td className="numeric">{formatLevel(item.latest_close)}</td>
@@ -487,6 +490,7 @@ function BenchmarkRow({ item, selected, baseline, onToggle }: { item: BenchmarkI
 }
 
 function BenchmarkMobileCard({ item, selected, baseline, onToggle }: { item: BenchmarkIndexSummary; selected: boolean; baseline: boolean; onToggle: (id: string) => void }) {
+  const blocked = item.evidence?.action_eligibility === "blocked";
   return (
     <article className="benchmark-mobile-card">
       <div><strong>{item.index_id}</strong><span>{item.index_name}</span></div>
@@ -497,7 +501,7 @@ function BenchmarkMobileCard({ item, selected, baseline, onToggle }: { item: Ben
         <div><dt>Level</dt><dd>{formatLevel(item.latest_close)}</dd></div>
       </dl>
       <div className="benchmark-card-actions">
-        <button className={selected ? "selected" : ""} onClick={() => onToggle(item.index_id)}>{selected ? "Selected" : "Compare"}</button>
+        <button className={selected ? "selected" : ""} disabled={blocked} onClick={() => onToggle(item.index_id)}>{selected ? "Selected" : blocked ? "Blocked" : "Compare"}</button>
         <Link className="button-link" to={`/benchmarks/${item.index_id}${window.location.search}`}><Eye size={15} />Open</Link>
         {baseline ? <span>Baseline</span> : null}
       </div>
@@ -506,8 +510,9 @@ function BenchmarkMobileCard({ item, selected, baseline, onToggle }: { item: Ben
 }
 
 function BenchmarkLeadership({ rows }: { rows: BenchmarkIndexSummary[] }) {
-  const top = [...rows].filter((item) => item.return_252d != null).sort((left, right) => (right.return_252d ?? 0) - (left.return_252d ?? 0)).slice(0, 5);
-  const risk = [...rows].filter((item) => item.volatility_252d_ann != null).sort((left, right) => (right.volatility_252d_ann ?? 0) - (left.volatility_252d_ann ?? 0)).slice(0, 5);
+  const eligible = rows.filter((item) => item.evidence?.action_eligibility !== "blocked");
+  const top = [...eligible].filter((item) => item.return_252d != null).sort((left, right) => (right.return_252d ?? 0) - (left.return_252d ?? 0)).slice(0, 5);
+  const risk = [...eligible].filter((item) => item.volatility_252d_ann != null).sort((left, right) => (right.volatility_252d_ann ?? 0) - (left.volatility_252d_ann ?? 0)).slice(0, 5);
   return (
     <section className="benchmark-two-column">
       <BenchmarkRanking title="Leadership" eyebrow="Top 1Y returns" rows={top} metric={(item) => formatPercent(item.return_252d)} />
@@ -611,12 +616,13 @@ function BenchmarkDetailHeader({ detail }: { detail: BenchmarkIndexDetail }) {
         <p className="page-subtitle">{detail.notes ?? "Benchmark metadata is available, but no provider note was stored."}</p>
         <div className="benchmarks-meta">
           <BenchmarkDataBadge item={detail} />
+          <EvidenceBadge evidence={detail.evidence} />
           <span>{proxyLabel(detail)}</span>
           <span>{detail.currency}</span>
           <span>Last price {formatDate(detail.available_price_range.last_price_date)}</span>
         </div>
       </div>
-      <Link className="button-link" to={`/benchmarks?selected=${detail.index_id}&baseline=SP500`}><BarChart3 size={16} />Compare</Link>
+      {detail.evidence?.action_eligibility === "blocked" ? <span className="button-link disabled" title="Blocked by evidence policy"><BarChart3 size={16} />Comparison unavailable</span> : <Link className="button-link" to={`/benchmarks?selected=${detail.index_id}&baseline=SP500`}><BarChart3 size={16} />Compare</Link>}
     </div>
   );
 }
@@ -626,6 +632,7 @@ function BenchmarkDetailChart({ detail, prices, normalized }: { detail: Benchmar
   return (
     <section className="card benchmark-chart-card">
       <div className="card-heading"><div><p className="eyebrow">Performance</p><h2>Price and normalized level</h2></div><span>{prices.length} observations</span></div>
+      {detail.evidence?.action_eligibility === "blocked" ? <p className="benchmark-warning">Historical values are shown for audit only. Proxy or stale evidence blocks performance interpretation.</p> : null}
       {data.length ? <div className="benchmark-comparison-chart">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
@@ -733,6 +740,7 @@ function BenchmarkConstituentPanel({ constituents, isLoading }: { constituents: 
 }
 
 function BenchmarkDataBadge({ item }: { item: BenchmarkIndexSummary }) {
+  if (item.evidence) return <EvidenceBadge evidence={item.evidence} compact />;
   const status = benchmarkFreshness(item);
   return <span className={`benchmark-data-badge ${status}`}>{freshnessLabel(status)} / {proxyLabel(item)}</span>;
 }
@@ -770,18 +778,19 @@ type MarketSnapshot = {
 };
 
 function buildMarketSnapshot(rows: BenchmarkIndexSummary[]): MarketSnapshot {
-  const withReturn = rows.filter((item) => item.return_252d != null).sort((left, right) => (left.return_252d ?? 0) - (right.return_252d ?? 0));
+  const eligible = rows.filter((item) => item.evidence?.action_eligibility !== "blocked");
+  const withReturn = eligible.filter((item) => item.return_252d != null).sort((left, right) => (left.return_252d ?? 0) - (right.return_252d ?? 0));
   const returns = withReturn.map((item) => item.return_252d as number);
   const middle = Math.floor(returns.length / 2);
   const medianReturn = !returns.length ? null : returns.length % 2 ? returns[middle] : (returns[middle - 1] + returns[middle]) / 2;
-  const withVol = rows.filter((item) => item.volatility_252d_ann != null).sort((left, right) => (right.volatility_252d_ann ?? 0) - (left.volatility_252d_ann ?? 0));
+  const withVol = eligible.filter((item) => item.volatility_252d_ann != null).sort((left, right) => (right.volatility_252d_ann ?? 0) - (left.volatility_252d_ann ?? 0));
   return {
     total: rows.length,
     best: withReturn.at(-1) ?? null,
     worst: withReturn[0] ?? null,
     medianReturn,
     returnCount: returns.length,
-    freshCount: rows.filter((item) => benchmarkFreshness(item) === "fresh").length,
+    freshCount: eligible.length,
     proxyCount: rows.filter(isProxyBenchmark).length,
     highestVol: withVol[0] ?? null,
     latestMetricDate: rows.map((item) => item.latest_metric_date).filter((value): value is string => Boolean(value)).sort().at(-1) ?? null,

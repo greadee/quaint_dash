@@ -21,7 +21,7 @@ import {
   type MetricDefinition,
 } from "../comparisonUtils";
 import { money, percent } from "./routeFormatters";
-import { ChartFrame, ChartTypeToggle, EmptyRow, ErrorPanel, HelpDisclosure, MetricLine } from "./routeShared";
+import { ChartFrame, ChartTypeToggle, EmptyRow, ErrorPanel, EvidenceBadge, HelpDisclosure, MetricLine } from "./routeShared";
 import type { HelpItem } from "./routeTypes";
 import { BenchmarkPicker, TickerPicker } from "./routePickers";
 import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar } from "../pageFeatureStore";
@@ -117,7 +117,14 @@ export function ComparePage() {
     updateState({ symbols });
   };
   const data = comparison.data;
-  const reference = data?.assets.find((asset) => asset.symbol === state.reference) ?? data?.assets[0] ?? null;
+  const automaticBenchmark = benchmarkAssociations.data?.associations.find((item) => item.role === "core" && item.benchmark_index_id === state.benchmark);
+  const benchmarkReason = automaticBenchmark
+    ? `Automatically selected from the primary asset association: ${automaticBenchmark.reason}`
+    : data?.benchmark_selection_reason;
+  const requestedReference = data?.assets.find((asset) => asset.symbol === state.reference) ?? null;
+  const reference = requestedReference?.evidence?.action_eligibility !== "blocked"
+    ? requestedReference
+    : data?.assets.find((asset) => asset.evidence?.action_eligibility !== "blocked") ?? requestedReference ?? data?.assets[0] ?? null;
   const chartRows = useMemo(() => buildChartRows(data?.historical_series ?? [], hiddenSeries), [data?.historical_series, hiddenSeries]);
   const metricsBySymbol = useMemo(() => Object.fromEntries((data?.historical_series ?? []).map((series) => [series.symbol, calculateSeriesMetrics(series)])), [data?.historical_series]);
   return <div className="page">
@@ -137,7 +144,7 @@ export function ComparePage() {
         <label>Mode<select value={state.mode} onChange={(event) => updateState({ mode: event.target.value as ComparisonMode })}>{comparisonModes.map((item) => <option key={item} value={item}>{item.replace(/-/g, " ")}</option>)}</select></label>
         <label>Currency<select value={state.currency} onChange={(event) => updateState({ currency: event.target.value as ComparisonState["currency"] })}><option value="native">Native</option><option value="USD">USD display</option><option value="CAD">CAD display</option></select></label>
         <label>Reference<select value={state.reference} onChange={(event) => updateState({ reference: event.target.value })}>{state.symbols.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
-        <label>View<select value={state.differenceMode} onChange={(event) => updateState({ differenceMode: event.target.value as DifferenceMode })}><option value="absolute">Absolute</option><option value="difference">Difference</option><option value="percent-difference">Percent difference</option><option value="rank">Rank</option><option value="percentile">Percentile</option></select></label>
+        <label>View<select value={state.differenceMode} disabled={state.symbols.length < 2} title={state.symbols.length < 2 ? "Add another asset to enable comparison modes" : undefined} onChange={(event) => updateState({ differenceMode: event.target.value as DifferenceMode })}><option value="absolute">Absolute</option><option value="difference">Difference</option><option value="percent-difference">Percent difference</option><option value="rank">Rank</option><option value="percentile">Percentile</option></select></label>
         <label>Section<select value={state.section} onChange={(event) => updateState({ section: event.target.value as ComparisonState["section"] })}><option value="performance">Performance</option><option value="business-strength">Business Strength</option><option value="valuation">Valuation</option><option value="growth">Growth</option><option value="quality">Quality</option><option value="balance-sheet">Balance sheet</option><option value="capital-allocation">Capital allocation</option><option value="methodology">Methodology</option></select></label>
       </div>
       <BenchmarkPicker value={state.benchmark} onChange={(value) => updateState({ benchmark: value })} associations={benchmarkAssociations.data?.associations} />
@@ -154,8 +161,10 @@ export function ComparePage() {
         {[assetWarning, ...parsed.warnings, ...(data?.coverage.warnings ?? [])].filter(Boolean).map((item) => <p key={item}>{item}</p>)}
       </div>
     </section>
-    {state.symbols.length < 2 ? <section className="card compare-empty"><EmptyRow text="Add at least two comparable assets to show aligned performance, metric differences, and reference modes. The URL updates as you build the comparison." /></section> : null}
+    {state.symbols.length === 1 ? <section className="card compare-empty"><div><strong>Single-asset context mode</strong><p>Add another asset for winners, ranks, and differences. The current view shows history and any selected benchmark context only; it is not a comparison result.</p></div></section> : null}
     {state.section === "business-strength" ? <BusinessStrengthComparison data={businessStrength.data?.assets ?? []} commonMetricCodes={businessStrength.data?.common_metric_codes ?? []} loading={businessStrength.isLoading} error={businessStrength.error} warning={businessStrength.data?.warning ?? null} sortKey={businessStrengthSort} onSort={setBusinessStrengthSort} mode={businessStrengthMode} onMode={setBusinessStrengthMode} /> : comparison.error ? <ErrorPanel error={comparison.error} /> : comparison.isLoading ? <CompareSkeleton /> : data ? <>
+      {benchmarkReason ? <div className="status-banner warning"><strong>Benchmark context</strong><span>{benchmarkReason} Confirm or change it in the benchmark control before interpreting relative results.</span></div> : null}
+      {requestedReference && reference && requestedReference.symbol !== reference.symbol ? <div className="status-banner danger"><strong>Reference changed for display</strong><span>{requestedReference.symbol} is not decision eligible, so it cannot be the default winner/reference while an eligible series exists.</span></div> : null}
       {showAssetStrip ? <LayoutWidget pageId="compare" widgetId="compare.assetStrip"><section className="compare-asset-strip">
         {data.assets.map((asset) => <CompareAssetSummary key={asset.asset_id} asset={asset} freshness={data.freshness[asset.symbol]} reference={asset.symbol === reference?.symbol} />)}
       </section></LayoutWidget> : null}
@@ -180,17 +189,17 @@ export function ComparePage() {
           </ResponsiveContainer>
         </div> : <EmptyRow text="No aligned stored price history is available for the selected assets and period." />}
         <div className="compare-series-toggles">
-          {data.historical_series.map((series) => <button key={series.symbol} className={hiddenSeries.includes(series.symbol) ? "" : "selected"} onClick={() => setHiddenSeries((current) => current.includes(series.symbol) ? current.filter((item) => item !== series.symbol) : [...current, series.symbol])}>{series.symbol}</button>)}
+          {data.historical_series.map((series) => <button key={series.symbol} className={hiddenSeries.includes(series.symbol) ? "" : "selected"} onClick={() => setHiddenSeries((current) => current.includes(series.symbol) ? current.filter((item) => item !== series.symbol) : [...current, series.symbol])}>{series.symbol} · {series.evidence?.freshness_state ?? "unknown"}</button>)}
         </div>
         {showChartTable ? <LayoutWidget pageId="compare" widgetId="compare.chartTable"><ComparisonChartTable series={data.historical_series} /></LayoutWidget> : null}
       </ChartFrame>
-      <ComparisonMetricSection title="Key performance and risk metrics" section="performance" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} />
-      {showValuation ? <LayoutWidget pageId="compare" widgetId="compare.valuation"><ComparisonMetricSection title="Valuation" section="valuation" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} /></LayoutWidget> : null}
-      {showGrowth ? <LayoutWidget pageId="compare" widgetId="compare.growth"><ComparisonMetricSection title="Growth" section="growth" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} /></LayoutWidget> : null}
-      {showQuality ? <LayoutWidget pageId="compare" widgetId="compare.quality"><ComparisonMetricSection title="Quality and profitability" section="quality" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} /></LayoutWidget> : null}
-      {showBalanceSheet ? <LayoutWidget pageId="compare" widgetId="compare.balanceSheet"><ComparisonMetricSection title="Balance sheet and risk" section="balance-sheet" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} /></LayoutWidget> : null}
-      {showCapitalAllocation ? <LayoutWidget pageId="compare" widgetId="compare.capitalAllocation"><ComparisonMetricSection title="Capital allocation" section="capital-allocation" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} /></LayoutWidget> : null}
-      {showForwardScenarios ? <LayoutWidget pageId="compare" widgetId="compare.forwardScenarios"><ComparisonForwardScenarios assets={data.assets} seriesMetrics={metricsBySymbol} /></LayoutWidget> : null}
+      {!data.single_asset_mode ? <ComparisonMetricSection title="Key performance and risk metrics" section="performance" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} /> : null}
+      {showValuation && !data.single_asset_mode ? <LayoutWidget pageId="compare" widgetId="compare.valuation"><ComparisonMetricSection title="Valuation" section="valuation" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} /></LayoutWidget> : null}
+      {showGrowth && !data.single_asset_mode ? <LayoutWidget pageId="compare" widgetId="compare.growth"><ComparisonMetricSection title="Growth" section="growth" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} /></LayoutWidget> : null}
+      {showQuality && !data.single_asset_mode ? <LayoutWidget pageId="compare" widgetId="compare.quality"><ComparisonMetricSection title="Quality and profitability" section="quality" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} /></LayoutWidget> : null}
+      {showBalanceSheet && !data.single_asset_mode ? <LayoutWidget pageId="compare" widgetId="compare.balanceSheet"><ComparisonMetricSection title="Balance sheet and risk" section="balance-sheet" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} /></LayoutWidget> : null}
+      {showCapitalAllocation && !data.single_asset_mode ? <LayoutWidget pageId="compare" widgetId="compare.capitalAllocation"><ComparisonMetricSection title="Capital allocation" section="capital-allocation" assets={data.assets} registry={registry} seriesMetrics={metricsBySymbol} reference={reference} mode={state.differenceMode} /></LayoutWidget> : null}
+      {showForwardScenarios && !data.single_asset_mode ? <LayoutWidget pageId="compare" widgetId="compare.forwardScenarios"><ComparisonForwardScenarios assets={data.assets} seriesMetrics={metricsBySymbol} /></LayoutWidget> : null}
       {showMethodology ? <LayoutWidget pageId="compare" widgetId="compare.methodology"><ComparisonMethodology data={data} registry={registry} /></LayoutWidget> : null}
     </> : null}
   </div>;
@@ -221,7 +230,10 @@ function BusinessStrengthComparison({
   if (loading) return <CompareSkeleton />;
   if (!data.length) return <section className="card compare-empty"><EmptyRow text="Add at least two supported operating-company assets to compare deterministic Business Strength scorecards." /></section>;
   const categories = [...new Set(data.flatMap((asset) => asset.category_scores.map((item) => item.category_code)))];
-  const sorted = [...data].sort((left, right) => scoreForSort(right, sortKey) - scoreForSort(left, sortKey));
+  const sorted = [...data].sort((left, right) => {
+    const eligibility = Number(left.evidence?.action_eligibility === "blocked") - Number(right.evidence?.action_eligibility === "blocked");
+    return eligibility || scoreForSort(right, sortKey) - scoreForSort(left, sortKey);
+  });
   return <section className="card compare-section business-strength-compare">
     <div className="card-heading">
       <div><p className="eyebrow">Business Strength</p><h2>Side-by-side scorecard</h2></div>
@@ -233,7 +245,7 @@ function BusinessStrengthComparison({
     {warning ? <p className="compare-warning">{warning}</p> : null}
     <div className="comparison-matrix wide" role="region" aria-label="Business Strength comparison table">
       <table>
-        <thead><tr><th scope="col">Score</th>{sorted.map((asset) => <th scope="col" key={asset.symbol}>{asset.symbol}<span>{asset.template_name}</span></th>)}</tr></thead>
+        <thead><tr><th scope="col">Score</th>{sorted.map((asset) => <th scope="col" key={asset.symbol}>{asset.symbol}<span>{asset.template_name}</span><EvidenceBadge evidence={asset.evidence} compact /></th>)}</tr></thead>
         <tbody>
           <tr><th scope="row">Overall</th>{sorted.map((asset) => <td key={`${asset.symbol}-overall`}><strong>{scoreText(asset.overall_score)}</strong><span>{asset.classification}</span></td>)}</tr>
           <tr><th scope="row">Easy-hold</th>{sorted.map((asset) => <td key={`${asset.symbol}-easy`}>{scoreText(asset.easy_hold_score)}<span>{asset.easy_hold_label}</span></td>)}</tr>
@@ -279,7 +291,8 @@ function metricLabel(asset: BusinessStrengthScorecard, code: string) {
 }
 
 function bestWorstClass(assets: BusinessStrengthScorecard[], code: string, asset: BusinessStrengthScorecard) {
-  const values = assets.map((item) => item.category_scores.find((category) => category.category_code === code)?.adjusted_score ?? null).filter((value): value is number => value != null);
+  if (asset.evidence?.action_eligibility === "blocked") return "";
+  const values = assets.filter((item) => item.evidence?.action_eligibility !== "blocked").map((item) => item.category_scores.find((category) => category.category_code === code)?.adjusted_score ?? null).filter((value): value is number => value != null);
   const value = asset.category_scores.find((category) => category.category_code === code)?.adjusted_score;
   if (value == null || values.length < 2) return "";
   if (value === Math.max(...values)) return "best-cell";
@@ -313,7 +326,8 @@ function CompareAssetSummary({ asset, freshness, reference }: { asset: Compariso
       <div><dt>Sector</dt><dd>{asset.sector ?? "N/A"}</dd></div>
       <div><dt>Price date</dt><dd>{freshness?.latest_price_date ? new Date(freshness.latest_price_date).toLocaleDateString() : "N/A"}</dd></div>
     </dl>
-    {freshness?.stale ? <p className="compare-warning">{freshness.stale_reason}</p> : null}
+    <EvidenceBadge evidence={asset.evidence} />
+    {asset.evidence?.action_eligibility === "blocked" ? <p className="compare-warning">Values remain visible for audit but cannot be the default winner or reference.</p> : freshness?.stale ? <p className="compare-warning">{freshness.stale_reason}</p> : null}
   </article>;
 }
 

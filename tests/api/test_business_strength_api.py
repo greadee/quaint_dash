@@ -17,6 +17,8 @@ def test_business_strength_asset_and_compare_endpoints(tmp_path):
     with TestClient(app) as client:
         asset = client.get("/api/v1/assets/NVDA/business-strength")
         assert asset.status_code == 200
+        assert asset.json()["evidence"]["source_kind"] == "inferred"
+        assert asset.json()["evidence"]["action_eligibility"] in {"caution", "blocked"}
         payload = asset.json()
         assert payload["template_code"] == "semiconductor_designer"
         assert payload["category_scores"]
@@ -27,7 +29,9 @@ def test_business_strength_asset_and_compare_endpoints(tmp_path):
         assert catalog_alias.json()["asset_id"] == "WCN.TO"
         assert catalog_alias.json()["template_code"] == "waste_management"
 
-        compare = client.post("/api/v1/compare/business-strength", json={"symbols": ["NVDA", "TSM"]})
+        compare = client.post(
+            "/api/v1/compare/business-strength", json={"symbols": ["NVDA", "TSM"]}
+        )
         assert compare.status_code == 200
         comparison = compare.json()
         assert comparison["mixed_templates"] is True

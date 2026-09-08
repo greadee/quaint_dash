@@ -104,4 +104,11 @@ describe("NewsTerminalPage", () => {
 
     expect(apiMock.refreshNews).toHaveBeenCalled();
   });
+
+  it("labels example fixture stories and does not expose a production source link", async () => {
+    renderNews();
+
+    expect(await screen.findByText(/Sample or fixture story/i)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Original source/i })).not.toBeInTheDocument();
+  });
 });

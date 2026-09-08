@@ -1,6 +1,9 @@
+from datetime import date
+
 from fastapi.testclient import TestClient
 
 from dashboard.api.app import create_app
+from dashboard.api.evidence_adapters import present_signals_summary
 from dashboard.api.services import PortfolioApiService
 from dashboard.db.db_conn import DB
 
@@ -60,6 +63,54 @@ def test_signals_summary_exposes_distinct_strength_confidence_and_priority(tmp_p
     assert item["supporting_evidence"]
     assert item["affected_portfolios"][0]["portfolio_name"] == "Core"
     assert item["historical_efficacy"]["sample_size"] == 0
+    assert item["evidence"]["freshness_state"] == "current"
+    assert item["evidence"]["action_eligibility"] == "caution"
+
+
+def test_stale_signals_are_removed_from_actionable_summary_panels(tmp_path):
+    db_path = tmp_path / "signals-stale.db"
+    create_app(db_path)
+    db = DB(db_path)
+    _seed_signal_assets(db)
+    service = PortfolioApiService(db.conn)
+    summary = service.signals_summary(
+        q=None,
+        portfolio_id=None,
+        owned=None,
+        category=None,
+        direction=None,
+        status=None,
+        min_strength=None,
+        min_confidence=None,
+        min_priority=None,
+        sector=None,
+        industry=None,
+        freshness=None,
+        completeness=None,
+        triggered_after=None,
+        triggered_before=None,
+        include_retail_sentiment=False,
+        sort="priority",
+        limit=1,
+        offset=0,
+    )
+    stale = summary.items[0].model_copy(update={"data_as_of": date(2020, 1, 1)})
+    presented = present_signals_summary(
+        summary.model_copy(
+            update={
+                "items": [stale],
+                "needs_attention": [stale],
+                "top_opportunities": [stale],
+            }
+        )
+    )
+    db.conn.close()
+
+    assert presented.items[0].evidence.freshness_state == "stale"
+    assert presented.items[0].evidence.action_eligibility == "blocked"
+    assert presented.needs_attention == []
+    assert presented.top_opportunities == []
+    assert any(metric.label == "Older (31d+) or incomplete" for metric in presented.metrics)
 
 
 def test_signals_summary_excludes_etfs_and_etf_like_assets(tmp_path):
@@ -109,8 +160,12 @@ def test_signal_detail_user_state_alert_and_idempotent_persistence(tmp_path):
         second = client.get("/api/v1/signals?limit=1")
         signal_id = first.json()["items"][0]["signal_id"]
         detail = client.get(f"/api/v1/signals/{signal_id}")
-        state = client.put(f"/api/v1/signals/{signal_id}/user-state", json={"reviewed": True, "note": "checked"})
-        alert = client.post(f"/api/v1/signals/{signal_id}/alerts", json={"condition": "status_active"})
+        state = client.put(
+            f"/api/v1/signals/{signal_id}/user-state", json={"reviewed": True, "note": "checked"}
+        )
+        alert = client.post(
+            f"/api/v1/signals/{signal_id}/alerts", json={"condition": "status_active"}
+        )
 
     assert first.status_code == 200
     assert second.status_code == 200
@@ -207,9 +262,7 @@ def test_signal_snapshots_bound_summary_and_detail_queries(tmp_path):
     service = PortfolioApiService(db.conn)
     refresh = service.refresh_signal_snapshots(include_retail_sentiment=False)
     assert refresh.refreshed_count >= 5
-    repeated_refresh = service.refresh_signal_snapshots(
-        include_retail_sentiment=False
-    )
+    repeated_refresh = service.refresh_signal_snapshots(include_retail_sentiment=False)
     assert repeated_refresh.refreshed_count == refresh.refreshed_count
 
     counting = _CountingConnection(db.conn)

@@ -1,6 +1,7 @@
 import { ChartFrame as SharedChartFrame, SegmentedControl } from "@prool-ui/react";
 import { AlertTriangle, ArrowLeft, ArrowRight, BarChart3, Info, LineChart, RefreshCw, SearchX } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
+import type { EvidenceDisplay } from "../api";
 import type { HelpItem } from "./routeTypes";
 
 export function HelpDisclosure({ title, items, note }: { title: string; items: HelpItem[]; note?: string }) {
@@ -40,6 +41,22 @@ export function ErrorPanel({ error }: { error: Error }) {
 
 export function EmptyRow({ text }: { text: string }) {
   return <div className="empty-row"><SearchX size={18} /><span>{text}</span></div>;
+}
+
+export function EvidenceBadge({ evidence, compact = false }: { evidence?: EvidenceDisplay | null; compact?: boolean }) {
+  if (!evidence) return <span className="evidence-badge unknown">Evidence unknown</span>;
+  const state = evidence.action_eligibility;
+  const label = evidence.source_kind === "fixture"
+    ? "Sample only"
+    : state === "blocked"
+      ? `Not decision eligible · ${evidence.freshness_state}`
+      : `${evidence.freshness_state} · ${state}`;
+  const title = [
+    evidence.source_name ? `Source: ${evidence.source_name}` : "Source unavailable",
+    evidence.observed_at ? `Observed: ${new Date(evidence.observed_at).toLocaleString()}` : "Observation time unavailable",
+    evidence.coverage_state !== "complete" ? `Coverage: ${evidence.coverage_state}` : "",
+  ].filter(Boolean).join(". ");
+  return <span className={`evidence-badge ${state} ${compact ? "compact" : ""}`} title={title}>{label}</span>;
 }
 
 export function MetricLine({ label, value }: { label: string; value: string }) {

@@ -23,7 +23,7 @@ FRESHNESS_STATES = frozenset({"current", "warning", "stale", "blocked", "unknown
 COVERAGE_STATES = frozenset({"complete", "partial", "missing", "unsupported", "unknown"})
 ACTION_ELIGIBILITY_STATES = frozenset({"eligible", "caution", "blocked"})
 EVIDENCE_TYPES = frozenset(
-    {"price", "news", "financial_statement", "benchmark", "monthly_signal"}
+    {"price", "news", "financial_statement", "benchmark", "monthly_signal", "retail_sentiment"}
 )
 
 
@@ -41,13 +41,16 @@ class FreshnessWindow:
             raise ValueError("warning_for must be greater than current_for")
 
 
-EVIDENCE_FRESHNESS_POLICIES: Mapping[str, FreshnessWindow] = MappingProxyType({
-    "price": FreshnessWindow(timedelta(hours=36), timedelta(hours=96)),
-    "news": FreshnessWindow(timedelta(hours=24), timedelta(hours=72)),
-    "financial_statement": FreshnessWindow(timedelta(days=150), timedelta(days=240)),
-    "benchmark": FreshnessWindow(timedelta(hours=36), timedelta(hours=96)),
-    "monthly_signal": FreshnessWindow(timedelta(days=45), timedelta(days=75)),
-})
+EVIDENCE_FRESHNESS_POLICIES: Mapping[str, FreshnessWindow] = MappingProxyType(
+    {
+        "price": FreshnessWindow(timedelta(hours=36), timedelta(hours=96)),
+        "news": FreshnessWindow(timedelta(hours=24), timedelta(hours=72)),
+        "financial_statement": FreshnessWindow(timedelta(days=150), timedelta(days=240)),
+        "benchmark": FreshnessWindow(timedelta(hours=36), timedelta(hours=96)),
+        "monthly_signal": FreshnessWindow(timedelta(days=45), timedelta(days=75)),
+        "retail_sentiment": FreshnessWindow(timedelta(hours=36), timedelta(hours=96)),
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -78,8 +81,7 @@ class EvidencePolicyInput:
         ):
             raise ValueError("confidence must be between 0 and 1")
         if self.effectiveness_sample_size is not None and (
-            isinstance(self.effectiveness_sample_size, bool)
-            or self.effectiveness_sample_size < 0
+            isinstance(self.effectiveness_sample_size, bool) or self.effectiveness_sample_size < 0
         ):
             raise ValueError("effectiveness_sample_size must be non-negative")
 
@@ -128,8 +130,7 @@ class EvidenceDisplayState:
         ):
             raise ValueError("confidence must be between 0 and 1")
         if self.effectiveness_sample_size is not None and (
-            isinstance(self.effectiveness_sample_size, bool)
-            or self.effectiveness_sample_size < 0
+            isinstance(self.effectiveness_sample_size, bool) or self.effectiveness_sample_size < 0
         ):
             raise ValueError("effectiveness_sample_size must be non-negative")
         for timestamp in (self.observed_at, self.retrieved_at):
@@ -311,7 +312,11 @@ def _utc_observation(value: date | datetime | None) -> datetime | None:
 
 def _utc_datetime(value: datetime) -> datetime:
     # DuckDB stores these timestamps as UTC-naive values.
-    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+    return (
+        value.replace(tzinfo=timezone.utc)
+        if value.tzinfo is None
+        else value.astimezone(timezone.utc)
+    )
 
 
 def _validate_public_label(name: str, value: str | None) -> None:

@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
-import { type BenchmarkAssociation, type BenchmarkDefaultResponse } from "../api";
+import { type BenchmarkAssociation, type BenchmarkDefaultResponse, type EvidenceDisplay } from "../api";
 import { money, num, number, percent } from "./routeFormatters";
 import { BenchmarkPicker } from "./routePickers";
-import { HelpDisclosure, Loading, MetricLine, Signal } from "./routeShared";
+import { EvidenceBadge, HelpDisclosure, Loading, MetricLine, Signal } from "./routeShared";
 import type { HelpItem } from "./routeTypes";
 
 const portfolioAnalyticsHelp: HelpItem[] = [
@@ -162,6 +162,10 @@ export function AssetAnalyticsPanel({
   const dividendInputs = record(dividend?.inputs_used);
   const dcfScenarios = arrayOfRecords(valuation?.dcf_scenarios);
   const aiContext = record(payload?.ai_context);
+  const priceEvidence = payload?.price_evidence as EvidenceDisplay | undefined;
+  const fundamentalEvidence = (payload?.fundamental_evidence ?? payload?.evidence) as EvidenceDisplay | undefined;
+  const fundamentalsBlocked = fundamentalEvidence?.action_eligibility === "blocked";
+  const auditValue = (value: string) => fundamentalsBlocked ? `Audit only · ${value}` : value;
   const anomalies = arrayOfRecords(aiContext?.anomalies);
   const healthItems: DataHealthItem[] = [
     {
@@ -198,6 +202,8 @@ export function AssetAnalyticsPanel({
     </div>
     {isLoading ? <Loading compact /> : (
       <div className="analytics-stack">
+        <div className={`status-banner ${fundamentalsBlocked ? "danger" : "warning"}`}><EvidenceBadge evidence={fundamentalEvidence} /><span>{fundamentalsBlocked ? "Missing, stale, or non-production financial evidence blocks decision use. Existing outputs remain visible for calculation audit." : "Valuation outputs are inferred from stored financial statements."}</span></div>
+        <div className={`status-banner ${priceEvidence?.action_eligibility === "blocked" ? "danger" : "warning"}`}><EvidenceBadge evidence={priceEvidence} /><span>Historical risk and return metrics use this stored price evidence.</span></div>
         <div className="signal-grid deep">
           <Signal label="Historical CAGR" value={percent(num(risk?.cagr))} />
           <Signal label="Volatility" value={percent(num(risk?.annualized_volatility))} />
@@ -206,7 +212,7 @@ export function AssetAnalyticsPanel({
           <Signal label="Max drawdown" value={percent(num(risk?.max_drawdown))} />
           <Signal label="Beta" value={number(num(relative?.beta))} />
           <Signal label="P/E" value={number(num(valuation?.pe_ratio))} />
-          <Signal label="Blended CAGR" value={percent(num(forecast?.blended_expected_cagr))} />
+          <Signal label="Blended CAGR" value={auditValue(percent(num(forecast?.blended_expected_cagr)))} />
         </div>
         <div className="analytics-detail-grid">
           <AnalyticsBlock title="Risk profile">
@@ -216,10 +222,10 @@ export function AssetAnalyticsPanel({
             <MetricLine label="Correlation" value={number(num(relative?.correlation), 2)} />
           </AnalyticsBlock>
           <AnalyticsBlock title="Valuation">
-            <MetricLine label="DCF fair value" value={money(num(dcf?.intrinsic_value_per_share))} />
-            <MetricLine label="DCF safety" value={percent(num(dcf?.margin_of_safety))} />
-            <MetricLine label="DDM fair value" value={money(num(dividend?.intrinsic_value_per_share))} />
-            <MetricLine label="P/FCF" value={number(num(valuation?.price_to_free_cash_flow))} />
+            <MetricLine label="DCF fair value" value={auditValue(money(num(dcf?.intrinsic_value_per_share)))} />
+            <MetricLine label="DCF safety" value={auditValue(percent(num(dcf?.margin_of_safety)))} />
+            <MetricLine label="DDM fair value" value={auditValue(money(num(dividend?.intrinsic_value_per_share)))} />
+            <MetricLine label="P/FCF" value={auditValue(number(num(valuation?.price_to_free_cash_flow)))} />
           </AnalyticsBlock>
           <AnalyticsBlock title="Quality">
             <MetricLine label="Gross margin" value={percent(num(valuation?.gross_margin))} />
@@ -228,10 +234,10 @@ export function AssetAnalyticsPanel({
             <MetricLine label="Debt/equity" value={number(num(valuation?.debt_to_equity))} />
           </AnalyticsBlock>
           <AnalyticsBlock title="Forecast band">
-            <MetricLine label="5y median" value={money(num(simulation?.p50_value))} />
-            <MetricLine label="10th percentile" value={money(num(simulation?.p10_value))} />
-            <MetricLine label="90th percentile" value={money(num(simulation?.p90_value))} />
-            <MetricLine label="Expected value" value={money(num(simulation?.expected_value))} />
+            <MetricLine label="5y median" value={auditValue(money(num(simulation?.p50_value)))} />
+            <MetricLine label="10th percentile" value={auditValue(money(num(simulation?.p10_value)))} />
+            <MetricLine label="90th percentile" value={auditValue(money(num(simulation?.p90_value)))} />
+            <MetricLine label="Expected value" value={auditValue(money(num(simulation?.expected_value)))} />
           </AnalyticsBlock>
         </div>
         <div className="model-grid">
@@ -242,20 +248,20 @@ export function AssetAnalyticsPanel({
             <MetricLine label="Terminal growth" value={percent(num(dcfInputs?.terminal_growth_rate))} />
           </AnalyticsBlock>
           <AnalyticsBlock title="Dividend model">
-            <MetricLine label="DDM fair value" value={money(num(dividend?.intrinsic_value_per_share))} />
+            <MetricLine label="DDM fair value" value={auditValue(money(num(dividend?.intrinsic_value_per_share)))} />
             <MetricLine label="Annual dividend" value={money(num(dividendInputs?.annual_dividend))} />
-            <MetricLine label="Implied growth" value={percent(num(dividend?.implied_growth_rate))} />
-            <MetricLine label="Dividend growth" value={percent(num(forecast?.dividend_growth_projection))} />
+            <MetricLine label="Implied growth" value={auditValue(percent(num(dividend?.implied_growth_rate)))} />
+            <MetricLine label="Dividend growth" value={auditValue(percent(num(forecast?.dividend_growth_projection)))} />
           </AnalyticsBlock>
           <AnalyticsBlock title="Monte Carlo projection">
-            <MetricLine label="Expected CAGR" value={percent(num(simulation?.expected_cagr))} />
-            <MetricLine label="Bear CAGR" value={percent(num(simulation?.p10_cagr))} />
-            <MetricLine label="Median CAGR" value={percent(num(simulation?.p50_cagr))} />
-            <MetricLine label="Bull CAGR" value={percent(num(simulation?.p90_cagr))} />
+            <MetricLine label="Expected CAGR" value={auditValue(percent(num(simulation?.expected_cagr)))} />
+            <MetricLine label="Bear CAGR" value={auditValue(percent(num(simulation?.p10_cagr)))} />
+            <MetricLine label="Median CAGR" value={auditValue(percent(num(simulation?.p50_cagr)))} />
+            <MetricLine label="Bull CAGR" value={auditValue(percent(num(simulation?.p90_cagr)))} />
           </AnalyticsBlock>
         </div>
         <DataHealthPanel items={healthItems} />
-        {dcfScenarios.length ? <div className="model-table"><table><thead><tr><th>DCF scenario</th><th>Fair value</th><th>Margin</th><th>Growth</th><th>Discount</th><th>Terminal</th></tr></thead><tbody>{dcfScenarios.map((item) => <tr key={String(item.scenario_name)}><td>{String(item.scenario_name)}</td><td>{money(num(item.intrinsic_value_per_share))}</td><td>{percent(num(item.margin_of_safety))}</td><td>{percent(num(item.growth_rate))}</td><td>{percent(num(item.discount_rate))}</td><td>{percent(num(item.terminal_growth_rate))}</td></tr>)}</tbody></table></div> : null}
+        {dcfScenarios.length ? <div className="model-table"><table><thead><tr><th>DCF scenario</th><th>Fair value</th><th>Margin</th><th>Growth</th><th>Discount</th><th>Terminal</th></tr></thead><tbody>{dcfScenarios.map((item) => <tr key={String(item.scenario_name)}><td>{String(item.scenario_name)}</td><td>{auditValue(money(num(item.intrinsic_value_per_share)))}</td><td>{auditValue(percent(num(item.margin_of_safety)))}</td><td>{percent(num(item.growth_rate))}</td><td>{percent(num(item.discount_rate))}</td><td>{percent(num(item.terminal_growth_rate))}</td></tr>)}</tbody></table></div> : null}
         {anomalies.length ? <InsightList items={anomalies.map((item) => `${String(item.severity).toUpperCase()}: ${String(item.message)}`)} /> : null}
       </div>
     )}
