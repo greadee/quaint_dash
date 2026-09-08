@@ -26,13 +26,13 @@ const apiMock = vi.hoisted(() => ({
 
 vi.mock("../api", () => ({ api: apiMock }));
 
-function renderBrokers() {
+function renderBrokers(route = "/brokers") {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[route]}>
         <BrokersPage notify={vi.fn()} />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -211,5 +211,74 @@ describe("BrokersPage", () => {
     fireEvent.click(refreshButtons[0]);
 
     await waitFor(() => expect(apiMock.brokerSync).toHaveBeenCalledWith("connor-local"));
+  });
+
+  it("renders only normalized instrument identity in reconciliation views", async () => {
+    apiMock.portfolios.mockResolvedValue([]);
+    apiMock.brokerStatus.mockResolvedValue({
+      provider: "snaptrade", configured: true, broker_profile_ready: true, broker_profile_status: "active",
+      broker_profile_key: "connor-local", raw_payload_storage_enabled: true, scheduled_refresh_enabled: false,
+      freshness_window_hours: 1, max_users_per_run: null, last_refresh_at: "2026-06-20T12:00:00",
+      last_successful_refresh_at: "2026-06-20T12:00:00", last_scheduled_run_at: null,
+      next_eligible_refresh_at: null, provider_message: null,
+    });
+    apiMock.brokerConnections.mockResolvedValue([{
+      provider: "snaptrade", connection_id: 1, provider_connection_id: "conn-1", institution_name: "Demo Brokerage",
+      status: "ACTIVE", account_count: 1, last_attempted_refresh_at: "2026-06-20T12:00:00",
+      last_successful_refresh_at: "2026-06-20T12:00:00", last_error: null,
+    }]);
+    apiMock.brokerAccounts.mockResolvedValue([{
+      provider: "snaptrade", provider_account_id: "acct-1", provider_connection_id: "conn-1",
+      masked_account_number: "****1234", account_name: "TFSA", account_type: "investment", currency: "USD",
+      balance: 450, cash_balance: 0, holdings_value: 450, total_value: 450, position_count: 1,
+      latest_position_date: "2026-06-20", portfolio_id: null, portfolio_name: null, available_transaction_count: 1,
+      imported_transaction_count: 0, unsupported_transaction_count: 0, latest_activity_date: "2026-06-20",
+      last_imported_at: null, updated_at: "2026-06-20T12:00:00",
+    }]);
+    const instrument = {
+      symbol: "AAPL", name: "Apple Inc.", exchange: "NASDAQ", currency: "USD", local_asset_id: null,
+      resolution_status: "unresolved" as const, display_label: "AAPL - Apple Inc.",
+    };
+    apiMock.brokerImportPreview.mockResolvedValue({
+      generated_at: "2026-06-20T12:00:00", total_transactions: 1, ready_count: 0, already_imported_count: 0,
+      unsupported_count: 0, needs_review_count: 0, unresolved_asset_count: 1, failed_validation_count: 0,
+      date_start: "2026-06-20", date_end: "2026-06-20", groups: [{
+        institution_name: "Demo Brokerage", account_name: "TFSA", masked_account_number: "****1234",
+        portfolio_id: null, portfolio_name: null, ready_count: 0, already_imported_count: 0, unsupported_count: 0,
+        needs_review_count: 0, unresolved_asset_count: 1, failed_validation_count: 0,
+        category_counts: { buys: 1 }, items: [{
+          provider_transaction_id: "txn-1", institution_name: "Demo Brokerage", account_name: "TFSA",
+          masked_account_number: "****1234", portfolio_id: null, portfolio_name: null, trade_date: "2026-06-20",
+          source_type: "buy", category: "buys", status: "unresolved_asset", symbol: "AAPL", quantity: 1,
+          price: 150, amount: 150, currency: "USD", normalization_result: "asset mapping required", instrument,
+        }],
+      }],
+    });
+    apiMock.brokerReconciliation.mockResolvedValue({
+      generated_at: "2026-06-20T12:00:00", items: [{
+        institution_name: "Demo Brokerage", account_name: "TFSA", masked_account_number: "****1234", ticker: "AAPL",
+        asset_id: null, broker_quantity: 3, local_quantity: null, quantity_difference: null, broker_market_value: 450,
+        local_market_value: null, value_difference: null, currency: "USD", broker_data_timestamp: "2026-06-20",
+        local_ledger_timestamp: null, status: "unresolved_asset", instrument,
+      }, {
+        institution_name: "Demo Brokerage", account_name: "TFSA", masked_account_number: "****1234", ticker: null,
+        asset_id: null, broker_quantity: 1, local_quantity: null, quantity_difference: null, broker_market_value: null,
+        local_market_value: null, value_difference: null, currency: null, broker_data_timestamp: "2026-06-20",
+        local_ledger_timestamp: null, status: "unresolved_asset", instrument: {
+          symbol: null, name: null, exchange: null, currency: null, local_asset_id: null,
+          resolution_status: "unsupported", display_label: "Unsupported broker instrument",
+        },
+      }],
+    });
+    apiMock.brokerSyncHistory.mockResolvedValue([]);
+
+    renderBrokers("/brokers?tab=import");
+
+    expect((await screen.findAllByText("AAPL - Apple Inc.")).length).toBeGreaterThan(1);
+    expect(screen.getAllByText("Needs local asset resolution").length).toBeGreaterThan(1);
+    expect(screen.getByRole("columnheader", { name: "Instrument" })).toBeInTheDocument();
+    expect(screen.getAllByText("Quantity difference").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Unsupported broker instrument").length).toBeGreaterThan(1);
+    expect(screen.queryByText(/FIGI|logo_url|provider-position/i)).not.toBeInTheDocument();
   });
 });

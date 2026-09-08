@@ -1485,6 +1485,18 @@ class BrokerImportCategoryCounts(BaseModel):
     unknown: int = 0
 
 
+class BrokerInstrumentDisplay(BaseModel):
+    """Allowlisted broker instrument identity safe for ordinary UI responses."""
+
+    symbol: str | None = Field(default=None, max_length=32)
+    name: str | None = Field(default=None, max_length=160)
+    exchange: str | None = Field(default=None, max_length=40)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    local_asset_id: str | None = Field(default=None, max_length=120)
+    resolution_status: Literal["resolved", "unresolved", "unsupported"]
+    display_label: str = Field(min_length=1, max_length=200)
+
+
 class BrokerImportPreviewItem(BaseModel):
     provider_transaction_id: str
     institution_name: str | None = None
@@ -1502,6 +1514,7 @@ class BrokerImportPreviewItem(BaseModel):
     amount: float | None = None
     currency: str | None = None
     normalization_result: str
+    instrument: BrokerInstrumentDisplay
 
 
 class BrokerImportPreviewGroup(BaseModel):
@@ -1550,6 +1563,7 @@ class BrokerReconciliationItem(BaseModel):
     broker_data_timestamp: date | None = None
     local_ledger_timestamp: datetime | None = None
     status: str
+    instrument: BrokerInstrumentDisplay
 
 
 class BrokerReconciliationResponse(BaseModel):

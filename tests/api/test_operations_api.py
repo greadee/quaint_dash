@@ -343,6 +343,16 @@ def test_broker_import_preview_surfaces_ready_unmapped_and_unsupported_activity(
     assert payload["needs_review_count"] == 1
     assert payload["unsupported_count"] == 1
     assert "123456789" not in response.text
+    ready = next(item for group in payload["groups"] for item in group["items"] if item["status"] == "ready")
+    assert ready["instrument"] == {
+        "symbol": "AAPL",
+        "name": None,
+        "exchange": None,
+        "currency": "CAD",
+        "local_asset_id": "AAPL",
+        "resolution_status": "resolved",
+        "display_label": "AAPL",
+    }
     statuses = {item["provider_transaction_id"]: item["status"] for group in payload["groups"] for item in group["items"]}
     assert statuses == {
         "txn-ready": "ready",
@@ -470,7 +480,83 @@ def test_broker_reconciliation_reports_unresolved_and_mismatched_positions(tmp_p
     item = response.json()["items"][0]
     assert item["status"] == "quantity_mismatch"
     assert item["quantity_difference"] == 1
+    assert item["instrument"]["resolution_status"] == "resolved"
+    assert item["instrument"]["display_label"] == "AAPL - Apple"
     assert "123456789" not in response.text
+
+
+def test_broker_read_models_strip_raw_instrument_objects(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    repo = BrokerSyncRepository(db.conn)
+    repo.upsert_connection(BrokerConnection("snaptrade", "conn-1", "Demo Brokerage", "active"))
+    repo.upsert_account(
+        BrokerAccount(
+            provider="snaptrade",
+            provider_account_id="acct-raw",
+            provider_connection_id="conn-1",
+            account_name="Review",
+            account_type="investment",
+            currency="USD",
+            balance=100,
+            raw_payload={"number": "123456789"},
+        )
+    )
+    raw_symbol = (
+        "{'SYMBOL': 'AAPL', 'DESCRIPTION': 'Apple Inc.', "
+        "'EXCHANGE': {'CODE': 'NASDAQ'}, 'CURRENCY': {'CODE': 'USD'}, "
+        "'FIGI': 'secret-figi', 'LOGO_URL': 'https://logo.example/apple.png'}"
+    )
+    repo.upsert_position_snapshot(
+        BrokerPosition(
+            provider="snaptrade",
+            provider_account_id="acct-raw",
+            provider_position_id="provider-position-secret",
+            symbol=raw_symbol,
+            description=None,
+            quantity=3,
+            market_value=450,
+            currency="{'CODE': 'USD'}",
+            as_of_date=date.today(),
+        )
+    )
+    repo.upsert_transaction(
+        BrokerTransaction(
+            provider="snaptrade",
+            provider_transaction_id="txn-raw",
+            provider_account_id="acct-raw",
+            txn_type="buy",
+            trade_date=date.today(),
+            symbol=raw_symbol,
+            quantity=1,
+            price=150,
+            amount=150,
+            currency="{'CODE': 'USD'}",
+        )
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        reconciliation = client.get("/api/v1/brokers/reconciliation")
+        preview = client.get("/api/v1/brokers/import-preview")
+
+    assert reconciliation.status_code == 200
+    assert preview.status_code == 200
+    for response in (reconciliation, preview):
+        assert "secret-figi" not in response.text
+        assert "logo.example" not in response.text
+        assert "provider-position-secret" not in response.text
+        assert "123456789" not in response.text
+
+    reconciliation_instrument = reconciliation.json()["items"][0]["instrument"]
+    preview_instrument = preview.json()["groups"][0]["items"][0]["instrument"]
+    for instrument in (reconciliation_instrument, preview_instrument):
+        assert instrument["symbol"] == "AAPL"
+        assert instrument["name"] == "Apple Inc."
+        assert instrument["exchange"] == "NASDAQ"
+        assert instrument["currency"] == "USD"
+        assert instrument["resolution_status"] == "unresolved"
 
 
 def test_mapping_broker_account_projects_positions_into_portfolio(tmp_path):

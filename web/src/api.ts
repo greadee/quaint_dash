@@ -1103,6 +1103,15 @@ export type BrokerSyncHistoryItem = {
   status: string;
   error_summary: string | null;
 };
+export type BrokerInstrumentDisplay = {
+  symbol: string | null;
+  name: string | null;
+  exchange: string | null;
+  currency: string | null;
+  local_asset_id: string | null;
+  resolution_status: "resolved" | "unresolved" | "unsupported";
+  display_label: string;
+};
 export type BrokerImportPreviewItem = {
   provider_transaction_id: string;
   institution_name: string | null;
@@ -1120,6 +1129,7 @@ export type BrokerImportPreviewItem = {
   amount: number | null;
   currency: string | null;
   normalization_result: string;
+  instrument: BrokerInstrumentDisplay;
 };
 export type BrokerImportPreviewGroup = {
   institution_name: string | null;
@@ -1165,6 +1175,7 @@ export type BrokerReconciliationItem = {
   broker_data_timestamp: string | null;
   local_ledger_timestamp: string | null;
   status: string;
+  instrument: BrokerInstrumentDisplay;
 };
 export type BrokerReconciliation = {
   generated_at: string;

@@ -21,6 +21,7 @@ import {
   type BrokerPortalPayload,
   type BrokerImportPreview,
   type BrokerImportPreviewGroup,
+  type BrokerImportPreviewItem,
   type BrokerReconciliationItem,
   type BrokerStatus,
   type Portfolio,
@@ -758,7 +759,7 @@ function ImportPreviewGroup({ group }: { group: BrokerImportPreviewGroup }) {
             {group.items.map((item) => (
               <tr key={item.provider_transaction_id}>
                 <td>{item.trade_date}</td>
-                <td>{item.symbol ?? "Cash"}</td>
+                <td><ImportInstrumentIdentity item={item} /></td>
                 <td>{transactionCategoryLabel(item.category)}</td>
                 <td>{number(item.quantity, 4)}</td>
                 <td>{money(item.price, item.currency ?? "CAD")}</td>
@@ -777,29 +778,61 @@ function ImportPreviewGroup({ group }: { group: BrokerImportPreviewGroup }) {
 function ReconciliationTable({ items }: { items: BrokerReconciliationItem[] }) {
   if (!items.length) return <EmptyRow text="No reconciliation rows match this filter." />;
   return (
-    <div className="broker-reconciliation-scroll">
-      <table className="broker-reconciliation-table">
-        <thead><tr><th>Account</th><th>Ticker</th><th>Broker qty</th><th>Local qty</th><th>Qty diff</th><th>Broker value</th><th>Local value</th><th>Value diff</th><th>Broker data</th><th>Local ledger</th><th>Status</th></tr></thead>
-        <tbody>
-          {items.map((item) => (
-            <tr key={`${item.account_name}-${item.ticker}-${item.status}`}>
-              <td>{item.institution_name ?? "Broker"}<br /><small>{item.account_name ?? maskAccount(item.masked_account_number)}</small></td>
-              <td>{item.ticker ?? item.asset_id ?? "Unresolved"}</td>
-              <td>{number(item.broker_quantity, 4)}</td>
-              <td>{number(item.local_quantity, 4)}</td>
-              <td>{number(item.quantity_difference, 4)}</td>
-              <td>{money(item.broker_market_value, item.currency ?? "CAD")}</td>
-              <td>{money(item.local_market_value, item.currency ?? "CAD")}</td>
-              <td>{money(item.value_difference, item.currency ?? "CAD")}</td>
-              <td>{item.broker_data_timestamp ?? "Unavailable"}</td>
-              <td>{formatTimestamp(item.local_ledger_timestamp)}</td>
-              <td><StatusPill label={transactionCategoryLabel(item.status)} tone={item.status === "fully_reconciled" ? "ok" : "warn"} /></td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <>
+      <div className="broker-reconciliation-scroll">
+        <table className="broker-reconciliation-table">
+          <thead><tr><th>Account</th><th>Instrument</th><th>Broker qty</th><th>Local qty</th><th>Qty diff</th><th>Broker value</th><th>Local value</th><th>Value diff</th><th>Broker data</th><th>Local ledger</th><th>Status</th></tr></thead>
+          <tbody>
+            {items.map((item, index) => (
+              <tr key={`${item.account_name}-${item.instrument?.local_asset_id ?? item.ticker ?? index}-${item.status}`}>
+                <td>{item.institution_name ?? "Broker"}<br /><small>{item.account_name ?? maskAccount(item.masked_account_number)}</small></td>
+                <td><InstrumentIdentity instrument={item.instrument} fallback={item.ticker ?? item.asset_id ?? "Unsupported instrument"} /></td>
+                <td>{number(item.broker_quantity, 4)}</td>
+                <td>{number(item.local_quantity, 4)}</td>
+                <td>{number(item.quantity_difference, 4)}</td>
+                <td>{money(item.broker_market_value, item.currency ?? "CAD")}</td>
+                <td>{money(item.local_market_value, item.currency ?? "CAD")}</td>
+                <td>{money(item.value_difference, item.currency ?? "CAD")}</td>
+                <td>{item.broker_data_timestamp ?? "Unavailable"}</td>
+                <td>{formatTimestamp(item.local_ledger_timestamp)}</td>
+                <td><StatusPill label={transactionCategoryLabel(item.status)} tone={item.status === "fully_reconciled" ? "ok" : "warn"} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="broker-reconciliation-card-list">
+        {items.map((item, index) => <article key={`${item.account_name}-${item.instrument?.local_asset_id ?? item.ticker ?? index}-${item.status}`}>
+          <div className="broker-card-title"><InstrumentIdentity instrument={item.instrument} fallback={item.ticker ?? item.asset_id ?? "Unsupported instrument"} /><StatusPill label={transactionCategoryLabel(item.status)} tone={item.status === "fully_reconciled" ? "ok" : "warn"} /></div>
+          <span>{item.institution_name ?? "Broker"} · {item.account_name ?? maskAccount(item.masked_account_number)}</span>
+          <dl>
+            <div><dt>Broker quantity</dt><dd>{number(item.broker_quantity, 4)}</dd></div>
+            <div><dt>Local quantity</dt><dd>{number(item.local_quantity, 4)}</dd></div>
+            <div><dt>Quantity difference</dt><dd>{number(item.quantity_difference, 4)}</dd></div>
+            <div><dt>Value difference</dt><dd>{money(item.value_difference, item.currency ?? "CAD")}</dd></div>
+          </dl>
+          <small>Broker data {item.broker_data_timestamp ?? "unavailable"} · Local ledger {formatTimestamp(item.local_ledger_timestamp)}</small>
+        </article>)}
+      </div>
+    </>
   );
+}
+
+function ImportInstrumentIdentity({ item }: { item: BrokerImportPreviewItem }) {
+  const securityActivity = ["buys", "sells", "reinvestments"].includes(item.category);
+  if (item.instrument.resolution_status === "unsupported" && !securityActivity) {
+    return <strong className="broker-instrument-fallback">Cash activity</strong>;
+  }
+  return <InstrumentIdentity instrument={item.instrument} fallback={item.symbol ?? "Unsupported instrument"} />;
+}
+
+function InstrumentIdentity({ instrument, fallback }: { instrument: BrokerReconciliationItem["instrument"] | undefined; fallback: string }) {
+  if (!instrument) return <strong className="broker-instrument-fallback">{fallback}</strong>;
+  return <div className="broker-instrument-identity">
+    <strong>{instrument.display_label || fallback}</strong>
+    <span>{[instrument.exchange, instrument.currency, instrument.local_asset_id ? `Local ${instrument.local_asset_id}` : null].filter(Boolean).join(" · ") || "No market metadata"}</span>
+    {instrument.resolution_status !== "resolved" ? <em>{instrument.resolution_status === "unresolved" ? "Needs local asset resolution" : "Unsupported instrument"}</em> : null}
+  </div>;
 }
 
 function SyncHistoryTab({ history, loading, isBusy, onRefresh }: { history: Awaited<ReturnType<typeof api.brokerSyncHistory>>; loading: boolean; isBusy: boolean; onRefresh: () => void }) {

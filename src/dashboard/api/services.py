@@ -138,6 +138,7 @@ from dashboard.analytics.models import (
 from dashboard.brokers.repository import BrokerSyncRepository
 from dashboard.brokers.models import BrokerUser
 from dashboard.brokers.snaptrade import SNAPTRADE_PROVIDER
+from dashboard.api.broker_presentation import present_broker_instrument
 from dashboard.ingestion.indices.index_service_factory import (
     create_index_ingestion_service,
     create_index_scheduler,
@@ -8147,8 +8148,13 @@ class CommandApiService(BrokerCommands, IngestionCommands):
                 bt.price,
                 bt.amount,
                 bt.currency,
-                m.provider_transaction_id IS NOT NULL AS imported
+                m.provider_transaction_id IS NOT NULL AS imported,
+                a.symbol AS local_symbol,
+                a.name AS local_name,
+                a.exchange_code AS local_exchange,
+                a.ccy AS local_currency
             FROM broker_transaction bt
+            LEFT JOIN asset a ON a.asset_id = bt.asset_id
             LEFT JOIN broker_account ba
               ON ba.provider = bt.provider
              AND ba.provider_account_id = bt.provider_account_id
@@ -8199,6 +8205,15 @@ class CommandApiService(BrokerCommands, IngestionCommands):
             _increment_preview_group(group, status, category)
             date_values.append(row[6])
             if len(group.items) < item_limit:
+                instrument = present_broker_instrument(
+                    provider_symbol=row[9],
+                    provider_currency=row[13],
+                    local_asset_id=row[8],
+                    local_symbol=row[15],
+                    local_name=row[16],
+                    local_exchange=row[17],
+                    local_currency=row[18],
+                )
                 group.items.append(
                     BrokerImportPreviewItem(
                         provider_transaction_id=row[0],
@@ -8211,12 +8226,13 @@ class CommandApiService(BrokerCommands, IngestionCommands):
                         source_type=row[7],
                         category=category,
                         status=status,
-                        symbol=row[9],
+                        symbol=instrument.symbol,
                         quantity=_float_or_none(row[10]),
                         price=_float_or_none(row[11]),
                         amount=_float_or_none(row[12]),
-                        currency=_valid_currency(row[13]),
+                        currency=instrument.currency,
                         normalization_result=reason,
+                        instrument=instrument,
                     )
                 )
         return BrokerImportPreviewResponse(
@@ -8276,7 +8292,12 @@ class CommandApiService(BrokerCommands, IngestionCommands):
                 p.currency,
                 p.as_of_date,
                 l.updated_at,
-                ba.portfolio_id
+                ba.portfolio_id,
+                p.description,
+                a.symbol AS local_symbol,
+                a.name AS local_name,
+                a.exchange_code AS local_exchange,
+                a.ccy AS local_currency
             FROM broker_position_snapshot p
             JOIN latest_positions latest
               ON latest.provider = p.provider
@@ -8293,6 +8314,7 @@ class CommandApiService(BrokerCommands, IngestionCommands):
               ON l.provider = p.provider
              AND l.provider_account_id = p.provider_account_id
              AND l.provider_position_id = p.provider_position_id
+            LEFT JOIN asset a ON a.asset_id = p.asset_id
             ORDER BY c.institution_name, ba.account_name, p.symbol
             """,
             [SNAPTRADE_PROVIDER],
@@ -8305,12 +8327,22 @@ class CommandApiService(BrokerCommands, IngestionCommands):
             local_value = _float_or_none(row[8])
             quantity_difference = _difference(broker_qty, local_qty)
             value_difference = _difference(broker_value, local_value)
+            instrument = present_broker_instrument(
+                provider_symbol=row[3],
+                provider_description=row[13],
+                provider_currency=row[9],
+                local_asset_id=row[4],
+                local_symbol=row[14],
+                local_name=row[15],
+                local_exchange=row[16],
+                local_currency=row[17],
+            )
             items.append(
                 BrokerReconciliationItem(
                     institution_name=row[0],
                     account_name=row[1],
                     masked_account_number=_masked_account_number(_json_dict(row[2])),
-                    ticker=row[3],
+                    ticker=instrument.symbol,
                     asset_id=row[4],
                     broker_quantity=broker_qty,
                     local_quantity=local_qty,
@@ -8318,10 +8350,11 @@ class CommandApiService(BrokerCommands, IngestionCommands):
                     broker_market_value=broker_value,
                     local_market_value=local_value,
                     value_difference=value_difference,
-                    currency=_valid_currency(row[9]),
+                    currency=instrument.currency,
                     broker_data_timestamp=row[10],
                     local_ledger_timestamp=row[11],
                     status=_reconciliation_status(row[4], row[12], quantity_difference, value_difference, row[10]),
+                    instrument=instrument,
                 )
             )
         return BrokerReconciliationResponse(generated_at=datetime.now(UTC), items=items)

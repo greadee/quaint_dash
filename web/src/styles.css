@@ -1170,6 +1170,7 @@ header {
 .broker-page {
   display: grid;
   gap: 18px;
+  min-width: 0;
 }
 .broker-hero,
 .broker-section-heading,
@@ -1181,6 +1182,8 @@ header {
   gap: 16px;
 }
 .broker-hero {
+  min-width: 0;
+  max-width: 100%;
   padding: 22px;
   border: 1px solid #dce2da;
   border-radius: 8px;
@@ -1197,7 +1200,9 @@ header {
 }
 .broker-hero-actions,
 .broker-section-heading .actions {
+  min-width: 0;
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 .broker-action-banner {
   justify-content: flex-start;
@@ -1248,6 +1253,7 @@ header {
 .broker-tab-panel {
   display: grid;
   gap: 18px;
+  min-width: 0;
 }
 .broker-connection-grid {
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -1259,6 +1265,7 @@ header {
 .broker-history-panel {
   display: grid;
   gap: 14px;
+  min-width: 0;
 }
 .broker-connection-card.needs-attention {
   border-color: #dfb45e;
@@ -1349,6 +1356,8 @@ header {
 .broker-account-table-wrap,
 .broker-activity-table-wrap,
 .broker-reconciliation-scroll {
+  max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
   border: 1px solid #e0e3dd;
   border-radius: 8px;
@@ -1394,6 +1403,28 @@ header {
   display: none;
   gap: 12px;
 }
+.broker-reconciliation-card-list {
+  display: none;
+  gap: 12px;
+}
+.broker-instrument-identity {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.broker-instrument-identity strong,
+.broker-instrument-fallback {
+  overflow-wrap: anywhere;
+}
+.broker-instrument-identity span,
+.broker-instrument-identity em {
+  color: var(--mono-600);
+  font-size: 11px;
+  font-style: normal;
+}
+.broker-instrument-identity em {
+  color: #754a00;
+}
 .broker-assignment-control {
   display: grid;
   gap: 8px;
@@ -1431,11 +1462,13 @@ header {
 .broker-settings-grid {
   display: grid;
   gap: 12px;
+  min-width: 0;
 }
 .broker-preview-totals {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 .broker-preview-group {
+  min-width: 0;
   border: 1px solid #e0e3dd;
   border-radius: 8px;
   background: #fff;
@@ -1515,6 +1548,57 @@ header {
   }
   .broker-account-card-list {
     display: grid;
+  }
+  .broker-reconciliation-scroll {
+    display: none;
+  }
+  .broker-reconciliation-card-list {
+    display: grid;
+  }
+  .broker-reconciliation-card-list article {
+    min-width: 0;
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid #e0e3dd;
+    border-radius: 8px;
+    background: #fff;
+  }
+  .broker-reconciliation-card-list .broker-card-title {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    align-items: start;
+  }
+  .broker-reconciliation-card-list dl {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin: 0;
+  }
+  .broker-reconciliation-card-list dt,
+  .broker-reconciliation-card-list small,
+  .broker-reconciliation-card-list > article > span {
+    color: var(--mono-600);
+    font-size: 11px;
+  }
+  .broker-reconciliation-card-list dd {
+    margin: 3px 0 0;
+    font-weight: 700;
+    overflow-wrap: anywhere;
+  }
+}
+@media (max-width: 700px) {
+  .broker-summary-grid,
+  .broker-preview-totals,
+  .broker-settings-grid {
+    grid-template-columns: 1fr;
+  }
+  .broker-hero > *,
+  .broker-section-heading > *,
+  .layout-widget-content {
+    min-width: 0;
+    max-width: 100%;
   }
 }
 @media (max-width: 560px) { .metric-grid { grid-template-columns: 1fr; }.page-title { align-items: start; flex-direction: column; }.actions { width: 100%; flex-wrap: wrap; }.setup-intro, .card-heading, .asset-holding, .pager { align-items: start; flex-direction: column; }.card-tools { justify-content: flex-start; }.asset-holding b { text-align: left; }.asset-activity-list article, .mover-row, .holding-signal-row { grid-template-columns: 1fr; }.signal-rank { width: 100%; }.signal-meter, .signal-facts, .signal-components { grid-column: auto; }.signal-facts { grid-template-columns: repeat(2, minmax(0, auto)); }.action-toast { right: 14px; bottom: 14px; }.empty-state form { flex-direction: column; }.empty-state input { min-width: 0; }.chart, .benchmark-chart { height: 240px; }.benchmark-comparison-chart { height: 280px; }.benchmark-mobile-card dl { grid-template-columns: 1fr; }.benchmarks-meta { gap: 6px; }.benchmarks-meta span, .benchmark-data-badge { white-space: normal; }.benchmark-chip-row { justify-content: flex-start; }.benchmark-metric-tile strong { font-size: 19px; } }
