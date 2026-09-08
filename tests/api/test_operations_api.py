@@ -725,6 +725,11 @@ def test_ingestion_background_status_defaults_disabled(tmp_path):
 
     assert response.status_code == 200
     assert response.json() == {
+        "worker_name": "ingestion_background",
+        "state": "disabled",
+        "current_failures": {},
+        "last_failure": None,
+        "failure_count": 0,
         "enabled": False,
         "running": False,
         "last_schedule_at": None,
@@ -895,6 +900,11 @@ def test_market_freshness_status_defaults_disabled(tmp_path):
 
     assert response.status_code == 200
     assert response.json() == {
+        "worker_name": "market_freshness",
+        "state": "disabled",
+        "current_failures": {},
+        "last_failure": None,
+        "failure_count": 0,
         "enabled": False,
         "running": False,
         "last_poll_at": None,
@@ -1191,6 +1201,11 @@ def test_data_readiness_status_defaults_disabled(tmp_path):
 
     assert response.status_code == 200
     assert response.json() == {
+        "worker_name": "data_readiness",
+        "state": "disabled",
+        "current_failures": {},
+        "last_failure": None,
+        "failure_count": 0,
         "enabled": False,
         "running": False,
         "last_check_at": None,
@@ -1554,7 +1569,11 @@ def test_ingestion_background_errors_are_captured(tmp_path, monkeypatch):
     )
 
     assert asyncio.run(worker.tick_schedule()) == 0
-    assert worker.status()["last_error"] == "provider missing"
+    status = worker.status()
+    assert status["state"] == "misconfigured"
+    assert status["last_error"] == "A required data provider is not configured or the requested access is unavailable."
+    assert status["current_failures"]["schedule"]["category"] == "provider_configuration"
+    assert "provider missing" not in status["last_error"]
 
 
 def test_ingestion_readiness_reports_portfolio_ticker_metric_inputs(tmp_path):

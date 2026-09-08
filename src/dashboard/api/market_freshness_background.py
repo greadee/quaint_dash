@@ -10,6 +10,8 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
 
+from dashboard.api.worker_errors import classify_worker_error
+from dashboard.application.worker_diagnostics import WorkerDiagnostics
 from dashboard.db.db_conn import DB
 from dashboard.ingestion.price_history.db.ingestion_repo import PriceHistoryIngestionRepository
 from dashboard.ingestion.price_history.models import PriceDailyRow
@@ -53,7 +55,15 @@ class MarketFreshnessWorker:
         self.last_poll_at: datetime | None = None
         self.last_refreshed_count: int | None = None
         self.last_subscription_count: int | None = None
-        self.last_error: str | None = None
+        self._diagnostics = WorkerDiagnostics(
+            "market_freshness", classify_error=classify_worker_error,
+        )
+        self._provider_attempted = False
+        self._provider_failure: Exception | None = None
+
+    @property
+    def last_error(self) -> str | None:
+        return self._diagnostics.last_error
 
     @property
     def running(self) -> bool:
@@ -84,6 +94,7 @@ class MarketFreshnessWorker:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        await self._diagnostics.wait_until_idle()
         self._running = False
 
     async def tick(self) -> dict[str, int]:
@@ -94,20 +105,21 @@ class MarketFreshnessWorker:
         }
 
     async def tick_poll(self) -> int:
-        try:
-            count = await asyncio.to_thread(self._poll_once)
-        except Exception as exc:
-            self.last_error = str(exc)
-            LOGGER.warning("Market freshness worker failed: %s", exc)
-            return 0
-        self.last_poll_at = _now()
-        self.last_refreshed_count = count
-        self.last_error = None
-        LOGGER.info("Market freshness worker refreshed %s current price(s).", count)
-        return count
+        def succeeded(count: int) -> None:
+            self.last_poll_at = _now()
+            self.last_refreshed_count = count
+            if self._provider_failure is not None:
+                self._diagnostics.fail("provider", self._provider_failure)
+            elif self._provider_attempted:
+                self._diagnostics.recover("provider")
+            LOGGER.info("Market freshness worker refreshed %s current price(s).", count)
+
+        count = await self._diagnostics.run_phase("poll", self._poll_once, succeeded, LOGGER)
+        return count or 0
 
     async def _run_loop(self) -> None:
         try:
+            self._diagnostics.recover("loop")
             while self._stop_event is not None and not self._stop_event.is_set():
                 await self.tick_poll()
                 try:
@@ -120,12 +132,14 @@ class MarketFreshnessWorker:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            self.last_error = str(exc)
+            self._diagnostics.fail("loop", exc)
             LOGGER.exception("Market freshness worker stopped unexpectedly")
         finally:
             self._running = False
 
     def _poll_once(self) -> int:
+        self._provider_attempted = False
+        self._provider_failure = None
         subscriptions = self._resolve_subscriptions()
         self.last_subscription_count = len(subscriptions)
         if not subscriptions:
@@ -142,8 +156,10 @@ class MarketFreshnessWorker:
         stored_fallbacks = self._stored_price_fallbacks(stale_subscriptions)
         for item in stale_subscriptions[: self.config.max_symbols_per_tick]:
             try:
+                self._provider_attempted = True
                 rows = provider.fetch_price_daily(item.symbol, start, today)
             except Exception as exc:
+                self._provider_failure = exc
                 LOGGER.warning(
                     "Market price refresh failed for %s: %s",
                     item.symbol,
@@ -336,6 +352,7 @@ class MarketFreshnessWorker:
 
     def status(self) -> dict:
         return {
+            **self._diagnostics.status(enabled=self._enabled),
             "enabled": self._enabled,
             "running": self.running,
             "last_poll_at": self.last_poll_at,

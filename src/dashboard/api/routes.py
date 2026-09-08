@@ -1,11 +1,13 @@
 """Versioned HTTP API routes."""
 
 from datetime import date
+import logging
 from threading import Lock
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
-from dashboard.application.operations import OperationsStatusQueries, OperationsWorkerCommands
+from dashboard.application.operations import OperationsQueueQueries, OperationsStatusQueries, OperationsWorkerCommands, safe_ingestion_job
+from dashboard.db.operations import OperationsQueueRepository
 from dashboard.api.dependencies import get_connection
 from dashboard.api.models import (
     ActionResult,
@@ -53,6 +55,7 @@ from dashboard.api.models import (
     ComparisonWorkspaceResponse,
     DataReadinessWorkerStatusResponse,
     IngestionJobResponse,
+    IngestionQueueStatusResponse,
     IngestionBackgroundStatusResponse,
     IngestionReadinessResponse,
     IngestionRetryFailedRequest,
@@ -110,6 +113,7 @@ from dashboard.services.business_strength import BusinessStrengthAnalyzer, Busin
 from dashboard.services.business_strength.models import METHODOLOGY_VERSION
 
 router = APIRouter(prefix="/api/v1")
+LOGGER = logging.getLogger(__name__)
 
 
 def _operations_status_queries(request: Request) -> OperationsStatusQueries:
@@ -1074,7 +1078,19 @@ def ingestion_jobs(
     limit: int = Query(default=100, ge=1, le=500),
     conn=Depends(get_connection),
 ):
-    return CommandApiService(conn).ingestion_jobs(job_status, domain, limit)
+    return [safe_ingestion_job(job.model_dump()) for job in CommandApiService(conn).ingestion_jobs(job_status, domain, limit)]
+
+
+@router.get("/ingestion/queue/status", response_model=IngestionQueueStatusResponse)
+def ingestion_queue_status(conn=Depends(get_connection)):
+    try:
+        return OperationsQueueQueries(OperationsQueueRepository(conn)).queue_status()
+    except Exception as exc:
+        LOGGER.exception("Operations queue diagnostics read failed")
+        raise HTTPException(
+            status_code=503,
+            detail="Queue diagnostics are unavailable. Check local database access and refresh status.",
+        ) from exc
 
 
 @router.get("/ingestion/retail-sentiment/status", response_model=RetailSentimentStatusResponse)

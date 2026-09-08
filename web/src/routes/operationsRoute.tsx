@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, Trash2 } from "lucide-react";
-import { api, type DataReadinessWorkerStatus, type IngestionBackgroundStatus, type IngestionReadiness, type MarketFreshnessStatus, type RetailSentimentStatus, type StockRankingReadiness } from "../api";
+import { api, type DataReadinessWorkerStatus, type IngestionBackgroundStatus, type IngestionQueueStatus, type IngestionReadiness, type MarketFreshnessStatus, type RetailSentimentStatus, type StockRankingReadiness, type WorkerDiagnostics } from "../api";
 import { boundedInt, dateRange, formatActionResult, formatCount, formatDuration, formatTimestamp, percent, signedNumber } from "./routeFormatters";
 import { EmptyRow, ErrorPanel, HelpDisclosure, Loading, Signal } from "./routeShared";
 import type { HelpItem } from "./routeTypes";
 import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar } from "../pageFeatureStore";
 import { usePageFeature } from "../pageFeatureHooks";
-import { backgroundStatusDetail, dataReadinessStatusDetail, marketFreshnessStatusDetail } from "./operationsViewModels";
+import { backgroundStatusDetail, dataReadinessStatusDetail, marketFreshnessStatusDetail, queueAgeLabel, workerStateLabel } from "./operationsViewModels";
+import "./operationsDiagnostics.css";
 
 type StockRankingFactor = "aggregate" | "share_price_momentum" | "news_sentiment" | "retail_sentiment" | "earnings_momentum" | "institutional_buying";
 type StockRankingUniverse = "tracked" | "all";
@@ -76,28 +77,24 @@ export function OperationsPage() {
     queryFn: () => api.ingestionJobs(status, domain, boundedInt(jobLimit, 25, 1, 500)),
   });
   const currentPendingJobs = useQuery({
-    queryKey: ["jobs", "current-pending"],
-    queryFn: () => api.ingestionJobs("pending", "", 500),
-    enabled: showRoutineWorker || showDataReadiness,
-    refetchInterval: showRoutineWorker || showDataReadiness ? WORKER_STATUS_REFETCH_MS : false,
+    queryKey: ["jobs", "queue-status"],
+    queryFn: api.ingestionQueueStatus,
+    refetchInterval: WORKER_STATUS_REFETCH_MS,
   });
   const background = useQuery({
     queryKey: ["ingestion-background-status"],
     queryFn: api.ingestionBackgroundStatus,
-    enabled: showRoutineWorker,
-    refetchInterval: showRoutineWorker ? WORKER_STATUS_REFETCH_MS : false,
+    refetchInterval: WORKER_STATUS_REFETCH_MS,
   });
   const marketFreshness = useQuery({
     queryKey: ["market-freshness-status"],
-    queryFn: api.marketFreshnessStatus ?? (() => Promise.resolve(undefined)),
-    enabled: showMarketFreshness && typeof api.marketFreshnessStatus === "function",
-    refetchInterval: showMarketFreshness ? WORKER_STATUS_REFETCH_MS : false,
+    queryFn: api.marketFreshnessStatus,
+    refetchInterval: WORKER_STATUS_REFETCH_MS,
   });
   const dataReadiness = useQuery({
     queryKey: ["data-readiness-status"],
-    queryFn: api.dataReadinessStatus ?? (() => Promise.resolve(undefined)),
-    enabled: showDataReadiness && typeof api.dataReadinessStatus === "function",
-    refetchInterval: showDataReadiness ? WORKER_STATUS_REFETCH_MS : false,
+    queryFn: api.dataReadinessStatus,
+    refetchInterval: WORKER_STATUS_REFETCH_MS,
   });
   const retailSentiment = useQuery({
     queryKey: ["retail-sentiment-status"],
@@ -279,14 +276,20 @@ export function OperationsPage() {
   return <div className="page"><div className="page-title"><div><p className="eyebrow">Data health</p><h1>Operations</h1><p className="page-subtitle">Background due work keeps routine data moving. Manual controls remain here for backfills, retries, provider-sensitive refreshes, and explicit runs.</p></div><div className="actions"><PageLayoutButton pageId="operations" /><PageFeatureMenu pageId="operations" /><button onClick={() => { jobs.refetch(); currentPendingJobs.refetch(); background.refetch(); marketFreshness.refetch(); dataReadiness.refetch(); retailSentiment.refetch(); readiness.refetch(); rankingReadiness.refetch(); }} disabled={jobs.isFetching || currentPendingJobs.isFetching || background.isFetching || marketFreshness.isFetching || dataReadiness.isFetching || retailSentiment.isFetching || readiness.isFetching || rankingReadiness.isFetching}><RefreshCw size={17}/>Refresh</button><button className="danger" onClick={() => window.confirm("Clear ingestion job history and sync status rows? Market data and broker connections will stay intact.") && clearHistory.mutate()} disabled={isBusy}><Trash2 size={17}/>Clear history</button><button className="primary" onClick={() => window.confirm("Run pending ingestion jobs with these options?") && run.mutate({})} disabled={isBusy}><RefreshCw size={17}/>Run jobs</button></div></div>
     <PageLayoutToolbar pageId="operations" />
     <OptionalFeaturesEmpty pageId="operations" />
-    {showRoutineWorker ? <LayoutWidget pageId="operations" widgetId="operations.routineWorker"><IngestionBackgroundCard status={background.data} isLoading={background.isLoading} error={background.error} currentPendingCount={currentPendingJobs.data?.length} isCurrentPendingLoading={currentPendingJobs.isLoading} currentPendingError={currentPendingJobs.error} onStart={() => startBackground.mutate()} onStop={() => stopBackground.mutate()} onTick={() => tickBackground.mutate()} isBusy={isBusy} /></LayoutWidget> : null}
+    <OperationsDiagnostics queue={currentPendingJobs.data} isLoading={currentPendingJobs.isLoading} error={currentPendingJobs.error} workers={[
+      { label: "Routine ingestion", status: background.data, error: background.error, isLoading: background.isLoading },
+      { label: "Holding prices", status: marketFreshness.data, error: marketFreshness.error, isLoading: marketFreshness.isLoading },
+      { label: "Portfolio data", status: dataReadiness.data, error: dataReadiness.error, isLoading: dataReadiness.isLoading },
+    ]} />
+    {showRoutineWorker ? <LayoutWidget pageId="operations" widgetId="operations.routineWorker"><IngestionBackgroundCard status={background.data} isLoading={background.isLoading} error={background.error} currentPendingCount={currentPendingJobs.data?.pending_count} isCurrentPendingLoading={currentPendingJobs.isLoading} currentPendingError={currentPendingJobs.error} onStart={() => startBackground.mutate()} onStop={() => stopBackground.mutate()} onTick={() => tickBackground.mutate()} isBusy={isBusy} /></LayoutWidget> : null}
     {showMarketFreshness ? <LayoutWidget pageId="operations" widgetId="operations.marketFreshness"><MarketFreshnessCard status={marketFreshness.data} isLoading={marketFreshness.isLoading} error={marketFreshness.error} onStart={() => startMarketFreshness.mutate()} onStop={() => stopMarketFreshness.mutate()} onTick={() => tickMarketFreshness.mutate()} isBusy={isBusy} /></LayoutWidget> : null}
-    {showDataReadiness ? <LayoutWidget pageId="operations" widgetId="operations.dataReadiness"><DataReadinessCard status={dataReadiness.data} isLoading={dataReadiness.isLoading} error={dataReadiness.error} currentPendingCount={currentPendingJobs.data?.length} isCurrentPendingLoading={currentPendingJobs.isLoading} currentPendingError={currentPendingJobs.error} onStart={() => startDataReadiness.mutate()} onStop={() => stopDataReadiness.mutate()} onTick={() => tickDataReadiness.mutate()} isBusy={isBusy} /></LayoutWidget> : null}
+    {showDataReadiness ? <LayoutWidget pageId="operations" widgetId="operations.dataReadiness"><DataReadinessCard status={dataReadiness.data} isLoading={dataReadiness.isLoading} error={dataReadiness.error} currentPendingCount={currentPendingJobs.data?.pending_count} isCurrentPendingLoading={currentPendingJobs.isLoading} currentPendingError={currentPendingJobs.error} onStart={() => startDataReadiness.mutate()} onStop={() => stopDataReadiness.mutate()} onTick={() => tickDataReadiness.mutate()} isBusy={isBusy} /></LayoutWidget> : null}
     {showRetailSentiment ? <LayoutWidget pageId="operations" widgetId="operations.retailSentiment"><RetailSentimentCard status={retailSentiment.data} isLoading={retailSentiment.isLoading} error={retailSentiment.error} onSchedule={scheduleRetailSentiment} onRun={() => run.mutate({ domain: "sentiment", maxJobs: "10" })} isBusy={isBusy} /></LayoutWidget> : null}
     {showProjectionReadiness ? <LayoutWidget pageId="operations" widgetId="operations.projectionReadiness"><IngestionReadinessCard readiness={readiness.data} isLoading={readiness.isLoading} error={readiness.error} onScheduleAsset={scheduleAsset} isBusy={isBusy} /></LayoutWidget> : null}
     {showRankingReadiness ? <LayoutWidget pageId="operations" widgetId="operations.rankingReadiness"><RankingReadinessCard readiness={rankingReadiness.data} isLoading={rankingReadiness.isLoading} error={rankingReadiness.error} onScheduleAsset={scheduleRankingAsset} isBusy={isBusy} /></LayoutWidget> : null}
     <section className="card operations-control">
       <div className="card-heading"><div><p className="eyebrow">Manual controls</p><h2>Ingestion actions</h2></div><div className="card-tools"><HelpDisclosure title="Manual ingestion actions" items={ingestionHelp} /><span>{isBusy ? "working" : "ready"}</span></div></div>
+      <p className="operations-action-guidance">Schedule and retry add local work. Running jobs or starting workers can contact providers and use request quotas. Review access and limits before running a bounded batch.</p>
       <div className="operations-grid">
         <div className="control-panel">
           <strong>Schedule jobs</strong>
@@ -343,6 +346,60 @@ export function OperationsPage() {
   </div>;
 }
 
+type DiagnosticWorker = {
+  label: string;
+  status?: WorkerDiagnostics & { enabled: boolean; running: boolean };
+  error: Error | null;
+  isLoading: boolean;
+};
+
+export function OperationsDiagnostics({ queue, isLoading, error, workers }: {
+  queue?: IngestionQueueStatus;
+  isLoading: boolean;
+  error: Error | null;
+  workers: DiagnosticWorker[];
+}) {
+  const available = !error && queue;
+  return <section className="card operations-diagnostics" aria-labelledby="operations-diagnostics-heading">
+    <div className="card-heading"><div><p className="eyebrow">Read-only diagnostics</p><h2 id="operations-diagnostics-heading">Queue and worker status</h2></div><span>{available ? `Observed ${formatTimestamp(queue.observed_at)}` : isLoading ? "Loading" : "Unavailable"}</span></div>
+    <div className="operations-diagnostics-body">
+    {error || (!isLoading && !queue) ? <p role="alert">Queue status unavailable. Counts and backlog age are unknown. Check local database access, then refresh status.</p> : isLoading ? <Loading /> : queue ? <>
+      <div className="background-status-grid">
+        <Signal label="Pending" value={formatCount(queue.pending_count, "job")} />
+        <Signal label="Running" value={formatCount(queue.running_count, "job")} />
+        <Signal label="Dead letters" value={formatCount(queue.dead_letter_count, "job")} />
+        <Signal label="Legacy failures" value={formatCount(queue.failed_count, "job")} />
+        <Signal label="Oldest active job" value={queueAgeLabel(queue.oldest_backlog_age_seconds)} />
+      </div>
+      <p className="muted">Backlog age starts when the oldest pending or running job was created{queue.oldest_backlog_at ? ` (${formatTimestamp(queue.oldest_backlog_at)})` : ""}. Refresh reads local status and does not run jobs.</p>
+      {queue.pending_count > 0 && workers.some((worker) => !worker.error && worker.status?.state === "disabled") ? <p role="status">Work is waiting and one or more automatic workers are disabled. Review worker state and provider access before choosing a bounded run.</p> : null}
+      {queue.dead_letter_count > 0 || queue.failed_count > 0 ? <p role="status">Failed work needs review. Dead letters have stopped retrying; legacy failures remain separate. Resolve the cause before requeueing or creating replacement work.</p> : null}
+      {queue.affected_data_products.length > 0 ? <p>Affected data products: {queue.affected_data_products.join(", ")}. This describes waiting or failed work, not data freshness.</p> : null}
+      <QueueFailureGroups label="Dead-letter causes" groups={queue.dead_letter_groups} />
+      <QueueFailureGroups label="Legacy failure causes" groups={queue.failed_groups} />
+    </> : null}
+    <ul>{workers.map(({ label, status, error: workerError, isLoading: workerLoading }) => {
+      const failures = Object.values(status?.current_failures ?? {});
+      return <li key={label}><strong>{label}: {workerLoading ? "loading" : workerStateLabel(status, workerError)}</strong>
+        {workerError || (!workerLoading && !status) ? <p role="alert">Worker status unavailable. Refresh status before deciding whether to run work.</p> : failures.map((failure) => <p role="status" key={failure.phase}>{failure.phase}: {failure.safe_message} {failure.guidance} Observed {formatTimestamp(failure.occurred_at)}; {formatCount(failure.count, "failure")} in this phase.</p>)}
+        {!workerError && status?.last_failure && failures.length === 0 ? <p className="muted">Previous failure: {status.last_failure.safe_message} {formatTimestamp(status.last_failure.occurred_at)}. No current failure is recorded.</p> : null}
+      </li>;
+    })}</ul>
+    <p className="muted">Worker states and failure history describe this API session. Starting a worker, running a cycle, refreshing prices, or forcing readiness can contact providers and change local data.</p>
+    </div>
+  </section>;
+}
+
+function QueueFailureGroups({ label, groups }: { label: string; groups: IngestionQueueStatus["dead_letter_groups"] }) {
+  return groups.length > 0 ? <details>
+    <summary>{label} ({formatCount(groups.length, "group")})</summary>
+    <p className="muted">Provider names are inferred from stored error signatures; unknown means no clear provider attribution. Raw error payloads are omitted.</p>
+    <ul>{groups.map((group) => <li key={`${group.provider}:${group.error_category}`}>
+      <strong>{group.provider}: {formatCount(group.count, "job")}</strong> — {group.safe_message} {group.guidance}
+    </li>)}</ul>
+  </details> : null;
+}
+
 function IngestionBackgroundCard({
   status,
   isLoading,
@@ -366,7 +423,7 @@ function IngestionBackgroundCard({
   onTick: () => void;
   isBusy: boolean;
 }) {
-  const stateLabel = status?.enabled ? (status.running ? "running" : "enabled") : "disabled";
+  const stateLabel = workerStateLabel(status, error);
   return <section className="card operations-background">
     <div className="card-heading">
       <div><p className="eyebrow">Background due work</p><h2>Routine ingestion worker</h2></div>
@@ -386,7 +443,7 @@ function IngestionBackgroundCard({
           <button onClick={() => window.confirm("Run one background worker cycle now? This schedules due routine jobs and runs a bounded batch.") && onTick()} disabled={isBusy || isLoading}><RefreshCw size={17}/>Run one cycle</button>
         </div>
         <div className="background-status-note">
-          <strong>{status?.enabled ? "Routine maintenance is configured." : "Routine maintenance is off."}</strong>
+          <strong>Routine ingestion is {stateLabel}.</strong>
           <span>{status ? backgroundStatusDetail(status) : "Status has not loaded yet."}</span>
           {status?.last_error ? <em>{status.last_error}</em> : null}
         </div>
@@ -412,7 +469,7 @@ function MarketFreshnessCard({
   onTick: () => void;
   isBusy: boolean;
 }) {
-  const stateLabel = status?.enabled ? (status.running ? "running" : "enabled") : "disabled";
+  const stateLabel = workerStateLabel(status, error);
   return <section className="card operations-background">
     <div className="card-heading">
       <div><p className="eyebrow">Market freshness</p><h2>Holding price worker</h2></div>
@@ -430,7 +487,7 @@ function MarketFreshnessCard({
           <button onClick={() => window.confirm("Run one market freshness cycle now?") && onTick()} disabled={isBusy || isLoading}><RefreshCw size={17}/>Refresh prices</button>
         </div>
         <div className="background-status-note">
-          <strong>{status?.enabled ? "Holding prices are being refreshed." : "Holding price refresh is off."}</strong>
+          <strong>Holding price maintenance is {stateLabel}.</strong>
           <span>{status ? marketFreshnessStatusDetail(status) : "Status has not loaded yet."}</span>
           {status?.last_error ? <em>{status.last_error}</em> : null}
         </div>
@@ -462,7 +519,7 @@ function DataReadinessCard({
   onTick: () => void;
   isBusy: boolean;
 }) {
-  const stateLabel = status?.enabled ? (status.running ? "running" : "enabled") : "disabled";
+  const stateLabel = workerStateLabel(status, error);
   return <section className="card operations-background">
     <div className="card-heading">
       <div><p className="eyebrow">Valuation readiness</p><h2>Portfolio data worker</h2></div>
@@ -470,7 +527,7 @@ function DataReadinessCard({
     </div>
     {error ? <ErrorPanel error={error} /> : (
       <div className="background-status-grid">
-        <Signal label="Ready tickers" value={isLoading ? "Loading" : `${status?.last_ready_count ?? 0}/${status?.last_target_count ?? 0}`} />
+        <Signal label="Ready tickers" value={isLoading ? "Loading" : status?.last_ready_count == null || status.last_target_count == null ? "Unknown" : `${status.last_ready_count}/${status.last_target_count}`} />
         <Signal label="Valuations" value={isLoading ? "Loading" : formatCount(status?.last_valuation_count, "holding")} />
         <Signal label="Poll cadence" value={status ? formatDuration(status.poll_interval_seconds) : "Unavailable"} />
         <Signal label="Current pending jobs" value={currentQueueCount(currentPendingCount, isCurrentPendingLoading, currentPendingError)} />
@@ -481,7 +538,7 @@ function DataReadinessCard({
           <button onClick={() => window.confirm("Run one valuation readiness cycle now?") && onTick()} disabled={isBusy || isLoading}><RefreshCw size={17}/>Force readiness</button>
         </div>
         <div className="background-status-note">
-          <strong>{status?.enabled ? "Portfolio valuation inputs are being maintained." : "Portfolio valuation readiness is off."}</strong>
+          <strong>Portfolio data maintenance is {stateLabel}.</strong>
           <span>{status ? dataReadinessStatusDetail(status) : "Status has not loaded yet."}</span>
           {status?.last_missing?.length ? <em>{status.last_missing.slice(0, 3).join(" | ")}</em> : null}
           {status?.last_error ? <em>{status.last_error}</em> : null}
@@ -494,7 +551,7 @@ function DataReadinessCard({
 function currentQueueCount(count: number | undefined, isLoading: boolean, error: Error | null): string {
   if (error) return "Unavailable";
   if (isLoading || count === undefined) return "Loading";
-  return count >= 500 ? "500+ jobs" : formatCount(count, "job");
+  return formatCount(count, "job");
 }
 
 function RetailSentimentCard({

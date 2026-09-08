@@ -1166,7 +1166,41 @@ export type IngestionJob = {
   created_at: string;
   updated_at: string;
 };
-export type IngestionBackgroundStatus = {
+export type WorkerFailure = {
+  worker_name: string;
+  phase: string;
+  category: string;
+  safe_message: string;
+  guidance: string;
+  occurred_at: string;
+  count: number;
+};
+export type WorkerDiagnostics = {
+  worker_name: string;
+  state: "disabled" | "idle" | "running" | "failed" | "blocked" | "misconfigured";
+  current_failures: Record<string, WorkerFailure>;
+  last_failure: WorkerFailure | null;
+  failure_count: number;
+};
+export type IngestionQueueStatus = {
+  observed_at: string;
+  pending_count: number;
+  running_count: number;
+  dead_letter_count: number;
+  failed_count: number;
+  oldest_backlog_at: string | null;
+  oldest_backlog_age_seconds: number | null;
+  dead_letter_groups: {
+    provider: string;
+    error_category: string;
+    count: number;
+    safe_message: string;
+    guidance: string;
+  }[];
+  failed_groups: IngestionQueueStatus["dead_letter_groups"];
+  affected_data_products: string[];
+};
+export type IngestionBackgroundStatus = WorkerDiagnostics & {
   enabled: boolean;
   running: boolean;
   last_schedule_at: string | null;
@@ -1183,7 +1217,7 @@ export type IngestionBackgroundStatus = {
   years: number;
   prices_only: boolean;
 };
-export type MarketFreshnessStatus = {
+export type MarketFreshnessStatus = WorkerDiagnostics & {
   enabled: boolean;
   running: boolean;
   last_poll_at: string | null;
@@ -1195,7 +1229,7 @@ export type MarketFreshnessStatus = {
   max_symbols_per_tick: number;
   include_watchlist: boolean;
 };
-export type DataReadinessWorkerStatus = {
+export type DataReadinessWorkerStatus = WorkerDiagnostics & {
   enabled: boolean;
   running: boolean;
   last_check_at: string | null;
@@ -1654,6 +1688,7 @@ export const api = {
     return request<IngestionJob[]>(`/ingestion/jobs?${params.toString()}`);
   },
   retailSentimentStatus: (limit = 10) => request<RetailSentimentStatus>(`/ingestion/retail-sentiment/status?limit=${limit}`),
+  ingestionQueueStatus: () => request<IngestionQueueStatus>("/ingestion/queue/status"),
   retailSentimentOverview: (limit = 25) => request<RetailSentimentOverview>(`/retail-sentiment?limit=${limit}`),
   clearIngestionHistory: () => request<ActionResult>("/ingestion/jobs", { method: "DELETE" }),
   ingestionBackgroundStatus: () => request<IngestionBackgroundStatus>("/ingestion/background/status"),

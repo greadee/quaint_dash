@@ -1603,7 +1603,46 @@ class RetailSentimentStatusResponse(BaseModel):
     failed_jobs: int
 
 
-class IngestionBackgroundStatusResponse(BaseModel):
+class WorkerFailureResponse(BaseModel):
+    worker_name: str
+    phase: str
+    category: str
+    safe_message: str
+    guidance: str
+    occurred_at: datetime
+    count: int
+
+
+class WorkerDiagnosticsResponse(BaseModel):
+    worker_name: str
+    state: str
+    current_failures: dict[str, WorkerFailureResponse] = Field(default_factory=dict)
+    last_failure: WorkerFailureResponse | None = None
+    failure_count: int = 0
+
+
+class QueueFailureGroupResponse(BaseModel):
+    provider: str
+    error_category: str
+    count: int
+    safe_message: str
+    guidance: str
+
+
+class IngestionQueueStatusResponse(BaseModel):
+    observed_at: datetime
+    pending_count: int
+    running_count: int
+    dead_letter_count: int
+    failed_count: int
+    oldest_backlog_at: datetime | None
+    oldest_backlog_age_seconds: float | None
+    dead_letter_groups: list[QueueFailureGroupResponse]
+    failed_groups: list[QueueFailureGroupResponse]
+    affected_data_products: list[str]
+
+
+class IngestionBackgroundStatusResponse(WorkerDiagnosticsResponse):
     enabled: bool
     running: bool
     last_schedule_at: datetime | None = None
@@ -1621,7 +1660,7 @@ class IngestionBackgroundStatusResponse(BaseModel):
     prices_only: bool
 
 
-class MarketFreshnessStatusResponse(BaseModel):
+class MarketFreshnessStatusResponse(WorkerDiagnosticsResponse):
     enabled: bool
     running: bool
     last_poll_at: datetime | None = None
@@ -1634,7 +1673,7 @@ class MarketFreshnessStatusResponse(BaseModel):
     max_symbols_per_tick: int
 
 
-class DataReadinessWorkerStatusResponse(BaseModel):
+class DataReadinessWorkerStatusResponse(WorkerDiagnosticsResponse):
     enabled: bool
     running: bool
     last_check_at: datetime | None = None

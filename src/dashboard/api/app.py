@@ -2,7 +2,7 @@
 
 import logging
 import os
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from threading import RLock
 
@@ -34,41 +34,41 @@ LOGGER = logging.getLogger(__name__)
 def create_app(
     db_path: str | Path = DEFAULT_DB_PATH,
     web_dist: str | Path = DEFAULT_WEB_DIST,
+    *,
+    initialize_on_startup: bool = False,
 ) -> FastAPI:
-    """Create an API application backed by the requested DuckDB file."""
+    """Create an API app; defer the default ASGI app's DB access until startup.
+
+    Explicit factory callers retain eager schema initialization so existing test seeders and
+    integrations can populate their selected database before entering the ASGI lifespan.
+    """
     resolved_db_path = Path(db_path)
-    db = DB(resolved_db_path)
-    init_db(db)
-    db.conn.close()
+    if not initialize_on_startup:
+        _initialize_database(resolved_db_path)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        if initialize_on_startup:
+            _initialize_database(app.state.db_path)
         if app.state.db_connection_pool is None:
             app.state.db_connection_pool = DatabaseConnectionPool(
                 app.state.db_path,
                 app.state.db_pool_size,
             )
-        try:
-            _run_startup_broker_sync_if_enabled(app.state.db_path)
-        except Exception as exc:
-            LOGGER.warning("Broker sync scheduler skipped during API startup: %s", exc)
         worker = app.state.ingestion_background_worker
         market_worker = app.state.market_freshness_worker
         data_worker = app.state.data_readiness_worker
         broker_worker = app.state.broker_background_worker
-        worker.start()
-        market_worker.start()
-        data_worker.start()
-        broker_worker.start()
-        try:
+        async with AsyncExitStack() as resources:
+            resources.callback(_close_database_pool, app)
+            try:
+                _run_startup_broker_sync_if_enabled(app.state.db_path)
+            except Exception as exc:
+                LOGGER.warning("Broker sync scheduler skipped during API startup: %s", exc)
+            for background_worker in (worker, market_worker, data_worker, broker_worker):
+                resources.push_async_callback(background_worker.stop)
+                background_worker.start()
             yield
-        finally:
-            await broker_worker.stop()
-            await data_worker.stop()
-            await market_worker.stop()
-            await worker.stop()
-            app.state.db_connection_pool.close()
-            app.state.db_connection_pool = None
 
     app = FastAPI(
         title="Quaint Dash API",
@@ -217,7 +217,23 @@ def _mount_web_application(app: FastAPI) -> None:
         )
 
 
-app = create_app()
+def _initialize_database(db_path: Path) -> None:
+    db = DB(db_path)
+    try:
+        init_db(db)
+    finally:
+        db.conn.close()
+
+
+def _close_database_pool(app: FastAPI) -> None:
+    try:
+        app.state.db_connection_pool.close()
+    finally:
+        app.state.db_connection_pool = None
+
+
+# Importing a factory/route for tests or tooling must not open or migrate the user's live DB.
+app = create_app(initialize_on_startup=True)
 
 
 def main() -> None:

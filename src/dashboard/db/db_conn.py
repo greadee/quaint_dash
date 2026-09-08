@@ -18,6 +18,10 @@ from dashboard.ingestion.stock_catalog import seed_stock_catalog
 _CONNECT_LOCK = Lock()
 
 
+class DatabaseInUseError(RuntimeError):
+    """The database is owned by another process; retrying writes here is unsafe."""
+
+
 class DatabaseConnectionPool:
     """Bounded pool of reusable DuckDB connections for concurrent API requests."""
 
@@ -29,8 +33,14 @@ class DatabaseConnectionPool:
         self.path = Path(path)
         self.size = max(1, size)
         self._available: LifoQueue[duckdb.DuckDBPyConnection] = LifoQueue(self.size)
-        for _ in range(self.size):
-            self._available.put(connect_database(self.path))
+        try:
+            for _ in range(self.size):
+                self._available.put(connect_database(self.path))
+        except Exception:
+            # A partially created pool must not keep the database locked.
+            while not self._available.empty():
+                self._available.get_nowait().close()
+            raise
 
     def acquire(self) -> duckdb.DuckDBPyConnection:
         return self._available.get()
@@ -56,9 +66,26 @@ class DB:
 def connect_database(path: str | Path) -> duckdb.DuckDBPyConnection:
     """Open a DuckDB connection without racing another in-process open call."""
     with _CONNECT_LOCK:
-        connection = duckdb.connect(str(path))
-        # DuckDB 1.5.x can assert in its parallel window executor for dashboard queries.
-        connection.execute("SET threads = 1")
+        try:
+            connection = duckdb.connect(str(path))
+        except duckdb.IOException as exc:
+            detail = str(exc).lower()
+            if any(marker in detail for marker in (
+                "could not set lock", "conflicting lock", "used by another process",
+                "already open in",
+            )):
+                raise DatabaseInUseError(
+                    "The local database is already in use by another process. "
+                    "Use the running app for refreshes, or stop it before running a separate "
+                    "database command. Run tests with their own temporary databases."
+                ) from exc
+            raise
+        try:
+            # DuckDB 1.5.x can assert in its parallel window executor for dashboard queries.
+            connection.execute("SET threads = 1")
+        except Exception:
+            connection.close()
+            raise
         return connection
 
 

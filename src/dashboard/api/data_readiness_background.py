@@ -14,6 +14,8 @@ from threading import Lock
 from dashboard.analytics.calculations import allocation_class
 from dashboard.analytics import AnalyticsRepository
 from dashboard.api.services import CommandApiService, PortfolioApiService
+from dashboard.api.worker_errors import classify_worker_error
+from dashboard.application.worker_diagnostics import WorkerDiagnostics
 from dashboard.db.db_conn import DB
 from dashboard.ingestion.price_history.provider_yahoo import yahoo_symbol_for_asset_id
 from dashboard.ingestion.ticker_universe import TickerUniverseRepository
@@ -69,8 +71,14 @@ class DataReadinessWorker:
         self.last_completed_count: int | None = None
         self.last_pending_count: int | None = None
         self.last_missing: list[str] = []
-        self.last_error: str | None = None
+        self._diagnostics = WorkerDiagnostics(
+            "data_readiness", classify_error=classify_worker_error,
+        )
         self._target_offset = 0
+
+    @property
+    def last_error(self) -> str | None:
+        return self._diagnostics.last_error
 
     @property
     def running(self) -> bool:
@@ -101,14 +109,15 @@ class DataReadinessWorker:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        await self._diagnostics.wait_until_idle()
         self._running = False
 
     async def tick(self) -> dict[str, int | list[str]]:
-        try:
-            result = await asyncio.to_thread(self._tick_once)
-        except Exception as exc:
-            self.last_error = str(exc)
-            LOGGER.warning("Data readiness worker failed: %s", exc)
+        def succeeded(result: dict[str, int | list[str]]) -> None:
+            self.last_check_at = _now()
+
+        result = await self._diagnostics.run_phase("check", self._tick_once, succeeded, LOGGER)
+        if result is None:
             return {
                 "targets": self.last_target_count or 0,
                 "ready": self.last_ready_count or 0,
@@ -118,12 +127,11 @@ class DataReadinessWorker:
                 "pending_jobs": self.last_pending_count or 0,
                 "missing": self.last_missing,
             }
-        self.last_check_at = _now()
-        self.last_error = None
         return result
 
     async def _run_loop(self) -> None:
         try:
+            self._diagnostics.recover("loop")
             while self._stop_event is not None and not self._stop_event.is_set():
                 await self.tick()
                 try:
@@ -136,7 +144,7 @@ class DataReadinessWorker:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            self.last_error = str(exc)
+            self._diagnostics.fail("loop", exc)
             LOGGER.exception("Data readiness worker stopped unexpectedly")
         finally:
             self._running = False
@@ -204,6 +212,7 @@ class DataReadinessWorker:
 
     def status(self) -> dict:
         return {
+            **self._diagnostics.status(enabled=self._enabled),
             "enabled": self._enabled,
             "running": self.running,
             "last_check_at": self.last_check_at,

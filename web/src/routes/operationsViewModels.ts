@@ -2,8 +2,22 @@ import type {
   DataReadinessWorkerStatus,
   IngestionBackgroundStatus,
   MarketFreshnessStatus,
+  WorkerDiagnostics,
 } from "../api";
 import { formatCount, formatTimestamp } from "./routeFormatters";
+
+export function workerStateLabel(status?: Partial<WorkerDiagnostics> & { enabled: boolean; running: boolean }, error?: Error | null): string {
+  if (error || !status) return "unavailable";
+  return status.state ?? (status.enabled ? (status.running ? "running" : "idle") : "disabled");
+}
+
+export function queueAgeLabel(seconds: number | null): string {
+  if (seconds === null) return "No active backlog";
+  if (seconds < 60) return "Less than a minute";
+  if (seconds < 3600) return formatCount(Math.floor(seconds / 60), "minute");
+  if (seconds < 86400) return formatCount(Math.floor(seconds / 3600), "hour");
+  return formatCount(Math.floor(seconds / 86400), "day");
+}
 
 export function backgroundStatusDetail(status: IngestionBackgroundStatus): string {
   const schedule = `Scheduled ${formatTimestamp(status.last_schedule_at)}`;

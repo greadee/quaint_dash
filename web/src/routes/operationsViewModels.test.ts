@@ -3,11 +3,19 @@ import {
   backgroundStatusDetail,
   dataReadinessStatusDetail,
   marketFreshnessStatusDetail,
+  queueAgeLabel,
+  workerStateLabel,
 } from "./operationsViewModels";
+import type { WorkerDiagnostics } from "../api";
+
+const diagnostics: WorkerDiagnostics = {
+  worker_name: "test", state: "idle", current_failures: {}, last_failure: null, failure_count: 0,
+};
 
 describe("operationsViewModels", () => {
   it("formats routine ingestion worker status details", () => {
     const detail = backgroundStatusDetail({
+      ...diagnostics,
       enabled: true,
       running: false,
       last_schedule_at: null,
@@ -32,6 +40,7 @@ describe("operationsViewModels", () => {
 
   it("formats market freshness status details", () => {
     const detail = marketFreshnessStatusDetail({
+      ...diagnostics,
       enabled: true,
       running: false,
       last_poll_at: null,
@@ -51,6 +60,7 @@ describe("operationsViewModels", () => {
 
   it("formats data readiness worker status details", () => {
     const detail = dataReadinessStatusDetail({
+      ...diagnostics,
       enabled: true,
       running: false,
       last_check_at: null,
@@ -73,5 +83,19 @@ describe("operationsViewModels", () => {
     expect(detail).toBe(
       "Checked never. 8 readys of 12 targets; 6 valuations calculated. 3 jobs pending after last check.",
     );
+  });
+
+  it("does not confuse failed status reads or idle loops with active work", () => {
+    expect(workerStateLabel(undefined)).toBe("unavailable");
+    expect(workerStateLabel({ ...diagnostics, enabled: true, running: true })).toBe("idle");
+    expect(workerStateLabel({ ...diagnostics, enabled: true, running: true }, new Error("offline"))).toBe("unavailable");
+    expect(workerStateLabel({ ...diagnostics, state: "blocked", enabled: false, running: false })).toBe("blocked");
+  });
+
+  it.each([
+    [null, "No active backlog"], [0, "Less than a minute"], [60, "1 minute"],
+    [3599, "59 minutes"], [3600, "1 hour"], [86400, "1 day"],
+  ] as const)("formats backlog age %s as %s", (seconds, expected) => {
+    expect(queueAgeLabel(seconds)).toBe(expected);
   });
 });

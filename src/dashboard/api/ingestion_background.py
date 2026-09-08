@@ -11,6 +11,8 @@ from pathlib import Path
 from threading import Lock
 
 from dashboard.api.services import CommandApiService
+from dashboard.api.worker_errors import classify_worker_error
+from dashboard.application.worker_diagnostics import WorkerDiagnostics
 from dashboard.db.db_conn import DB
 
 LOGGER = logging.getLogger(__name__)
@@ -50,12 +52,19 @@ class IngestionBackgroundWorker:
         self._stop_event: asyncio.Event | None = None
         self._enabled = config.enabled
         self._running = False
+        self._stop_generation = 0
         self.last_schedule_at: datetime | None = None
         self.last_schedule_count: int | None = None
         self.last_run_at: datetime | None = None
         self.last_completed_count: int | None = None
         self.last_pending_count: int | None = None
-        self.last_error: str | None = None
+        self._diagnostics = WorkerDiagnostics(
+            "ingestion_background", classify_error=classify_worker_error,
+        )
+
+    @property
+    def last_error(self) -> str | None:
+        return self._diagnostics.last_error
 
     @property
     def running(self) -> bool:
@@ -75,6 +84,7 @@ class IngestionBackgroundWorker:
         self._enabled = True
 
     async def stop(self) -> None:
+        self._stop_generation += 1
         if self._stop_event is not None:
             self._stop_event.set()
         if self._task is not None:
@@ -83,6 +93,7 @@ class IngestionBackgroundWorker:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        await self._diagnostics.wait_until_idle()
         self._running = False
 
     async def disable(self) -> None:
@@ -92,13 +103,15 @@ class IngestionBackgroundWorker:
 
     async def tick(self) -> dict[str, int]:
         """Run one bounded schedule-and-work cycle immediately."""
+        generation = self._stop_generation
         scheduled = await self.tick_schedule()
-        completed = await self.tick_run()
+        completed = await self.tick_run() if generation == self._stop_generation else 0
         return {"scheduled_jobs": scheduled, "completed_jobs": completed}
 
     async def _run_loop(self) -> None:
         next_schedule_delay = 0.0
         try:
+            self._diagnostics.recover("loop")
             while self._stop_event is not None and not self._stop_event.is_set():
                 if next_schedule_delay <= 0:
                     await self.tick_schedule()
@@ -113,36 +126,28 @@ class IngestionBackgroundWorker:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            self.last_error = str(exc)
+            self._diagnostics.fail("loop", exc)
             LOGGER.exception("Ingestion background worker stopped unexpectedly")
         finally:
             self._running = False
 
     async def tick_schedule(self) -> int:
-        try:
-            count = await asyncio.to_thread(self._schedule_once)
-        except Exception as exc:
-            self.last_error = str(exc)
-            LOGGER.warning("Ingestion background scheduling failed: %s", exc)
-            return 0
-        self.last_schedule_at = _now()
-        self.last_schedule_count = count
-        self.last_error = None
-        LOGGER.info("Ingestion background scheduler queued %s job(s).", count)
-        return count
+        def succeeded(count: int) -> None:
+            self.last_schedule_at = _now()
+            self.last_schedule_count = count
+            LOGGER.info("Ingestion background scheduler queued %s job(s).", count)
+
+        count = await self._diagnostics.run_phase("schedule", self._schedule_once, succeeded, LOGGER)
+        return count or 0
 
     async def tick_run(self) -> int:
-        try:
-            count = await asyncio.to_thread(self._run_once)
-        except Exception as exc:
-            self.last_error = str(exc)
-            LOGGER.warning("Ingestion background runner failed: %s", exc)
-            return 0
-        self.last_run_at = _now()
-        self.last_completed_count = count
-        self.last_error = None
-        LOGGER.info("Ingestion background runner completed %s job(s).", count)
-        return count
+        def succeeded(count: int) -> None:
+            self.last_run_at = _now()
+            self.last_completed_count = count
+            LOGGER.info("Ingestion background runner completed %s job(s).", count)
+
+        count = await self._diagnostics.run_phase("run", self._run_once, succeeded, LOGGER)
+        return count or 0
 
     def _schedule_once(self) -> int:
         with self.write_lock:
@@ -178,6 +183,7 @@ class IngestionBackgroundWorker:
 
     def status(self) -> dict:
         return {
+            **self._diagnostics.status(enabled=self._enabled),
             "enabled": self._enabled,
             "running": self.running,
             "last_schedule_at": self.last_schedule_at,

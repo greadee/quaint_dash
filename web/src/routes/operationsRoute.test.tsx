@@ -1,11 +1,15 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { OperationsPage } from "./operationsRoute";
+import type { IngestionQueueStatus, WorkerDiagnostics, WorkerFailure } from "../api";
+import { OperationsDiagnostics, OperationsPage } from "./operationsRoute";
 
 const apiMock = vi.hoisted(() => ({
   ingestionJobs: vi.fn(),
+  ingestionQueueStatus: vi.fn(),
   ingestionBackgroundStatus: vi.fn(),
+  marketFreshnessStatus: vi.fn(),
+  dataReadinessStatus: vi.fn(),
   ingestionReadiness: vi.fn(),
   rankingReadiness: vi.fn(),
   retailSentimentStatus: vi.fn(),
@@ -44,14 +48,27 @@ describe("OperationsPage", () => {
         requested_start_date: "2026-06-01",
         requested_end_date: "2026-06-18",
         attempt_count: 2,
-        error_message: "provider timeout",
+        error_message: "The job failed; details require local review.",
         created_at: "2026-06-18T12:00:00Z",
         updated_at: "2026-06-18T13:00:00Z",
     };
     apiMock.ingestionJobs.mockImplementation((requestedStatus: string) =>
       Promise.resolve(requestedStatus === "pending" ? [] : [failedJob]),
     );
+    apiMock.ingestionQueueStatus.mockResolvedValue(emptyQueue);
+    apiMock.marketFreshnessStatus.mockResolvedValue({
+      ...disabledWorker, last_poll_at: null, last_subscription_count: null,
+      last_refreshed_count: null, poll_interval_seconds: 900, lookback_days: 7,
+      include_watchlist: false, max_symbols_per_tick: 25,
+    });
+    apiMock.dataReadinessStatus.mockResolvedValue({
+      ...disabledWorker, last_check_at: null, last_target_count: null,
+      last_ready_count: null, last_valuation_count: null, last_pending_count: null,
+      last_missing: [], poll_interval_seconds: 900,
+    });
     apiMock.ingestionBackgroundStatus.mockResolvedValue({
+      ...disabledWorker,
+      state: "idle",
       enabled: true,
       running: false,
       last_schedule_at: "2026-06-18T12:00:00Z",
@@ -184,7 +201,8 @@ describe("OperationsPage", () => {
 
     expect(await screen.findByRole("heading", { name: "Operations" })).toBeInTheDocument();
     expect(apiMock.ingestionJobs).toHaveBeenCalledWith("", "", 25);
-    expect(apiMock.ingestionJobs).toHaveBeenCalledWith("pending", "", 500);
+    expect(apiMock.ingestionQueueStatus).toHaveBeenCalled();
+    expect(apiMock.ingestionJobs).not.toHaveBeenCalledWith("pending", "", 500);
     const routineHeading = await screen.findByText("Routine ingestion worker");
     expect(routineHeading).toBeInTheDocument();
     expect(screen.getAllByText("Current pending jobs")).toHaveLength(2);
@@ -199,6 +217,87 @@ describe("OperationsPage", () => {
     expect(screen.getAllByText("NVDA")).toHaveLength(2);
     expect(screen.getByText("MSFT")).toBeInTheDocument();
     expect(screen.getByText("$AMD earnings thread")).toBeInTheDocument();
-    expect(screen.getByText("provider timeout")).toBeInTheDocument();
+    expect(screen.getByText("The job failed; details require local review.")).toBeInTheDocument();
+    expect(screen.getByText("Unknown")).toBeInTheDocument();
+  });
+});
+
+const emptyQueue: IngestionQueueStatus = {
+  observed_at: "2026-09-07T12:00:00Z", pending_count: 0, running_count: 0,
+  dead_letter_count: 0, failed_count: 0, oldest_backlog_at: null,
+  oldest_backlog_age_seconds: null, dead_letter_groups: [], failed_groups: [],
+  affected_data_products: [],
+};
+const disabledWorker = {
+  worker_name: "ingestion_background", state: "disabled", enabled: false, running: false,
+  current_failures: {}, last_failure: null, failure_count: 0,
+} satisfies WorkerDiagnostics & { enabled: boolean; running: boolean };
+const schedulerFailure: WorkerFailure = {
+  worker_name: "ingestion_background", phase: "schedule", category: "scheduler_query",
+  safe_message: "The scheduler could not execute its database query.",
+  guidance: "Repair the scheduler query before running another cycle.",
+  occurred_at: "2026-09-07T11:00:00Z", count: 3,
+};
+
+describe("OperationsDiagnostics", () => {
+  it("shows unknown counts after a failed refresh even when previous data exists", () => {
+    render(<OperationsDiagnostics queue={{ ...emptyQueue, pending_count: 701 }}
+      isLoading={false} error={new Error("private connection path")}
+      workers={[{ label: "Routine ingestion", status: disabledWorker, error: new Error("private worker trace"), isLoading: false }]} />);
+    expect(screen.getByText(/Queue status unavailable. Counts and backlog age are unknown/)).toBeInTheDocument();
+    expect(screen.getByText("Routine ingestion: unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("701 jobs")).not.toBeInTheDocument();
+    expect(screen.queryByText("0 jobs")).not.toBeInTheDocument();
+    expect(screen.queryByText(/private/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Routine ingestion: disabled/)).not.toBeInTheDocument();
+  });
+
+  it("shows the full backlog, oldest age, failures and impacted products", () => {
+    render(<OperationsDiagnostics queue={{ ...emptyQueue, pending_count: 701,
+      oldest_backlog_at: "2026-09-01T12:00:00Z", oldest_backlog_age_seconds: 6 * 86400,
+      dead_letter_count: 5, failed_count: 2,
+      dead_letter_groups: [{ provider: "fmp", error_category: "provider_rate_limit", count: 5,
+        safe_message: "Provider request limit reached.", guidance: "Check provider limits before choosing a bounded retry." }],
+      failed_groups: [{ provider: "x", error_category: "provider_configuration", count: 2,
+        safe_message: "Provider access or configuration needs attention.", guidance: "Check credentials before retrying." }],
+      affected_data_products: ["Fundamentals and valuation inputs"],
+    }} isLoading={false} error={null}
+      workers={[{ label: "Routine ingestion", status: disabledWorker, error: null, isLoading: false }]} />);
+    expect(screen.getByText("701 jobs")).toBeInTheDocument();
+    expect(screen.getByText("6 days")).toBeInTheDocument();
+    expect(screen.getByText(/Work is waiting and one or more automatic workers are disabled/)).toBeInTheDocument();
+    expect(screen.getByText("Dead-letter causes (1 group)")).toBeInTheDocument();
+    expect(screen.getByText("Legacy failure causes (1 group)")).toBeInTheDocument();
+    expect(screen.getByText(/Affected data products: Fundamentals and valuation inputs/)).toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("distinguishes current failures from a recovered worker's history", () => {
+    const { rerender } = render(<OperationsDiagnostics queue={emptyQueue} isLoading={false} error={null}
+      workers={[{ label: "Routine ingestion", error: null, isLoading: false,
+        status: { ...disabledWorker, state: "failed", current_failures: { schedule: schedulerFailure }, last_failure: schedulerFailure, failure_count: 3 },
+      }]} />);
+    expect(screen.getByText("Routine ingestion: failed")).toBeInTheDocument();
+    expect(screen.getByText(/schedule: The scheduler could not execute/)).toHaveTextContent("3 failures in this phase");
+    expect(screen.queryByText(/Previous failure:/)).not.toBeInTheDocument();
+    rerender(<OperationsDiagnostics queue={emptyQueue} isLoading={false} error={null}
+      workers={[{ label: "Routine ingestion", error: null, isLoading: false,
+        status: { ...disabledWorker, state: "idle", enabled: true, last_failure: schedulerFailure, failure_count: 3 },
+      }]} />);
+    expect(screen.getByText("Routine ingestion: idle")).toBeInTheDocument();
+    expect(screen.getByText(/Previous failure:/)).toHaveTextContent("No current failure is recorded.");
+    expect(screen.queryByText(/schedule: The scheduler could not execute/)).not.toBeInTheDocument();
+  });
+
+  it("keeps loading and unavailable distinct from an empty healthy queue", () => {
+    const { rerender } = render(<OperationsDiagnostics isLoading error={null} workers={[]} />);
+    expect(screen.queryByText("0 jobs")).not.toBeInTheDocument();
+    expect(screen.queryByText("No active backlog")).not.toBeInTheDocument();
+    rerender(<OperationsDiagnostics isLoading={false} error={null} workers={[]} />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Counts and backlog age are unknown");
+    rerender(<OperationsDiagnostics queue={emptyQueue} isLoading={false} error={null} workers={[]} />);
+    expect(screen.getByText("No active backlog")).toBeInTheDocument();
+    expect(screen.getAllByText("0 jobs")).toHaveLength(4);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

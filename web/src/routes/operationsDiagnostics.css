@@ -1,0 +1,39 @@
+.operations-diagnostics-body {
+  padding: 0 22px 20px;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.operations-diagnostics .background-status-grid {
+  padding: 0;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+}
+
+.operations-diagnostics-body .muted,
+.operations-action-guidance {
+  color: var(--dash-text-soft, #68736f);
+}
+
+.operations-diagnostics-body summary {
+  cursor: pointer;
+  padding: 6px 0;
+}
+
+.operations-diagnostics-body ul {
+  padding-left: 20px;
+}
+
+.operations-diagnostics-body li + li {
+  margin-top: 8px;
+}
+
+.operations-diagnostics-body > p:last-child {
+  margin-bottom: 0;
+}
+
+.operations-action-guidance {
+  margin: 0 22px 18px;
+  font-size: 13px;
+  line-height: 1.5;
+}
