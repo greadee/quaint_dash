@@ -1113,7 +1113,9 @@ export type BrokerInstrumentDisplay = {
   display_label: string;
 };
 export type BrokerImportPreviewItem = {
+  provider: string;
   provider_transaction_id: string;
+  provider_account_id: string;
   institution_name: string | null;
   account_name: string | null;
   masked_account_number: string | null;
@@ -1132,6 +1134,8 @@ export type BrokerImportPreviewItem = {
   instrument: BrokerInstrumentDisplay;
 };
 export type BrokerImportPreviewGroup = {
+  provider: string;
+  provider_account_id: string;
   institution_name: string | null;
   account_name: string | null;
   masked_account_number: string | null;
@@ -1158,6 +1162,38 @@ export type BrokerImportPreview = {
   date_start: string | null;
   date_end: string | null;
   groups: BrokerImportPreviewGroup[];
+};
+export type BrokerReviewBlocker = "unassigned_account" | "unresolved_asset" | "unsupported_transaction" | "ready_to_import";
+export type BrokerReviewQueueItem = {
+  blocker: BrokerReviewBlocker;
+  provider: string;
+  provider_account_id: string;
+  provider_transaction_id: string;
+  institution_name: string | null;
+  account_name: string | null;
+  masked_account_number: string | null;
+  portfolio_id: number | null;
+  portfolio_name: string | null;
+  trade_date: string;
+  category: string;
+  status: string;
+  normalization_result: string;
+  quantity: number | null;
+  price: number | null;
+  amount: number | null;
+  currency: string | null;
+  instrument: BrokerInstrumentDisplay;
+};
+export type BrokerReviewQueue = {
+  generated_at: string;
+  selected_blocker: BrokerReviewBlocker;
+  account_filter: string | null;
+  counts: Record<BrokerReviewBlocker, number>;
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+  items: BrokerReviewQueueItem[];
 };
 export type BrokerReconciliationItem = {
   institution_name: string | null;
@@ -1681,6 +1717,11 @@ export const api = {
   brokerAccounts: () => request<BrokerAccount[]>("/brokers/accounts"),
   brokerStatus: () => request<BrokerStatus>("/brokers/status"),
   brokerImportPreview: (itemLimit = 25) => request<BrokerImportPreview>(`/brokers/import-preview?item_limit=${itemLimit}`),
+  brokerReviewQueue: (blocker: BrokerReviewBlocker, limit = 10, offset = 0, accountId?: string | null) => {
+    const query = new URLSearchParams({ blocker, limit: String(limit), offset: String(offset) });
+    if (accountId) query.set("account_id", accountId);
+    return request<BrokerReviewQueue>(`/brokers/review-queue?${query.toString()}`);
+  },
   brokerReconciliation: () => request<BrokerReconciliation>("/brokers/reconciliation"),
   brokerSyncHistory: () => request<BrokerSyncHistoryItem[]>("/brokers/sync-history"),
   registerBrokerUser: (userKey: string) =>

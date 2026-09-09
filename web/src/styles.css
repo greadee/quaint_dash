@@ -1261,6 +1261,7 @@ header {
 .broker-connection-card,
 .broker-account-card,
 .broker-import-panel,
+.broker-review-panel,
 .broker-reconciliation-panel,
 .broker-history-panel {
   display: grid;
@@ -1425,6 +1426,27 @@ header {
 .broker-instrument-identity em {
   color: #754a00;
 }
+.broker-import-action {
+  min-width: min(320px, 100%);
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+}
+.broker-import-action p,
+.broker-control-prerequisite {
+  max-width: 420px;
+  margin: 0;
+  color: var(--mono-600);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.broker-import-action p {
+  text-align: right;
+}
+.broker-inline-link {
+  color: var(--feature-green);
+  font-weight: 700;
+}
 .broker-assignment-control {
   display: grid;
   gap: 8px;
@@ -1479,6 +1501,137 @@ header {
   gap: 12px;
   padding: 12px;
   cursor: pointer;
+}
+.broker-import-scope {
+  border: 1px solid #d7e3d8;
+  border-radius: 8px;
+  background: #f7fbf7;
+}
+.broker-import-scope summary {
+  padding: 11px 12px;
+  cursor: pointer;
+  font-weight: 700;
+}
+.broker-import-scope-list {
+  display: grid;
+  gap: 8px;
+  padding: 0 12px 12px;
+}
+.broker-import-scope-list div,
+.broker-review-heading,
+.broker-review-row-main,
+.broker-review-row-actions,
+.broker-review-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.broker-import-scope-list div {
+  align-items: start;
+}
+.broker-import-scope-list span,
+.broker-review-heading span,
+.broker-review-list article > span {
+  color: var(--mono-600);
+  font-size: 12px;
+}
+.broker-show-more {
+  margin: 0 12px 12px;
+}
+.broker-review-queue,
+.broker-review-list,
+.broker-resolver-context,
+.broker-resolver-candidates {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+}
+.broker-review-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+.broker-review-summary button {
+  min-width: 0;
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  padding: 12px;
+  text-align: left;
+  background: #fff;
+}
+.broker-review-summary button.selected {
+  border-color: var(--feature-green);
+  background: #eff8f2;
+}
+.broker-review-summary strong {
+  font-size: 24px;
+}
+.broker-review-summary em {
+  color: var(--mono-600);
+  font-size: 11px;
+  font-style: normal;
+}
+.broker-review-heading {
+  align-items: end;
+  padding-top: 4px;
+}
+.broker-review-heading > div {
+  display: grid;
+  gap: 3px;
+}
+.broker-review-list article {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #e0e3dd;
+  border-radius: 8px;
+  background: #fff;
+}
+.broker-review-list article p,
+.broker-resolver-context p {
+  margin: 0;
+  color: var(--mono-700);
+  line-height: 1.45;
+}
+.broker-review-row-main {
+  align-items: start;
+}
+.broker-review-row-actions {
+  justify-content: flex-start;
+}
+.broker-review-pagination {
+  justify-content: center;
+}
+.broker-resolver-context {
+  padding: 14px;
+  border: 1px solid #d8c67f;
+  border-radius: 8px;
+  background: #fffbed;
+}
+.broker-resolver-context h3 {
+  margin: 0;
+}
+.broker-resolver-candidates {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.broker-resolver-candidates a {
+  min-width: 0;
+  display: flex;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #dfe5dc;
+  border-radius: 7px;
+  background: #fff;
+  color: inherit;
+  text-decoration: none;
+}
+.broker-resolver-candidates span {
+  min-width: 0;
+  display: grid;
+  overflow-wrap: anywhere;
 }
 .broker-category-strip {
   display: flex;
@@ -1537,7 +1690,9 @@ header {
   }
   .broker-summary-grid,
   .broker-preview-totals,
-  .broker-settings-grid {
+  .broker-settings-grid,
+  .broker-review-summary,
+  .broker-resolver-candidates {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .broker-progress {
@@ -1591,8 +1746,22 @@ header {
 @media (max-width: 700px) {
   .broker-summary-grid,
   .broker-preview-totals,
-  .broker-settings-grid {
+  .broker-settings-grid,
+  .broker-review-summary,
+  .broker-resolver-candidates {
     grid-template-columns: 1fr;
+  }
+  .broker-import-action {
+    justify-items: stretch;
+  }
+  .broker-import-action p {
+    text-align: left;
+  }
+  .broker-import-scope-list div,
+  .broker-review-heading,
+  .broker-review-row-main {
+    align-items: start;
+    flex-direction: column;
   }
   .broker-hero > *,
   .broker-section-heading > *,

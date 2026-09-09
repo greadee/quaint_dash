@@ -1498,7 +1498,9 @@ class BrokerInstrumentDisplay(BaseModel):
 
 
 class BrokerImportPreviewItem(BaseModel):
+    provider: str
     provider_transaction_id: str
+    provider_account_id: str
     institution_name: str | None = None
     account_name: str | None = None
     masked_account_number: str | None = None
@@ -1518,6 +1520,8 @@ class BrokerImportPreviewItem(BaseModel):
 
 
 class BrokerImportPreviewGroup(BaseModel):
+    provider: str
+    provider_account_id: str
     institution_name: str | None = None
     account_name: str | None = None
     masked_account_number: str | None = None
@@ -1545,6 +1549,56 @@ class BrokerImportPreviewResponse(BaseModel):
     date_start: date | None = None
     date_end: date | None = None
     groups: list[BrokerImportPreviewGroup] = Field(default_factory=list)
+
+
+class BrokerReviewQueueCounts(BaseModel):
+    unassigned_account: int = 0
+    unresolved_asset: int = 0
+    unsupported_transaction: int = 0
+    ready_to_import: int = 0
+
+
+class BrokerReviewQueueItem(BaseModel):
+    blocker: Literal[
+        "unassigned_account",
+        "unresolved_asset",
+        "unsupported_transaction",
+        "ready_to_import",
+    ]
+    provider: str
+    provider_account_id: str
+    provider_transaction_id: str
+    institution_name: str | None = None
+    account_name: str | None = None
+    masked_account_number: str | None = None
+    portfolio_id: int | None = None
+    portfolio_name: str | None = None
+    trade_date: date
+    category: str
+    status: str
+    normalization_result: str
+    quantity: float | None = None
+    price: float | None = None
+    amount: float | None = None
+    currency: str | None = None
+    instrument: BrokerInstrumentDisplay
+
+
+class BrokerReviewQueueResponse(BaseModel):
+    generated_at: datetime
+    selected_blocker: Literal[
+        "unassigned_account",
+        "unresolved_asset",
+        "unsupported_transaction",
+        "ready_to_import",
+    ]
+    account_filter: str | None = None
+    counts: BrokerReviewQueueCounts
+    total: int
+    limit: int
+    offset: int
+    has_more: bool
+    items: list[BrokerReviewQueueItem] = Field(default_factory=list)
 
 
 class BrokerReconciliationItem(BaseModel):

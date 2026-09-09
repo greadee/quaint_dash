@@ -336,6 +336,10 @@ def test_broker_import_preview_surfaces_ready_unmapped_and_unsupported_activity(
 
     with TestClient(app) as client:
         response = client.get("/api/v1/brokers/import-preview")
+        unassigned = client.get("/api/v1/brokers/review-queue?blocker=unassigned_account&limit=10")
+        unsupported = client.get("/api/v1/brokers/review-queue?blocker=unsupported_transaction&limit=10")
+        ready_queue = client.get("/api/v1/brokers/review-queue?blocker=ready_to_import&limit=10")
+        invalid_queue = client.get("/api/v1/brokers/review-queue?blocker=not-a-blocker")
 
     assert response.status_code == 200
     payload = response.json()
@@ -343,6 +347,8 @@ def test_broker_import_preview_surfaces_ready_unmapped_and_unsupported_activity(
     assert payload["needs_review_count"] == 1
     assert payload["unsupported_count"] == 1
     assert "123456789" not in response.text
+    assert payload["groups"][0]["provider"] == "snaptrade"
+    assert {group["provider_account_id"] for group in payload["groups"]} == {"mapped", "unmapped"}
     ready = next(item for group in payload["groups"] for item in group["items"] if item["status"] == "ready")
     assert ready["instrument"] == {
         "symbol": "AAPL",
@@ -359,6 +365,62 @@ def test_broker_import_preview_surfaces_ready_unmapped_and_unsupported_activity(
         "txn-unmapped": "needs_review",
         "txn-unknown": "unsupported",
     }
+    assert invalid_queue.status_code == 422
+    for queue_response in (unassigned, unsupported, ready_queue):
+        assert queue_response.status_code == 200
+        assert len(queue_response.json()["items"]) == 1
+        assert "123456789" not in queue_response.text
+        assert "987654321" not in queue_response.text
+    assert unassigned.json()["counts"] == {
+        "unassigned_account": 1,
+        "unresolved_asset": 0,
+        "unsupported_transaction": 1,
+        "ready_to_import": 1,
+    }
+    assert unassigned.json()["items"][0]["provider_account_id"] == "unmapped"
+    assert unsupported.json()["items"][0]["provider_transaction_id"] == "txn-unknown"
+    assert ready_queue.json()["items"][0]["instrument"]["display_label"] == "AAPL"
+
+
+def test_broker_review_queue_routes_inactive_accounts_to_retained_activity(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    repo = BrokerSyncRepository(db.conn)
+    repo.upsert_connection(BrokerConnection("snaptrade", "conn-1", "Demo Brokerage", "active"))
+    for account_id, status in (("active-account", "active"), ("closed-account", "closed")):
+        repo.upsert_account(
+            BrokerAccount(
+                provider="snaptrade",
+                provider_account_id=account_id,
+                provider_connection_id="conn-1",
+                account_name=account_id,
+                account_type="cash",
+                currency="CAD",
+                balance=10,
+                raw_payload={"status": status},
+            )
+        )
+        repo.upsert_transaction(
+            BrokerTransaction(
+                "snaptrade",
+                f"txn-{account_id}",
+                account_id,
+                "dividend",
+                date(2026, 1, 3),
+                amount=2,
+                currency="CAD",
+            )
+        )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        unassigned = client.get("/api/v1/brokers/review-queue?blocker=unassigned_account")
+        unsupported = client.get("/api/v1/brokers/review-queue?blocker=unsupported_transaction")
+
+    assert [item["provider_account_id"] for item in unassigned.json()["items"]] == ["active-account"]
+    assert [item["provider_account_id"] for item in unsupported.json()["items"]] == ["closed-account"]
+    assert "closed or inactive" in unsupported.json()["items"][0]["normalization_result"]
 
 
 def test_broker_sync_history_redacts_errors_and_labels_failures(tmp_path):

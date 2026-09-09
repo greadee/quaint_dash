@@ -66,6 +66,7 @@ from dashboard.api.models import (
     BrokerPortalRequest,
     BrokerPortalResponse,
     BrokerReconciliationResponse,
+    BrokerReviewQueueResponse,
     BrokerStatusResponse,
     BrokerStorageSettingRequest,
     BrokerStorageSettingResponse,
@@ -1113,6 +1114,30 @@ def broker_import_preview(
     conn=Depends(get_connection),
 ):
     return CommandApiService(conn).broker_import_preview(item_limit=item_limit)
+
+
+@router.get("/brokers/review-queue", response_model=BrokerReviewQueueResponse)
+def broker_review_queue(
+    blocker: str = Query(default="unassigned_account"),
+    account_id: str | None = Query(default=None, min_length=1, max_length=200),
+    limit: int = Query(default=10, ge=1, le=50),
+    offset: int = Query(default=0, ge=0),
+    conn=Depends(get_connection),
+):
+    allowed = {
+        "unassigned_account",
+        "unresolved_asset",
+        "unsupported_transaction",
+        "ready_to_import",
+    }
+    if blocker not in allowed:
+        raise HTTPException(status_code=422, detail="Unsupported broker review blocker")
+    return CommandApiService(conn).broker_review_queue(
+        blocker=blocker,
+        account_id=account_id,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/brokers/reconciliation", response_model=BrokerReconciliationResponse)

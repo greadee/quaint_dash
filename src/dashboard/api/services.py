@@ -22,6 +22,9 @@ from dashboard.api.models import (
     BrokerImportPreviewResponse,
     BrokerReconciliationItem,
     BrokerReconciliationResponse,
+    BrokerReviewQueueCounts,
+    BrokerReviewQueueItem,
+    BrokerReviewQueueResponse,
     BrokerStatusResponse,
     BrokerSyncHistoryItem,
     BrokerUserResponse,
@@ -8152,7 +8155,9 @@ class CommandApiService(BrokerCommands, IngestionCommands):
                 a.symbol AS local_symbol,
                 a.name AS local_name,
                 a.exchange_code AS local_exchange,
-                a.ccy AS local_currency
+                a.ccy AS local_currency,
+                bt.provider,
+                bt.provider_account_id
             FROM broker_transaction bt
             LEFT JOIN asset a ON a.asset_id = bt.asset_id
             LEFT JOIN broker_account ba
@@ -8191,13 +8196,15 @@ class CommandApiService(BrokerCommands, IngestionCommands):
                 amount=row[12],
             )
             totals[status] += 1
-            key = (row[1], row[2], row[4], row[5], _masked_account_number(_json_dict(row[3])))
+            key = (row[19], row[20], row[1], row[2], row[4], row[5], _masked_account_number(_json_dict(row[3])))
             group = groups.setdefault(
                 key,
                 BrokerImportPreviewGroup(
+                    provider=row[19],
+                    provider_account_id=row[20],
                     institution_name=row[1],
                     account_name=row[2],
-                    masked_account_number=key[4],
+                    masked_account_number=key[6],
                     portfolio_id=row[4],
                     portfolio_name=row[5],
                 ),
@@ -8216,10 +8223,12 @@ class CommandApiService(BrokerCommands, IngestionCommands):
                 )
                 group.items.append(
                     BrokerImportPreviewItem(
+                        provider=row[19],
                         provider_transaction_id=row[0],
+                        provider_account_id=row[20],
                         institution_name=row[1],
                         account_name=row[2],
-                        masked_account_number=key[4],
+                        masked_account_number=key[6],
                         portfolio_id=row[4],
                         portfolio_name=row[5],
                         trade_date=row[6],
@@ -8247,6 +8256,123 @@ class CommandApiService(BrokerCommands, IngestionCommands):
             date_start=min(date_values) if date_values else None,
             date_end=max(date_values) if date_values else None,
             groups=list(groups.values()),
+        )
+
+    def broker_review_queue(
+        self,
+        *,
+        blocker: str,
+        limit: int = 10,
+        offset: int = 0,
+        account_id: str | None = None,
+    ) -> BrokerReviewQueueResponse:
+        rows = self.conn.execute(
+            """
+            SELECT
+                bt.provider,
+                bt.provider_transaction_id,
+                bt.provider_account_id,
+                c.institution_name,
+                ba.account_name,
+                ba.raw_json,
+                ba.portfolio_id,
+                p.portfolio_name,
+                bt.trade_date,
+                bt.txn_type,
+                bt.asset_id,
+                bt.symbol,
+                bt.quantity,
+                bt.price,
+                bt.amount,
+                bt.currency,
+                m.provider_transaction_id IS NOT NULL AS imported,
+                a.symbol AS local_symbol,
+                a.name AS local_name,
+                a.exchange_code AS local_exchange,
+                a.ccy AS local_currency
+            FROM broker_transaction bt
+            LEFT JOIN asset a ON a.asset_id = bt.asset_id
+            LEFT JOIN broker_account ba
+              ON ba.provider = bt.provider
+             AND ba.provider_account_id = bt.provider_account_id
+            LEFT JOIN broker_connection c
+              ON c.provider = ba.provider
+             AND c.provider_connection_id = ba.provider_connection_id
+            LEFT JOIN portfolio p ON p.portfolio_id = ba.portfolio_id
+            LEFT JOIN broker_portfolio_txn_map m
+              ON m.provider = bt.provider
+             AND m.provider_transaction_id = bt.provider_transaction_id
+            WHERE bt.provider = ?
+            ORDER BY c.institution_name, ba.account_name, bt.trade_date DESC, bt.provider_transaction_id
+            """,
+            [SNAPTRADE_PROVIDER],
+        ).fetchall()
+        counts = BrokerReviewQueueCounts()
+        selected: list[BrokerReviewQueueItem] = []
+        selected_total = 0
+        for row in rows:
+            category = _broker_activity_category(row[9])
+            status, reason = _broker_import_status(
+                category=category,
+                portfolio_id=row[6],
+                asset_id=row[10],
+                imported=bool(row[16]),
+                quantity=row[12],
+                amount=row[14],
+            )
+            review_blocker = _broker_review_blocker(status)
+            if review_blocker == "unassigned_account" and not _is_visible_broker_account(_json_dict(row[5])):
+                review_blocker = "unsupported_transaction"
+                reason = "The source account is closed or inactive. Activity is retained for review and cannot be assigned."
+            if review_blocker is None:
+                continue
+            setattr(counts, review_blocker, getattr(counts, review_blocker) + 1)
+            if review_blocker != blocker or (account_id and row[2] != account_id):
+                continue
+            selected_total += 1
+            if selected_total <= offset or len(selected) >= limit:
+                continue
+            instrument = present_broker_instrument(
+                provider_symbol=row[11],
+                provider_currency=row[15],
+                local_asset_id=row[10],
+                local_symbol=row[17],
+                local_name=row[18],
+                local_exchange=row[19],
+                local_currency=row[20],
+            )
+            selected.append(
+                BrokerReviewQueueItem(
+                    blocker=review_blocker,
+                    provider=row[0],
+                    provider_account_id=row[2],
+                    provider_transaction_id=row[1],
+                    institution_name=row[3],
+                    account_name=row[4],
+                    masked_account_number=_masked_account_number(_json_dict(row[5])),
+                    portfolio_id=row[6],
+                    portfolio_name=row[7],
+                    trade_date=row[8],
+                    category=category,
+                    status=status,
+                    normalization_result=reason,
+                    quantity=_float_or_none(row[12]),
+                    price=_float_or_none(row[13]),
+                    amount=_float_or_none(row[14]),
+                    currency=instrument.currency,
+                    instrument=instrument,
+                )
+            )
+        return BrokerReviewQueueResponse(
+            generated_at=datetime.now(UTC),
+            selected_blocker=blocker,
+            account_filter=account_id,
+            counts=counts,
+            total=selected_total,
+            limit=limit,
+            offset=offset,
+            has_more=offset + len(selected) < selected_total,
+            items=selected,
         )
 
     def broker_reconciliation(self) -> BrokerReconciliationResponse:
@@ -10279,6 +10405,18 @@ def _increment_preview_group(group: BrokerImportPreviewGroup, status: str, categ
     current = getattr(group.category_counts, category, None)
     if current is not None:
         setattr(group.category_counts, category, current + 1)
+
+
+def _broker_review_blocker(status: str) -> str | None:
+    if status == "needs_review":
+        return "unassigned_account"
+    if status == "unresolved_asset":
+        return "unresolved_asset"
+    if status in {"unsupported", "failed_validation"}:
+        return "unsupported_transaction"
+    if status == "ready":
+        return "ready_to_import"
+    return None
 
 
 def _difference(left: float | None, right: float | None) -> float | None:

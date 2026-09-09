@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
   Building2,
@@ -9,7 +9,9 @@ import {
   EyeOff,
   History,
   Link2,
+  ListChecks,
   RefreshCw,
+  Search,
   ShieldCheck,
   SlidersHorizontal,
   WalletCards,
@@ -23,6 +25,9 @@ import {
   type BrokerImportPreviewGroup,
   type BrokerImportPreviewItem,
   type BrokerReconciliationItem,
+  type BrokerReviewBlocker,
+  type BrokerReviewQueue,
+  type BrokerReviewQueueItem,
   type BrokerStatus,
   type Portfolio,
 } from "../api";
@@ -44,6 +49,7 @@ import { usePageFeature } from "../pageFeatureHooks";
 type BrokerTab = "accounts" | "import" | "history" | "settings";
 type AccountFilter = "all" | "unmapped" | "import_ready" | "attention";
 type ReconciliationFilter = "all" | "quantity_mismatch" | "value_mismatch" | "unresolved_asset" | "stale_snapshot" | "missing_transactions" | "fully_reconciled";
+const reviewBlockers: BrokerReviewBlocker[] = ["unassigned_account", "unresolved_asset", "unsupported_transaction", "ready_to_import"];
 type AccountAssignmentProps = {
   portfolios: Portfolio[];
   isBusy: boolean;
@@ -91,6 +97,10 @@ export function BrokersPage({ notify }: { notify: (message: string, tone?: AppNo
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedTab = (searchParams.get("tab") as BrokerTab | null) ?? "accounts";
+  const requestedReviewBlocker = searchParams.get("queue") as BrokerReviewBlocker | null;
+  const selectedReviewBlocker = requestedReviewBlocker && reviewBlockers.includes(requestedReviewBlocker) ? requestedReviewBlocker : "unassigned_account";
+  const reviewOffset = Math.max(0, Number.parseInt(searchParams.get("offset") ?? "0", 10) || 0);
+  const scopedAccountId = searchParams.get("account");
   const [accountFilter, setAccountFilter] = useState<AccountFilter>("all");
   const [reconciliationFilter, setReconciliationFilter] = useState<ReconciliationFilter>("all");
   const [portalUrl, setPortalUrl] = useState("");
@@ -104,6 +114,11 @@ export function BrokersPage({ notify }: { notify: (message: string, tone?: AppNo
   const connections = useQuery({ queryKey: ["broker-connections"], queryFn: api.brokerConnections });
   const accounts = useQuery({ queryKey: ["broker-accounts"], queryFn: api.brokerAccounts });
   const preview = useQuery({ queryKey: ["broker-import-preview"], queryFn: () => api.brokerImportPreview(), enabled: selectedTab === "import" });
+  const reviewQueue = useQuery({
+    queryKey: ["broker-review-queue", selectedReviewBlocker, reviewOffset, scopedAccountId],
+    queryFn: () => api.brokerReviewQueue(selectedReviewBlocker, 10, reviewOffset, scopedAccountId),
+    enabled: selectedTab === "import",
+  });
   const reconciliation = useQuery({ queryKey: ["broker-reconciliation"], queryFn: api.brokerReconciliation, enabled: selectedTab === "import" || accountFilter === "attention" });
   const history = useQuery({ queryKey: ["broker-sync-history"], queryFn: api.brokerSyncHistory, enabled: selectedTab === "history" });
   const brokerUserKey = statusQuery.data?.broker_profile_key ?? null;
@@ -113,6 +128,7 @@ export function BrokersPage({ notify }: { notify: (message: string, tone?: AppNo
     queryClient.invalidateQueries({ queryKey: ["broker-connections"] });
     queryClient.invalidateQueries({ queryKey: ["broker-accounts"] });
     queryClient.invalidateQueries({ queryKey: ["broker-import-preview"] });
+    queryClient.invalidateQueries({ queryKey: ["broker-review-queue"] });
     queryClient.invalidateQueries({ queryKey: ["broker-reconciliation"] });
     queryClient.invalidateQueries({ queryKey: ["broker-sync-history"] });
   };
@@ -290,10 +306,33 @@ export function BrokersPage({ notify }: { notify: (message: string, tone?: AppNo
 
   const setTab = (tab: BrokerTab) => setSearchParams((current) => {
     current.set("tab", tab);
+    if (tab !== "import") {
+      current.delete("queue");
+      current.delete("offset");
+      current.delete("transaction");
+      current.delete("resolver");
+    }
+    return current;
+  });
+
+  const setReviewScope = (blocker: BrokerReviewBlocker, offset = 0) => setSearchParams((current) => {
+    current.set("tab", "import");
+    current.set("queue", blocker);
+    if (offset) current.set("offset", String(offset)); else current.delete("offset");
+    current.delete("account");
+    current.delete("transaction");
+    current.delete("resolver");
+    return current;
+  });
+  const setReviewPage = (offset: number) => setSearchParams((current) => {
+    if (offset) current.set("offset", String(offset)); else current.delete("offset");
+    current.delete("transaction");
+    current.delete("resolver");
     return current;
   });
 
   const filteredAccounts = accountRows.filter((account) => {
+    if (selectedTab === "accounts" && scopedAccountId) return account.provider_account_id === scopedAccountId;
     const state = deriveAccountState(account, reconciliationRows);
     if (accountFilter === "unmapped") return account.portfolio_id == null;
     if (accountFilter === "import_ready") return account.available_transaction_count > 0 && account.portfolio_id != null;
@@ -387,6 +426,8 @@ export function BrokersPage({ notify }: { notify: (message: string, tone?: AppNo
               onCreatePortfolio={(account, name) => createPortfolio.mutate({ account, name })}
               reconciliation={reconciliationRows}
               accountById={accountById}
+              focusedAccountId={scopedAccountId}
+              onClearScope={() => setSearchParams({ tab: "accounts" })}
             />
           ) : null}
 
@@ -401,6 +442,12 @@ export function BrokersPage({ notify }: { notify: (message: string, tone?: AppNo
               isBusy={isBusy}
               importing={importer.isPending}
               onImport={() => importer.mutate()}
+              reviewQueue={reviewQueue.data}
+              reviewLoading={reviewQueue.isLoading}
+              reviewError={reviewQueue.error}
+              onSelectReview={setReviewScope}
+              onReviewPage={setReviewPage}
+              searchParams={searchParams}
             />
           ) : null}
 
@@ -480,6 +527,8 @@ function AccountsTab(props: {
   onCreatePortfolio: (account: BrokerAccount, name: string) => void;
   reconciliation: BrokerReconciliationItem[];
   accountById: Map<string, BrokerAccount>;
+  focusedAccountId: string | null;
+  onClearScope: () => void;
 }) {
   return (
     <div className="broker-tab-panel">
@@ -518,6 +567,13 @@ function AccountsTab(props: {
           <option value="attention">Needs attention</option>
         </select>
       </div>
+      {props.focusedAccountId ? (
+        <div className="broker-action-banner" role="status">
+          <ListChecks size={17} />
+          <span>Scoped from the review queue. Assign this account to enable its eligible transaction imports.</span>
+          <button type="button" onClick={props.onClearScope}>Show all accounts</button>
+        </div>
+      ) : null}
       <BrokerAccountTable {...props} />
       <div className="broker-account-card-list">
         {props.accounts.map((account) => (
@@ -584,12 +640,12 @@ function BrokerAccountTable(props: AccountAssignmentProps & { accounts: BrokerAc
         </thead>
         <tbody>
           {props.accounts.map((account) => (
-            <tr key={account.provider_account_id}>
+            <tr key={account.provider_account_id} id={accountAnchor(account.provider_account_id)}>
               <td><AccountIdentity account={account} state={deriveAccountState(account, props.reconciliation)} /></td>
               <td>{money(account.total_value ?? account.balance, account.currency ?? "CAD")} <small>{account.currency ?? "native"}</small></td>
               <td>{account.position_count} positions<br /><small>{money(account.holdings_value, account.currency ?? "CAD")}</small></td>
               <td>{account.available_transaction_count} ready<br /><small>{account.unsupported_transaction_count} unsupported</small></td>
-              <td><AssignmentControl {...props} account={account} /></td>
+              <td><AssignmentControl {...props} account={account} context="table" /></td>
               <td>{formatTimestamp(account.updated_at)}<br /><small>Positions {account.latest_position_date ?? "not stored"}</small></td>
               <td><StatusPill label={accountStateLabel(deriveAccountState(account, props.reconciliation))} tone={account.portfolio_id == null ? "warn" : "ok"} /></td>
             </tr>
@@ -605,7 +661,7 @@ function BrokerAccountCard(props: AccountAssignmentProps & {
 }) {
   const state = deriveAccountState(props.account, props.reconciliation);
   return (
-    <article className="card broker-account-card">
+    <article className="card broker-account-card" id={`${accountAnchor(props.account.provider_account_id)}-card`}>
       <div className="broker-card-title">
         <WalletCards />
         <AccountIdentity account={props.account} state={state} />
@@ -620,7 +676,7 @@ function BrokerAccountCard(props: AccountAssignmentProps & {
         <Fact label="Last provider data" value={formatTimestamp(props.account.updated_at)} />
         <Fact label="Last local import" value={formatTimestamp(props.account.last_imported_at)} />
       </div>
-      <AssignmentControl {...props} />
+      <AssignmentControl {...props} context="card" />
     </article>
   );
 }
@@ -637,6 +693,7 @@ function AccountIdentity({ account, state }: { account: BrokerAccount; state: Br
 
 function AssignmentControl(props: {
   account: BrokerAccount;
+  context: "table" | "card";
   portfolios: Portfolio[];
   isBusy: boolean;
   onAssign: (account: BrokerAccount, portfolioId: number) => void;
@@ -648,6 +705,14 @@ function AssignmentControl(props: {
 }) {
   const draft = props.assignmentDrafts[props.account.provider_account_id] ?? (props.account.portfolio_id ? String(props.account.portfolio_id) : "");
   const newName = props.newPortfolioNames[props.account.provider_account_id] ?? "";
+  const prerequisiteId = `${accountAnchor(props.account.provider_account_id)}-${props.context}-assignment-help`;
+  const prerequisite = props.isBusy
+    ? "Assignment is temporarily disabled while another broker task is running. Wait for it to finish."
+    : !props.portfolios.length
+      ? "Assignment needs a local portfolio. Create one below or use New Portfolio on the Portfolios page."
+      : props.account.portfolio_id == null
+        ? "Choose the local portfolio that owns this account. Nothing imports until an assignment is saved."
+        : "Changing an assigned account after imports requires confirmation because future and historical activity can diverge.";
   return (
     <div className="broker-assignment-control">
       <label>
@@ -655,6 +720,7 @@ function AssignmentControl(props: {
         <select
           value={draft}
           disabled={props.isBusy || !props.portfolios.length}
+          aria-describedby={prerequisiteId}
           onChange={(event) => {
             const next = event.target.value;
             props.setAssignmentDrafts({ ...props.assignmentDrafts, [props.account.provider_account_id]: next });
@@ -665,6 +731,7 @@ function AssignmentControl(props: {
           {props.portfolios.map((portfolio) => <option value={portfolio.portfolio_id} key={portfolio.portfolio_id}>{portfolio.name}</option>)}
         </select>
       </label>
+      <p className="broker-control-prerequisite" id={prerequisiteId}>{prerequisite}</p>
       <div className="broker-new-portfolio">
         <input
           value={newName}
@@ -674,8 +741,13 @@ function AssignmentControl(props: {
         />
         <button onClick={() => props.onCreatePortfolio(props.account, newName.trim())} disabled={props.isBusy || !newName.trim()}>Create</button>
       </div>
+      {!props.portfolios.length ? <Link className="broker-inline-link" to="/portfolios/new">Open New Portfolio</Link> : null}
     </div>
   );
+}
+
+function accountAnchor(accountId: string) {
+  return `broker-account-${accountId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 }
 
 function BrokerRefreshProgress() {
@@ -686,8 +758,12 @@ function BrokerRefreshProgress() {
   );
 }
 
-function ImportReconciliationTab({ preview, previewLoading, reconciliation, reconciliationLoading, filter, setFilter, isBusy, importing, onImport }: { preview: BrokerImportPreview | undefined; previewLoading: boolean; reconciliation: BrokerReconciliationItem[]; reconciliationLoading: boolean; filter: ReconciliationFilter; setFilter: (filter: ReconciliationFilter) => void; isBusy: boolean; importing: boolean; onImport: () => void }) {
+function ImportReconciliationTab({ preview, previewLoading, reconciliation, reconciliationLoading, filter, setFilter, isBusy, importing, onImport, reviewQueue, reviewLoading, reviewError, onSelectReview, onReviewPage, searchParams }: { preview: BrokerImportPreview | undefined; previewLoading: boolean; reconciliation: BrokerReconciliationItem[]; reconciliationLoading: boolean; filter: ReconciliationFilter; setFilter: (filter: ReconciliationFilter) => void; isBusy: boolean; importing: boolean; onImport: () => void; reviewQueue: BrokerReviewQueue | undefined; reviewLoading: boolean; reviewError: Error | null; onSelectReview: (blocker: BrokerReviewBlocker, offset?: number) => void; onReviewPage: (offset: number) => void; searchParams: URLSearchParams }) {
   const filteredReconciliation = reconciliation.filter((item) => filter === "all" || item.status === filter);
+  const readyAccounts = preview?.groups.filter((group) => group.ready_count > 0) ?? [];
+  const importHelp = preview?.ready_count
+    ? `${preview.ready_count} eligible transaction${preview.ready_count === 1 ? "" : "s"} across ${readyAccounts.length} assigned account${readyAccounts.length === 1 ? "" : "s"} will be imported. Already imported and blocked activity will be skipped.`
+    : "Import is disabled because no eligible transaction is ready. Use the review queue below to clear prerequisites.";
   return (
     <div className="broker-tab-panel">
       <section className="card broker-import-panel">
@@ -697,10 +773,25 @@ function ImportReconciliationTab({ preview, previewLoading, reconciliation, reco
             <h2>Review eligible activity before importing</h2>
             <p>Adds new eligible transactions from assigned accounts to local portfolios. Unsupported and unresolved activity remains visible for review.</p>
           </div>
-          <button className="primary" onClick={onImport} disabled={isBusy || !preview?.ready_count}><Link2 size={17} />Import transactions</button>
+          <div className="broker-import-action">
+            <button className="primary" onClick={onImport} disabled={isBusy || !preview?.ready_count} aria-describedby="broker-import-prerequisite"><Link2 size={17} />Import {preview?.ready_count ?? 0} ready</button>
+            <p id="broker-import-prerequisite">{isBusy ? "Import waits until the current broker task finishes." : importHelp}</p>
+          </div>
         </div>
         {importing ? <div className="broker-action-banner"><RefreshCw size={17} />Importing eligible transactions and preserving idempotency.</div> : null}
         {previewLoading ? <Loading compact /> : preview ? <ImportPreview preview={preview} /> : <EmptyRow text="No broker activity preview is available yet." />}
+      </section>
+      <section className="card broker-review-panel" aria-labelledby="broker-review-heading">
+        <div className="broker-section-heading">
+          <div>
+            <p className="eyebrow">Review queue</p>
+            <h2 id="broker-review-heading">Resolve one blocker at a time</h2>
+            <p>This queue is read-only. Opening a resolver does not import, remap, or modify brokerage data.</p>
+          </div>
+        </div>
+        {reviewLoading ? <Loading compact /> : reviewError ? <ErrorPanel error={reviewError} /> : reviewQueue ? (
+          <BrokerReviewQueueView queue={reviewQueue} onSelect={onSelectReview} onPage={onReviewPage} searchParams={searchParams} />
+        ) : <EmptyRow text="No broker review queue is available yet." />}
       </section>
       <section className="card broker-reconciliation-panel">
         <div className="broker-section-heading">
@@ -735,28 +826,43 @@ function ImportPreview({ preview }: { preview: BrokerImportPreview }) {
         <Fact label="Needs review" value={String(preview.needs_review_count + preview.unresolved_asset_count + preview.failed_validation_count)} />
         <Fact label="Date range" value={preview.date_start && preview.date_end ? `${preview.date_start} to ${preview.date_end}` : "Unavailable"} />
       </div>
-      {preview.groups.map((group) => <ImportPreviewGroup key={`${group.institution_name}-${group.account_name}-${group.portfolio_id}`} group={group} />)}
+      <details className="broker-import-scope" id="broker-import-scope">
+        <summary>Review import scope by account</summary>
+        <div className="broker-import-scope-list">
+          {preview.groups.filter((group) => group.ready_count > 0).map((group) => (
+            <div key={`${group.provider_account_id}-${group.portfolio_id}`}>
+              <strong>{group.institution_name ?? "Broker"} · {group.account_name ?? maskAccount(group.masked_account_number)}</strong>
+              <span>{group.ready_count} eligible → {group.portfolio_name ?? "No portfolio assigned"}</span>
+            </div>
+          ))}
+          {!preview.ready_count ? <p>No account currently has eligible activity.</p> : null}
+        </div>
+      </details>
+      {preview.groups.map((group) => <ImportPreviewGroup key={`${group.provider_account_id}-${group.portfolio_id}`} group={group} />)}
       {!preview.groups.length ? <EmptyRow text="No broker transactions have been stored yet." /> : null}
     </div>
   );
 }
 
 function ImportPreviewGroup({ group }: { group: BrokerImportPreviewGroup }) {
+  const [expanded, setExpanded] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(10);
   const categorySummary = Object.entries(group.category_counts ?? {}).filter(([, value]) => value > 0);
+  const total = group.ready_count + group.already_imported_count + group.unsupported_count + group.needs_review_count + group.unresolved_asset_count + group.failed_validation_count;
   return (
-    <details className="broker-preview-group" open={group.ready_count > 0 || group.needs_review_count > 0}>
+    <details className="broker-preview-group" open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
       <summary>
         <strong>{group.institution_name ?? "Broker"} · {group.account_name ?? "Account"}</strong>
-        <span>{group.portfolio_name ?? "No assigned portfolio"} · {group.ready_count} ready · {group.unsupported_count} unsupported</span>
+        <span>{group.portfolio_name ?? "No assigned portfolio"} · {total} total · {group.ready_count} ready · {group.unsupported_count + group.failed_validation_count} unsupported</span>
       </summary>
-      <div className="broker-category-strip">
+      {expanded ? <><div className="broker-category-strip">
         {categorySummary.map(([key, value]) => <span key={key}>{transactionCategoryLabel(key)} <b>{value}</b></span>)}
       </div>
       <div className="broker-activity-table-wrap">
         <table className="broker-activity-table">
           <thead><tr><th>Date</th><th>Symbol</th><th>Type</th><th>Quantity</th><th>Price</th><th>Amount</th><th>Status</th><th>Normalization</th></tr></thead>
           <tbody>
-            {group.items.map((item) => (
+            {group.items.slice(0, visibleCount).map((item) => (
               <tr key={item.provider_transaction_id}>
                 <td>{item.trade_date}</td>
                 <td><ImportInstrumentIdentity item={item} /></td>
@@ -771,8 +877,101 @@ function ImportPreviewGroup({ group }: { group: BrokerImportPreviewGroup }) {
           </tbody>
         </table>
       </div>
+      {visibleCount < group.items.length ? <button type="button" className="broker-show-more" onClick={() => setVisibleCount((current) => Math.min(current + 10, group.items.length))}>Show 10 more preview rows</button> : null}</> : null}
     </details>
   );
+}
+
+function BrokerReviewQueueView({ queue, onSelect, onPage, searchParams }: { queue: BrokerReviewQueue; onSelect: (blocker: BrokerReviewBlocker, offset?: number) => void; onPage: (offset: number) => void; searchParams: URLSearchParams }) {
+  const resolver = searchParams.get("resolver");
+  const selectedTransaction = searchParams.get("transaction");
+  const selectedItem = queue.items.find((item) => item.provider_transaction_id === selectedTransaction);
+  const pageStart = queue.total ? queue.offset + 1 : 0;
+  const pageEnd = Math.min(queue.offset + queue.items.length, queue.total);
+  return <div className="broker-review-queue">
+    <div className="broker-review-summary" role="group" aria-label="Broker review blockers">
+      <ReviewSummary blocker="unassigned_account" label="Assign accounts" count={queue.counts.unassigned_account} selected={queue.selected_blocker === "unassigned_account"} onSelect={onSelect} />
+      <ReviewSummary blocker="unresolved_asset" label="Resolve assets" count={queue.counts.unresolved_asset} selected={queue.selected_blocker === "unresolved_asset"} onSelect={onSelect} />
+      <ReviewSummary blocker="unsupported_transaction" label="Unsupported or invalid" count={queue.counts.unsupported_transaction} selected={queue.selected_blocker === "unsupported_transaction"} onSelect={onSelect} />
+      <ReviewSummary blocker="ready_to_import" label="Ready to import" count={queue.counts.ready_to_import} selected={queue.selected_blocker === "ready_to_import"} onSelect={onSelect} />
+    </div>
+    {resolver && selectedItem ? <BrokerResolverContext item={selectedItem} resolver={resolver} searchParams={searchParams} /> : null}
+    <div className="broker-review-heading">
+      <div><strong>{reviewBlockerLabel(queue.selected_blocker)}</strong><span>{queue.account_filter ? "Scoped to one brokerage account" : "Across all brokerage accounts"}</span></div>
+      <span>Showing {pageStart}–{pageEnd} of {queue.total}</span>
+    </div>
+    <div className="broker-review-list">
+      {queue.items.map((item) => <BrokerReviewRow key={item.provider_transaction_id} item={item} searchParams={searchParams} />)}
+      {!queue.items.length ? <EmptyRow text="No activity matches this review blocker." /> : null}
+    </div>
+    <div className="broker-review-pagination" aria-label="Review queue pagination">
+      <button type="button" onClick={() => onPage(Math.max(0, queue.offset - queue.limit))} disabled={!queue.offset}>Previous</button>
+      <span>{pageStart}–{pageEnd} of {queue.total}</span>
+      <button type="button" onClick={() => onPage(queue.offset + queue.limit)} disabled={!queue.has_more}>Next</button>
+    </div>
+  </div>;
+}
+
+function ReviewSummary({ blocker, label, count, selected, onSelect }: { blocker: BrokerReviewBlocker; label: string; count: number; selected: boolean; onSelect: (blocker: BrokerReviewBlocker) => void }) {
+  return <button type="button" className={selected ? "selected" : ""} aria-pressed={selected} onClick={() => onSelect(blocker)}><span>{label}</span><strong>{count}</strong><em>Open queue</em></button>;
+}
+
+function BrokerReviewRow({ item, searchParams }: { item: BrokerReviewQueueItem; searchParams: URLSearchParams }) {
+  return <article>
+    <div className="broker-review-row-main">
+      <InstrumentIdentity instrument={item.instrument} fallback="Unsupported instrument" />
+      <StatusPill label={transactionCategoryLabel(item.status)} tone={item.blocker === "ready_to_import" ? "ok" : "warn"} />
+    </div>
+    <span>{item.institution_name ?? "Broker"} · {item.account_name ?? maskAccount(item.masked_account_number)} · {item.trade_date}</span>
+    <p>{item.normalization_result}</p>
+    <div className="broker-review-row-actions">
+      {item.blocker === "unassigned_account" ? <Link className="button-link" to={accountResolutionUrl(item)}>Assign this account</Link> : null}
+      {item.blocker === "unresolved_asset" ? <Link className="button-link" to={reviewResolutionUrl(searchParams, item, "asset")}>Open asset resolver</Link> : null}
+      {item.blocker === "unsupported_transaction" ? <Link className="button-link" to={reviewResolutionUrl(searchParams, item, "activity")}>Review why blocked</Link> : null}
+      {item.blocker === "ready_to_import" ? <a className="button-link" href="#broker-import-scope">Review import scope</a> : null}
+    </div>
+  </article>;
+}
+
+function BrokerResolverContext({ item, resolver, searchParams }: { item: BrokerReviewQueueItem; resolver: string; searchParams: URLSearchParams }) {
+  const symbol = item.instrument.symbol ?? "";
+  const candidates = useQuery({ queryKey: ["broker-asset-resolver", symbol], queryFn: () => api.assets(symbol, 8), enabled: resolver === "asset" && Boolean(symbol) });
+  const returnPath = `/brokers?${withoutResolver(searchParams).toString()}`;
+  return <section className="broker-resolver-context" aria-labelledby="broker-resolver-heading">
+    <div><p className="eyebrow">Scoped resolver</p><h3 id="broker-resolver-heading">{resolver === "asset" ? "Verify the local asset candidate" : "Unsupported activity review"}</h3></div>
+    <p><strong>{item.institution_name ?? "Broker"} · {item.account_name ?? maskAccount(item.masked_account_number)}</strong><br />Transaction {shortReference(item.provider_transaction_id)} · {item.trade_date} · {transactionCategoryLabel(item.category)}</p>
+    {resolver === "asset" ? <>
+      <p>This read-only step checks the normalized symbol against the local asset catalog. Broker asset assignment remains governed by the existing normalization and refresh workflow.</p>
+      {candidates.isLoading ? <Loading compact /> : candidates.data?.length ? <div className="broker-resolver-candidates">{candidates.data.map((candidate) => <Link key={candidate.asset_id} to={`/asset/${encodeURIComponent(candidate.asset_id)}?from=${encodeURIComponent(returnPath)}`}><Search size={16} /><span><strong>{candidate.symbol}</strong>{candidate.name ?? candidate.asset_id}</span></Link>)}</div> : <div className="broker-warning"><AlertTriangle size={17} /><span>No matching local asset is available. Refresh broker/catalog data; this transaction stays excluded until normalization supplies a stable local asset.</span></div>}
+    </> : <p>This transaction is retained for review but excluded from import because its activity type or required values are unsupported. No data was changed.</p>}
+    <Link className="broker-inline-link" to={returnPath}>Close resolver</Link>
+  </section>;
+}
+
+function accountResolutionUrl(item: BrokerReviewQueueItem) {
+  const query = new URLSearchParams({ tab: "accounts", account: item.provider_account_id, from: "review", transaction: item.provider_transaction_id });
+  return `/brokers?${query.toString()}#${accountAnchor(item.provider_account_id)}`;
+}
+
+function reviewResolutionUrl(current: URLSearchParams, item: BrokerReviewQueueItem, resolver: "asset" | "activity") {
+  const query = new URLSearchParams(current);
+  query.set("tab", "import");
+  query.set("queue", item.blocker);
+  query.set("account", item.provider_account_id);
+  query.set("transaction", item.provider_transaction_id);
+  query.set("resolver", resolver);
+  return `/brokers?${query.toString()}`;
+}
+
+function withoutResolver(current: URLSearchParams) {
+  const query = new URLSearchParams(current);
+  query.delete("transaction");
+  query.delete("resolver");
+  return query;
+}
+
+function reviewBlockerLabel(blocker: BrokerReviewBlocker) {
+  return ({ unassigned_account: "Accounts requiring assignment", unresolved_asset: "Assets requiring resolution", unsupported_transaction: "Unsupported or invalid activity", ready_to_import: "Eligible activity" })[blocker];
 }
 
 function ReconciliationTable({ items }: { items: BrokerReconciliationItem[] }) {
