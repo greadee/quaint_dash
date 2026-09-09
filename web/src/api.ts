@@ -1282,6 +1282,33 @@ export type IngestionQueueStatus = {
   failed_groups: IngestionQueueStatus["dead_letter_groups"];
   affected_data_products: string[];
 };
+export type OperationsHealthIncident = {
+  code: string;
+  severity: "info" | "warning" | "critical";
+  title: string;
+  detail: string;
+  guidance: string;
+  affected_data_products: string[];
+  operations_url: string;
+};
+export type OperationsHealthSummary = {
+  observed_at: string;
+  status: "healthy" | "degraded" | "critical";
+  headline: string;
+  summary: string;
+  incident_count: number;
+  informational_count: number;
+  affected_data_products: string[];
+  queue: IngestionQueueStatus;
+  workers: (WorkerDiagnostics & {
+    label: string;
+    enabled: boolean;
+    running: boolean;
+    affected_data_products: string[];
+  })[];
+  incidents: OperationsHealthIncident[];
+  operations_url: string;
+};
 export type IngestionBackgroundStatus = WorkerDiagnostics & {
   enabled: boolean;
   running: boolean;
@@ -1778,6 +1805,7 @@ export const api = {
   },
   retailSentimentStatus: (limit = 10) => request<RetailSentimentStatus>(`/ingestion/retail-sentiment/status?limit=${limit}`),
   ingestionQueueStatus: () => request<IngestionQueueStatus>("/ingestion/queue/status"),
+  operationsHealthSummary: () => request<OperationsHealthSummary>("/operations/health-summary"),
   retailSentimentOverview: (limit = 25) => request<RetailSentimentOverview>(`/retail-sentiment?limit=${limit}`),
   clearIngestionHistory: () => request<ActionResult>("/ingestion/jobs", { method: "DELETE" }),
   ingestionBackgroundStatus: () => request<IngestionBackgroundStatus>("/ingestion/background/status"),

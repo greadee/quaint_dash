@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, Trash2 } from "lucide-react";
-import { api, type DataReadinessWorkerStatus, type IngestionBackgroundStatus, type IngestionQueueStatus, type IngestionReadiness, type MarketFreshnessStatus, type RetailSentimentStatus, type StockRankingReadiness, type WorkerDiagnostics } from "../api";
+import { api, type DataReadinessWorkerStatus, type IngestionBackgroundStatus, type IngestionQueueStatus, type IngestionReadiness, type MarketFreshnessStatus, type OperationsHealthSummary, type RetailSentimentStatus, type StockRankingReadiness, type WorkerDiagnostics } from "../api";
 import { boundedInt, dateRange, formatActionResult, formatCount, formatDuration, formatTimestamp, percent, signedNumber } from "./routeFormatters";
 import { EmptyRow, ErrorPanel, HelpDisclosure, Loading, Signal } from "./routeShared";
 import type { HelpItem } from "./routeTypes";
@@ -9,6 +9,7 @@ import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton,
 import { usePageFeature } from "../pageFeatureHooks";
 import { backgroundStatusDetail, dataReadinessStatusDetail, marketFreshnessStatusDetail, queueAgeLabel, workerStateLabel } from "./operationsViewModels";
 import "./operationsDiagnostics.css";
+import { useSearchParams } from "react-router-dom";
 
 type StockRankingFactor = "aggregate" | "share_price_momentum" | "news_sentiment" | "retail_sentiment" | "earnings_momentum" | "institutional_buying";
 type StockRankingUniverse = "tracked" | "all";
@@ -38,7 +39,9 @@ const ingestionHelp: HelpItem[] = [
 
 export function OperationsPage() {
   const client = useQueryClient();
-  const [status, setStatus] = useState("");
+  const [searchParams] = useSearchParams();
+  const selectedIncident = searchParams.get("incident");
+  const [status, setStatus] = useState(() => searchParams.get("status") ?? "");
   const [domain, setDomain] = useState("");
   const [jobLimit, setJobLimit] = useState("25");
   const [pipeline, setPipeline] = useState("all");
@@ -79,6 +82,11 @@ export function OperationsPage() {
   const currentPendingJobs = useQuery({
     queryKey: ["jobs", "queue-status"],
     queryFn: api.ingestionQueueStatus,
+    refetchInterval: WORKER_STATUS_REFETCH_MS,
+  });
+  const health = useQuery({
+    queryKey: ["operations-health-summary"],
+    queryFn: api.operationsHealthSummary,
     refetchInterval: WORKER_STATUS_REFETCH_MS,
   });
   const background = useQuery({
@@ -128,6 +136,7 @@ export function OperationsPage() {
     }),
     onSuccess: (result) => {
       setMessage(`Scheduled: ${formatActionResult(result.result)}`);
+      client.invalidateQueries({ queryKey: ["operations-health-summary"] });
       client.invalidateQueries({ queryKey: ["jobs"] });
       client.invalidateQueries({ queryKey: ["ingestion-readiness"] });
       client.invalidateQueries({ queryKey: ["ranking-readiness"] });
@@ -141,6 +150,7 @@ export function OperationsPage() {
     }),
     onSuccess: (result) => {
       setMessage(`Run finished: ${formatActionResult(result.result)}`);
+      client.invalidateQueries({ queryKey: ["operations-health-summary"] });
       client.invalidateQueries({ queryKey: ["jobs"] });
       client.invalidateQueries({ queryKey: ["ingestion-readiness"] });
       client.invalidateQueries({ queryKey: ["ranking-readiness"] });
@@ -154,6 +164,7 @@ export function OperationsPage() {
     }),
     onSuccess: (result) => {
       setMessage(`Retry queued: ${formatActionResult(result.result)}`);
+      client.invalidateQueries({ queryKey: ["operations-health-summary"] });
       client.invalidateQueries({ queryKey: ["jobs"] });
       client.invalidateQueries({ queryKey: ["ingestion-readiness"] });
       client.invalidateQueries({ queryKey: ["retail-sentiment-status"] });
@@ -163,6 +174,7 @@ export function OperationsPage() {
     mutationFn: api.clearIngestionHistory,
     onSuccess: (result) => {
       setMessage(`Cleared: ${formatActionResult(result.result)}`);
+      client.invalidateQueries({ queryKey: ["operations-health-summary"] });
       client.invalidateQueries({ queryKey: ["jobs"] });
       client.invalidateQueries({ queryKey: ["ingestion-readiness"] });
       client.invalidateQueries({ queryKey: ["retail-sentiment-status"] });
@@ -172,6 +184,7 @@ export function OperationsPage() {
     mutationFn: api.startIngestionBackground,
     onSuccess: () => {
       setMessage("Auto worker started.");
+      client.invalidateQueries({ queryKey: ["operations-health-summary"] });
       client.invalidateQueries({ queryKey: ["ingestion-background-status"] });
     },
   });
@@ -179,6 +192,7 @@ export function OperationsPage() {
     mutationFn: api.stopIngestionBackground,
     onSuccess: () => {
       setMessage("Auto worker stopped.");
+      client.invalidateQueries({ queryKey: ["operations-health-summary"] });
       client.invalidateQueries({ queryKey: ["ingestion-background-status"] });
     },
   });
@@ -186,6 +200,7 @@ export function OperationsPage() {
     mutationFn: api.tickIngestionBackground,
     onSuccess: (result) => {
       setMessage(`Auto worker cycle finished: ${formatActionResult(result.result)}`);
+      client.invalidateQueries({ queryKey: ["operations-health-summary"] });
       client.invalidateQueries({ queryKey: ["jobs"] });
       client.invalidateQueries({ queryKey: ["ingestion-background-status"] });
       client.invalidateQueries({ queryKey: ["ingestion-readiness"] });
@@ -197,6 +212,7 @@ export function OperationsPage() {
     mutationFn: api.startMarketFreshness,
     onSuccess: () => {
       setMessage("Market freshness worker started.");
+      client.invalidateQueries({ queryKey: ["operations-health-summary"] });
       client.invalidateQueries({ queryKey: ["market-freshness-status"] });
     },
   });
@@ -204,6 +220,7 @@ export function OperationsPage() {
     mutationFn: api.stopMarketFreshness,
     onSuccess: () => {
       setMessage("Market freshness worker stopped.");
+      client.invalidateQueries({ queryKey: ["operations-health-summary"] });
       client.invalidateQueries({ queryKey: ["market-freshness-status"] });
     },
   });
@@ -211,6 +228,7 @@ export function OperationsPage() {
     mutationFn: api.tickMarketFreshness,
     onSuccess: (result) => {
       setMessage(`Market freshness cycle finished: ${formatActionResult(result.result)}`);
+      client.invalidateQueries({ queryKey: ["operations-health-summary"] });
       client.invalidateQueries({ queryKey: ["market-freshness-status"] });
       client.invalidateQueries({ queryKey: ["jobs"] });
       client.invalidateQueries({ queryKey: ["ingestion-readiness"] });
@@ -221,6 +239,7 @@ export function OperationsPage() {
     mutationFn: api.startDataReadiness,
     onSuccess: () => {
       setMessage("Data readiness worker started.");
+      client.invalidateQueries({ queryKey: ["operations-health-summary"] });
       client.invalidateQueries({ queryKey: ["data-readiness-status"] });
     },
   });
@@ -228,6 +247,7 @@ export function OperationsPage() {
     mutationFn: api.stopDataReadiness,
     onSuccess: () => {
       setMessage("Data readiness worker stopped.");
+      client.invalidateQueries({ queryKey: ["operations-health-summary"] });
       client.invalidateQueries({ queryKey: ["data-readiness-status"] });
     },
   });
@@ -235,6 +255,7 @@ export function OperationsPage() {
     mutationFn: api.tickDataReadiness,
     onSuccess: (result) => {
       setMessage(`Data readiness cycle finished: ${formatActionResult(result.result)}`);
+      client.invalidateQueries({ queryKey: ["operations-health-summary"] });
       client.invalidateQueries({ queryKey: ["data-readiness-status"] });
       client.invalidateQueries({ queryKey: ["jobs"] });
       client.invalidateQueries({ queryKey: ["ingestion-readiness"] });
@@ -273,9 +294,10 @@ export function OperationsPage() {
       staleOnly: true,
     });
   };
-  return <div className="page"><div className="page-title"><div><p className="eyebrow">Data health</p><h1>Operations</h1><p className="page-subtitle">Background due work keeps routine data moving. Manual controls remain here for backfills, retries, provider-sensitive refreshes, and explicit runs.</p></div><div className="actions"><PageLayoutButton pageId="operations" /><PageFeatureMenu pageId="operations" /><button onClick={() => { jobs.refetch(); currentPendingJobs.refetch(); background.refetch(); marketFreshness.refetch(); dataReadiness.refetch(); retailSentiment.refetch(); readiness.refetch(); rankingReadiness.refetch(); }} disabled={jobs.isFetching || currentPendingJobs.isFetching || background.isFetching || marketFreshness.isFetching || dataReadiness.isFetching || retailSentiment.isFetching || readiness.isFetching || rankingReadiness.isFetching}><RefreshCw size={17}/>Refresh</button><button className="danger" onClick={() => window.confirm("Clear ingestion job history and sync status rows? Market data and broker connections will stay intact.") && clearHistory.mutate()} disabled={isBusy}><Trash2 size={17}/>Clear history</button><button className="primary" onClick={() => window.confirm("Run pending ingestion jobs with these options?") && run.mutate({})} disabled={isBusy}><RefreshCw size={17}/>Run jobs</button></div></div>
+  return <div className="page"><div className="page-title"><div><p className="eyebrow">Data health</p><h1>Operations</h1><p className="page-subtitle">Status reads are safe and do not run jobs. Manual controls remain below for bounded provider traffic and local data changes.</p></div><div className="actions"><PageLayoutButton pageId="operations" /><PageFeatureMenu pageId="operations" /><button onClick={() => { health.refetch(); jobs.refetch(); currentPendingJobs.refetch(); background.refetch(); marketFreshness.refetch(); dataReadiness.refetch(); retailSentiment.refetch(); readiness.refetch(); rankingReadiness.refetch(); }} disabled={health.isFetching || jobs.isFetching || currentPendingJobs.isFetching || background.isFetching || marketFreshness.isFetching || dataReadiness.isFetching || retailSentiment.isFetching || readiness.isFetching || rankingReadiness.isFetching}><RefreshCw size={17}/>Refresh status</button></div></div>
     <PageLayoutToolbar pageId="operations" />
     <OptionalFeaturesEmpty pageId="operations" />
+    <OperationsHealthPanel health={health.data} isLoading={health.isLoading} error={health.error} selectedIncident={selectedIncident} />
     <OperationsDiagnostics queue={currentPendingJobs.data} isLoading={currentPendingJobs.isLoading} error={currentPendingJobs.error} workers={[
       { label: "Routine ingestion", status: background.data, error: background.error, isLoading: background.isLoading },
       { label: "Holding prices", status: marketFreshness.data, error: marketFreshness.error, isLoading: marketFreshness.isLoading },
@@ -352,6 +374,38 @@ type DiagnosticWorker = {
   error: Error | null;
   isLoading: boolean;
 };
+
+function OperationsHealthPanel({ health, isLoading, error, selectedIncident }: {
+  health?: OperationsHealthSummary;
+  isLoading: boolean;
+  error: Error | null;
+  selectedIncident: string | null;
+}) {
+  const selected = health?.incidents.find((incident) => incident.code === selectedIncident);
+  return <section id="operations-health" className={`card operations-health ${health?.status ?? "unavailable"}`} aria-labelledby="operations-health-heading">
+    <div className="card-heading">
+      <div><p className="eyebrow">Incident summary</p><h2 id="operations-health-heading">{isLoading ? "Checking system health" : error ? "System health unavailable" : health?.headline}</h2></div>
+      <span className={`pill ${health?.status === "healthy" ? "done" : health?.status === "critical" ? "failed" : "pending"}`}>{health?.status ?? (isLoading ? "loading" : "unavailable")}</span>
+    </div>
+    {error ? <div className="operations-health-body"><p role="alert">Unified health could not be verified. The detailed read-only diagnostics below may still be available; do not assume a zero count is healthy.</p></div> : isLoading ? <Loading /> : health ? <div className="operations-health-body">
+      <p className="operations-health-summary">{selected ? `Focused incident: ${selected.title}. ${selected.detail}` : health.summary}</p>
+      <div className="background-status-grid">
+        <Signal label="Queued work" value={formatCount(health.queue.pending_count, "job")} />
+        <Signal label="Oldest backlog" value={queueAgeLabel(health.queue.oldest_backlog_age_seconds)} />
+        <Signal label="Dead letters" value={formatCount(health.queue.dead_letter_count, "job")} />
+        <Signal label="Workers enabled" value={`${health.workers.filter((worker) => worker.enabled).length}/${health.workers.length}`} />
+        <Signal label="Affected products" value={String(health.affected_data_products.length)} />
+      </div>
+      {health.incidents.length ? <div className="operations-incident-list">{health.incidents.map((incident) => <article className={`${incident.severity} ${incident.code === selectedIncident ? "selected" : ""}`} key={incident.code}>
+        <div><span className={`pill ${incident.severity === "critical" ? "failed" : incident.severity === "warning" ? "pending" : ""}`}>{incident.severity}</span><strong>{incident.title}</strong></div>
+        <p>{incident.detail}</p>
+        <p><b>Safe next step:</b> {incident.guidance}</p>
+        {incident.affected_data_products.length ? <small>Affects {incident.affected_data_products.join(", ")}</small> : <small>Configuration status only; no affected product was inferred.</small>}
+      </article>)}</div> : <p>No active incidents were found by the current health policy.</p>}
+      <p className="muted">This section is read-only. Refreshing status does not schedule jobs, contact providers, or change stored data.</p>
+    </div> : null}
+  </section>;
+}
 
 export function OperationsDiagnostics({ queue, isLoading, error, workers }: {
   queue?: IngestionQueueStatus;

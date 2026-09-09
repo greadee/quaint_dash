@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
   BarChart3,
@@ -15,7 +16,7 @@ import {
   WalletCards,
   X,
 } from "lucide-react";
-import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
+import { Link, Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { BenchmarkDetailPage, BenchmarksWorkspacePage } from "./benchmarks";
 import {
   AssetDetailPage,
@@ -35,6 +36,7 @@ import {
   type AppSettings,
 } from "./appRoutes";
 import { PageFeatureProvider } from "./pageFeatureStore";
+import { api } from "./api";
 
 const defaultAppSettings: AppSettings = {
   theme: "dark",
@@ -58,6 +60,11 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings>(loadAppSettings);
   const [notification, setNotification] = useState<AppNotification | null>(null);
   const location = useLocation();
+  const health = useQuery({
+    queryKey: ["operations-health-summary"],
+    queryFn: api.operationsHealthSummary,
+    refetchInterval: 60_000,
+  });
   const notify = (message: string, tone: AppNotification["tone"] = "success") => {
     setNotification({ id: Date.now(), tone, message });
   };
@@ -89,7 +96,10 @@ export default function App() {
           <NavLink to="/operations"><Database />Operations</NavLink>
           <NavLink to="/settings"><Settings />Settings</NavLink>
         </nav>
-        <div className="sidebar-note"><span className="status-dot" />Local API connected</div>
+        <Link className={`sidebar-note sidebar-health ${health.data?.status ?? (health.error ? "unavailable" : "loading")}`} to={health.data?.operations_url ?? "/operations#operations-health"}>
+          <span className="status-dot" />
+          <span><strong>{health.isLoading ? "Checking data status" : health.error ? "Data status unavailable" : health.data?.headline ?? "Data status unavailable"}</strong><small>{health.data ? `${health.data.incident_count} active incident${health.data.incident_count === 1 ? "" : "s"}` : "Open Operations"}</small></span>
+        </Link>
       </aside>
       <main>
         <header>

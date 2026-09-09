@@ -9,7 +9,7 @@ const apiMock = vi.hoisted(() => ({
   overviewUpdates: vi.fn(),
   portfolios: vi.fn(),
   brokerAccounts: vi.fn(),
-  ingestionJobs: vi.fn(),
+  operationsHealthSummary: vi.fn(),
 }));
 
 vi.mock("../api", () => ({ api: apiMock }));
@@ -48,7 +48,19 @@ describe("OverviewPage", () => {
     });
     apiMock.portfolios.mockResolvedValue([{ portfolio_id: 1, name: "Core", base_ccy: "CAD", position_count: 1 }]);
     apiMock.brokerAccounts.mockResolvedValue([{ provider_account_id: "acct-1", portfolio_id: 1 }]);
-    apiMock.ingestionJobs.mockResolvedValue([{ job_id: 1, status: "failed" }]);
+    apiMock.operationsHealthSummary.mockResolvedValue({
+      observed_at: "2026-09-09T12:00:00Z",
+      status: "critical",
+      headline: "Data health needs immediate attention",
+      summary: "12 queued jobs include work older than one hour while routine ingestion is disabled.",
+      incident_count: 2,
+      informational_count: 0,
+      affected_data_products: ["Prices and market history"],
+      queue: { pending_count: 12 },
+      workers: [],
+      incidents: [],
+      operations_url: "/operations?incident=blocked-backlog#operations-health",
+    });
   });
 
   it("renders market snapshot and expands movers", async () => {
@@ -57,7 +69,9 @@ describe("OverviewPage", () => {
 
     expect(await screen.findByRole("heading", { name: "Overview" })).toBeInTheDocument();
     expect(await screen.findByText("Total market value")).toBeInTheDocument();
-    expect(screen.getByText("Attention items")).toBeInTheDocument();
+    expect(screen.getByText("Data-health incidents")).toBeInTheDocument();
+    expect(screen.getByText("Data health needs immediate attention")).toBeInTheDocument();
+    expect(screen.queryByText("data healthy")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "See all" }));
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Activity, Building2, CircleDollarSign, Database, WalletCards } from "lucide-react";
+import { Activity, AlertTriangle, Building2, CircleDollarSign, Database, WalletCards } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { money, percent } from "./routeFormatters";
@@ -15,10 +15,10 @@ export function OverviewPage({ moverDefault }: { moverDefault: MoverDefault }) {
   const updates = useQuery({ queryKey: ["overview-updates"], queryFn: api.overviewUpdates, refetchInterval: MARKET_REFRESH_REFETCH_MS });
   const portfolios = useQuery({ queryKey: ["portfolios"], queryFn: api.portfolios, refetchInterval: MARKET_REFRESH_REFETCH_MS });
   const brokers = useQuery({ queryKey: ["broker-accounts"], queryFn: api.brokerAccounts });
-  const jobs = useQuery({ queryKey: ["jobs", "failed", ""], queryFn: () => api.ingestionJobs("failed") });
+  const health = useQuery({ queryKey: ["operations-health-summary"], queryFn: api.operationsHealthSummary, refetchInterval: MARKET_REFRESH_REFETCH_MS });
   const portfolioCount = portfolios.data?.length ?? 0;
   const mappedAccounts = brokers.data?.filter((account) => account.portfolio_id != null).length ?? 0;
-  const failedJobs = jobs.data?.length ?? 0;
+  const attentionCount = health.data?.incident_count;
   const openAccounts = brokers.data?.length ?? 0;
   const topMover = updates.data?.price_movers[0];
   const movers = updates.data?.price_movers ?? [];
@@ -34,12 +34,21 @@ export function OverviewPage({ moverDefault }: { moverDefault: MoverDefault }) {
       <div className="actions"><PageLayoutButton pageId="overview" /><PageFeatureMenu pageId="overview" /><Link className="button-link" to="/signals"><Activity size={17}/>Review signals</Link><Link className="button-link primary" to="/portfolios"><WalletCards size={17}/>Open portfolios</Link></div>
     </div>
     <PageLayoutToolbar pageId="overview" />
+    <section className={`status-banner overview-health ${health.data?.status === "critical" || health.error ? "danger" : health.data?.status === "degraded" ? "warning" : ""}`} aria-live="polite">
+      {health.data?.status === "healthy" ? <Database size={20} /> : <AlertTriangle size={20} />}
+      <div>
+        <strong>{health.isLoading ? "Checking data health" : health.error ? "Data health is unavailable" : health.data?.headline ?? "Data health is unavailable"}</strong>
+        <p>{health.isLoading ? "Reading queue, worker, provider, and evidence status." : health.error ? "The app cannot verify current data health. Open Operations before relying on analytical outputs." : health.data?.summary}</p>
+        {health.data?.affected_data_products.length ? <span>Affected: {health.data.affected_data_products.join(", ")}</span> : null}
+      </div>
+      <Link className="button-link" to={health.data?.operations_url ?? "/operations#operations-health"}>Review data status</Link>
+    </section>
     <section className="metric-grid">
       <Metric icon={<CircleDollarSign />} label="Total market value" value={money(updates.data?.total_market_value)} />
       <Metric icon={<Activity />} label="Active holdings" value={String(updates.data?.position_count ?? 0)} />
       <Metric icon={<WalletCards />} label="Portfolios" value={String(portfolioCount)} />
       <Metric icon={<Building2 />} label="Broker accounts" value={`${mappedAccounts}/${openAccounts}`} detail="mapped" positive={Boolean(mappedAccounts)} />
-      <Metric icon={<Database />} label="Attention items" value={String(failedJobs)} detail={failedJobs ? "failed jobs" : "data healthy"} positive={!failedJobs} />
+      <Metric icon={<Database />} label="Data-health incidents" value={attentionCount == null ? "—" : String(attentionCount)} detail={health.isLoading ? "checking" : health.error ? "status unavailable" : health.data?.status ?? "unavailable"} positive={health.data?.status === "healthy"} />
     </section>
     <section className="overview-focus-grid">
       <section className="card overview-primary">
@@ -54,11 +63,11 @@ export function OverviewPage({ moverDefault }: { moverDefault: MoverDefault }) {
         </div>
       </section>
       <LayoutWidget pageId="overview" widgetId="overview.quickActions"><section className="card overview-primary">
-        <div className="card-heading"><div><p className="eyebrow">Next action</p><h2>{failedJobs ? "Fix failed data jobs" : mappedAccounts ? "Review portfolio exposure" : "Connect a broker account"}</h2></div><span>{failedJobs ? `${failedJobs} failed` : `${mappedAccounts} mapped`}</span></div>
+        <div className="card-heading"><div><p className="eyebrow">Next action</p><h2>{health.data?.status !== "healthy" ? "Review data health" : mappedAccounts ? "Review portfolio exposure" : "Connect a broker account"}</h2></div><span>{health.data?.status !== "healthy" ? `${attentionCount ?? "—"} incidents` : `${mappedAccounts} mapped`}</span></div>
         <div className="overview-hero-value">
-          <strong>{failedJobs ? "Data attention" : mappedAccounts ? "Portfolio review" : "Broker setup"}</strong>
-          <p>{failedJobs ? "Operations has the failed job list and retry controls." : mappedAccounts ? "Portfolios contains holdings, exposure, analytics, and account mapping views." : "Broker setup stays in the broker workspace so account connection steps are not mixed into overview."}</p>
-          <Link className="portal-link" to={failedJobs ? "/operations" : mappedAccounts ? "/portfolios" : "/brokers"}>{failedJobs ? "Open operations" : mappedAccounts ? "Open portfolio workspace" : "Start broker setup"}</Link>
+          <strong>{health.data?.status !== "healthy" ? "Data attention" : mappedAccounts ? "Portfolio review" : "Broker setup"}</strong>
+          <p>{health.data?.status !== "healthy" ? "Operations explains the affected products, safe next step, backlog, workers, and provider failures without running any work." : mappedAccounts ? "Portfolios contains holdings, exposure, analytics, and account mapping views." : "Broker setup stays in the broker workspace so account connection steps are not mixed into overview."}</p>
+          <Link className="portal-link" to={health.data?.status !== "healthy" ? health.data?.operations_url ?? "/operations#operations-health" : mappedAccounts ? "/portfolios" : "/brokers"}>{health.data?.status !== "healthy" ? "Open read-only status" : mappedAccounts ? "Open portfolio workspace" : "Start broker setup"}</Link>
         </div>
       </section></LayoutWidget>
     </section>

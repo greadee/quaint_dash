@@ -1,12 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import type { IngestionQueueStatus, WorkerDiagnostics, WorkerFailure } from "../api";
 import { OperationsDiagnostics, OperationsPage } from "./operationsRoute";
 
 const apiMock = vi.hoisted(() => ({
   ingestionJobs: vi.fn(),
   ingestionQueueStatus: vi.fn(),
+  operationsHealthSummary: vi.fn(),
   ingestionBackgroundStatus: vi.fn(),
   marketFreshnessStatus: vi.fn(),
   dataReadinessStatus: vi.fn(),
@@ -24,13 +26,13 @@ const apiMock = vi.hoisted(() => ({
 
 vi.mock("../api", () => ({ api: apiMock }));
 
-function renderOperations() {
+function renderOperations(route = "/operations") {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <OperationsPage />
+      <MemoryRouter initialEntries={[route]}><OperationsPage /></MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -56,6 +58,16 @@ describe("OperationsPage", () => {
       Promise.resolve(requestedStatus === "pending" ? [] : [failedJob]),
     );
     apiMock.ingestionQueueStatus.mockResolvedValue(emptyQueue);
+    apiMock.operationsHealthSummary.mockResolvedValue({
+      observed_at: "2026-09-09T12:00:00Z", status: "critical",
+      headline: "Data health needs immediate attention",
+      summary: "12 queued jobs include work older than one hour.", incident_count: 1,
+      informational_count: 0, affected_data_products: ["Prices and market history"],
+      queue: { ...emptyQueue, pending_count: 12, oldest_backlog_age_seconds: 7200 },
+      workers: [{ ...disabledWorker, label: "Routine ingestion", affected_data_products: ["Prices and market history"] }],
+      incidents: [{ code: "blocked-backlog", severity: "critical", title: "Old work is waiting without a routine worker", detail: "12 queued jobs include work older than one hour.", guidance: "Confirm provider access before a bounded run.", affected_data_products: ["Prices and market history"], operations_url: "/operations?incident=blocked-backlog&status=pending#operations-health" }],
+      operations_url: "/operations?incident=blocked-backlog&status=pending#operations-health",
+    });
     apiMock.marketFreshnessStatus.mockResolvedValue({
       ...disabledWorker, last_poll_at: null, last_subscription_count: null,
       last_refreshed_count: null, poll_interval_seconds: 900, lookback_days: 7,
@@ -200,6 +212,7 @@ describe("OperationsPage", () => {
     renderOperations();
 
     expect(await screen.findByRole("heading", { name: "Operations" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Data health needs immediate attention" })).toBeInTheDocument();
     expect(apiMock.ingestionJobs).toHaveBeenCalledWith("", "", 25);
     expect(apiMock.ingestionQueueStatus).toHaveBeenCalled();
     expect(apiMock.ingestionJobs).not.toHaveBeenCalledWith("pending", "", 500);

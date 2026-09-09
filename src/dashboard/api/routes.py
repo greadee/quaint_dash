@@ -10,6 +10,7 @@ from dashboard.application.operations import (
     OperationsQueueQueries,
     OperationsStatusQueries,
     OperationsWorkerCommands,
+    build_operations_health_summary,
     safe_ingestion_job,
 )
 from dashboard.db.operations import OperationsQueueRepository
@@ -79,6 +80,7 @@ from dashboard.api.models import (
     DataReadinessWorkerStatusResponse,
     IngestionJobResponse,
     IngestionQueueStatusResponse,
+    OperationsHealthSummaryResponse,
     IngestionBackgroundStatusResponse,
     IngestionReadinessResponse,
     IngestionRetryFailedRequest,
@@ -1273,6 +1275,67 @@ def ingestion_queue_status(conn=Depends(get_connection)):
         raise HTTPException(
             status_code=503,
             detail="Queue diagnostics are unavailable. Check local database access and refresh status.",
+        ) from exc
+
+
+@router.get("/operations/health-summary", response_model=OperationsHealthSummaryResponse)
+def operations_health_summary(request: Request, conn=Depends(get_connection)):
+    """Return one conservative, read-only health narrative for every surface."""
+    try:
+        queue = OperationsQueueQueries(OperationsQueueRepository(conn)).queue_status()
+        statuses = _operations_status_queries(request)
+        workers = [
+            {
+                **statuses.ingestion_background_status(),
+                "label": "Routine ingestion",
+                "affected_data_products": queue["affected_data_products"],
+            },
+            {
+                **statuses.market_freshness_status(),
+                "label": "Holding prices",
+                "affected_data_products": ["Prices and market history"],
+            },
+            {
+                **statuses.data_readiness_status(),
+                "label": "Portfolio data",
+                "affected_data_products": ["Fundamentals and valuation inputs"],
+            },
+        ]
+
+        benchmark_service = BenchmarkApiService(conn)
+        benchmark_evidence = []
+        for item in benchmark_service.list_benchmarks(limit=500):
+            evidence = present_benchmark_summary(item).evidence
+            if evidence is not None:
+                benchmark_evidence.append(evidence.model_dump(mode="json"))
+
+        news_providers = [
+            item.model_dump(mode="json")
+            for item in NewsApiService(conn).provider_health(stale_after_minutes=120)
+        ]
+        retail_status = CommandApiService(conn).retail_sentiment_status(limit=1)
+        signal_row = conn.execute(
+            """
+            SELECT COALESCE(BOOL_OR(c.status = 'expired'), FALSE)
+            FROM signal_evaluation_current c
+            JOIN signal_evaluation e ON e.signal_id = c.signal_id
+            JOIN signal_definition d ON d.definition_id = e.definition_id
+            WHERE c.is_active = TRUE AND d.factor <> 'retail_sentiment'
+            """
+        ).fetchone()
+        return build_operations_health_summary(
+            queue=queue,
+            workers=workers,
+            benchmark_evidence=benchmark_evidence,
+            news_providers=news_providers,
+            retail_providers=[item.model_dump(mode="json") for item in retail_status.providers],
+            signal_summary={"stale_cached_results": bool(signal_row and signal_row[0])},
+        )
+    except Exception as exc:
+        LOGGER.exception("Unified Operations health read failed")
+        raise HTTPException(
+            status_code=503,
+            detail="Unified data health is unavailable. Open Operations and refresh read-only diagnostics.",
         ) from exc
 
 

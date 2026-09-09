@@ -80,6 +80,11 @@ const apiMock = vi.hoisted(() => ({
   importBrokerTransactions: vi.fn(),
   setBrokerRawPayloadStorage: vi.fn(),
   ingestionJobs: vi.fn(),
+  operationsHealthSummary: vi.fn(),
+  ingestionQueueStatus: vi.fn(),
+  marketFreshnessStatus: vi.fn(),
+  dataReadinessStatus: vi.fn(),
+  retailSentimentStatus: vi.fn(),
   clearIngestionHistory: vi.fn(),
   ingestionBackgroundStatus: vi.fn(),
   startIngestionBackground: vi.fn(),
@@ -571,7 +576,32 @@ function resetApiMocks() {
   apiMock.importBrokerTransactions.mockResolvedValue({ status: "ok", result: { imported: 1 } });
   apiMock.setBrokerRawPayloadStorage.mockResolvedValue({ raw_payload_storage_enabled: false });
   apiMock.ingestionJobs.mockResolvedValue([{ job_id: 1, asset_id: "NVDA", domain: "market", job_type: "prices", dataset: "daily", status: "failed", priority: 1, requested_start_date: null, requested_end_date: null, attempt_count: 1, error_message: "provider timeout", created_at: "2026-06-19T12:00:00Z", updated_at: "2026-06-19T12:00:00Z" }]);
+  apiMock.operationsHealthSummary.mockResolvedValue({
+    observed_at: "2026-09-09T12:00:00Z",
+    status: "critical",
+    headline: "Data health needs immediate attention",
+    summary: "12 queued jobs include old work while routine ingestion is disabled.",
+    incident_count: 2,
+    informational_count: 0,
+    affected_data_products: ["Prices and market history"],
+    queue: {
+      observed_at: "2026-09-09T12:00:00Z", pending_count: 12, running_count: 0,
+      dead_letter_count: 1, failed_count: 0, oldest_backlog_at: "2026-09-09T10:00:00Z",
+      oldest_backlog_age_seconds: 7200, dead_letter_groups: [], failed_groups: [],
+      affected_data_products: ["Prices and market history"],
+    },
+    workers: [{ worker_name: "ingestion_background", label: "Routine ingestion", state: "disabled", enabled: false, running: false, affected_data_products: ["Prices and market history"], current_failures: {}, last_failure: null, failure_count: 0 }],
+    incidents: [{ code: "blocked-backlog", severity: "critical", title: "Old work is waiting without a routine worker", detail: "12 queued jobs include work older than one hour.", guidance: "Confirm provider access before a bounded run.", affected_data_products: ["Prices and market history"], operations_url: "/operations?incident=blocked-backlog&status=pending#operations-health" }],
+    operations_url: "/operations?incident=blocked-backlog&status=pending#operations-health",
+  });
+  apiMock.ingestionQueueStatus.mockResolvedValue({
+    observed_at: "2026-09-09T12:00:00Z", pending_count: 12, running_count: 0,
+    dead_letter_count: 1, failed_count: 0, oldest_backlog_at: "2026-09-09T10:00:00Z",
+    oldest_backlog_age_seconds: 7200, dead_letter_groups: [], failed_groups: [],
+    affected_data_products: ["Prices and market history"],
+  });
   apiMock.ingestionBackgroundStatus.mockResolvedValue({
+    worker_name: "ingestion_background", state: "disabled", current_failures: {}, last_failure: null, failure_count: 0,
     enabled: true,
     running: false,
     last_schedule_at: "2026-06-19T12:00:00Z",
@@ -586,6 +616,19 @@ function resetApiMocks() {
     years: 10,
     prices_only: false,
   });
+  apiMock.marketFreshnessStatus.mockResolvedValue({
+    worker_name: "market_freshness", state: "disabled", current_failures: {}, last_failure: null, failure_count: 0,
+    enabled: false, running: false, last_poll_at: null, last_refreshed_count: null, last_subscription_count: null,
+    last_error: null, poll_interval_seconds: 900, include_watchlist: false, lookback_days: 7, max_symbols_per_tick: 25,
+  });
+  apiMock.dataReadinessStatus.mockResolvedValue({
+    worker_name: "data_readiness", state: "disabled", current_failures: {}, last_failure: null, failure_count: 0,
+    enabled: false, running: false, last_check_at: null, last_target_count: null, last_ready_count: null,
+    last_valuation_count: null, last_scheduled_count: null, last_completed_count: null, last_pending_count: null,
+    last_missing: [], last_error: null, poll_interval_seconds: 900, max_assets_per_tick: 50, max_jobs_per_batch: 5,
+    max_run_batches_per_tick: 1, years: 10, min_price_rows: 3,
+  });
+  apiMock.retailSentimentStatus.mockResolvedValue({ providers: [], latest_snapshots: [], recent_posts: [], pending_jobs: 0, running_jobs: 0, failed_jobs: 0 });
   apiMock.ingestionReadiness.mockResolvedValue({
     total: 1,
     ready_count: 1,
@@ -661,7 +704,7 @@ describe("App shell", () => {
 
     expect(await screen.findByRole("heading", { name: "Overview" })).toBeInTheDocument();
     expect(await screen.findByText("Total market value")).toBeInTheDocument();
-    expect(screen.getByText("Attention items")).toBeInTheDocument();
+    expect(screen.getByText("Data-health incidents")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "See all" }));
 

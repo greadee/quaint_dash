@@ -1757,6 +1757,40 @@ class IngestionQueueStatusResponse(BaseModel):
     affected_data_products: list[str]
 
 
+class OperationsHealthIncidentResponse(BaseModel):
+    code: str
+    severity: Literal["info", "warning", "critical"]
+    title: str
+    detail: str
+    guidance: str
+    affected_data_products: list[str]
+    operations_url: str
+
+
+class OperationsHealthWorkerResponse(BaseModel):
+    worker_name: str
+    label: str
+    state: str
+    enabled: bool
+    running: bool
+    affected_data_products: list[str] = Field(default_factory=list)
+    current_failures: dict[str, WorkerFailureResponse] = Field(default_factory=dict)
+
+
+class OperationsHealthSummaryResponse(BaseModel):
+    observed_at: datetime
+    status: Literal["healthy", "degraded", "critical"]
+    headline: str
+    summary: str
+    incident_count: int
+    informational_count: int
+    affected_data_products: list[str]
+    queue: IngestionQueueStatusResponse
+    workers: list[OperationsHealthWorkerResponse]
+    incidents: list[OperationsHealthIncidentResponse]
+    operations_url: str
+
+
 class IngestionBackgroundStatusResponse(WorkerDiagnosticsResponse):
     enabled: bool
     running: bool
