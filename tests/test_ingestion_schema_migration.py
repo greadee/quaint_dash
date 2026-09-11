@@ -108,6 +108,55 @@ def test_init_db_creates_ticker_universe_tables_and_backfills_from_positions(tmp
     assert "asset_id" in table_columns(db.conn, "watchlist_ticker")
 
 
+def test_init_db_deactivates_stale_ticker_without_deleting_history(tmp_path: Path):
+    db = DB(str(tmp_path / "stale_ticker.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy)
+        VALUES ('AAPL', 'AAPL', 'stock', 'USD'), ('HQD.TO', 'HQD.TO', 'etf', 'CAD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO position(portfolio_id, asset_id, qty, book_cost, created_at, updated_at)
+        VALUES (1, 'AAPL', 10, 1000, now(), now())
+        """
+    )
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO txn(portfolio_id, txn_type, asset_id, qty, price, ccy, batch_id)
+        VALUES (1, 'buy', 'HQD.TO', 20, 10, 'CAD', 1)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'HQD.TO', TRUE, 'position')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset_quote_daily(asset_id, date, close, ing_source)
+        VALUES ('HQD.TO', DATE '2024-09-10', 10, 'historical')
+        """
+    )
+
+    init_db(db)
+
+    assert db.conn.execute(
+        "SELECT is_active FROM portfolio_ticker WHERE asset_id = 'HQD.TO'"
+    ).fetchone() == (False,)
+    assert db.conn.execute(
+        "SELECT COUNT(*) FROM txn WHERE asset_id = 'HQD.TO'"
+    ).fetchone() == (1,)
+    assert db.conn.execute(
+        "SELECT COUNT(*) FROM asset_quote_daily WHERE asset_id = 'HQD.TO'"
+    ).fetchone() == (1,)
+
+
 def test_init_db_keeps_fundamental_sync_state_asset_id_as_text(tmp_path: Path):
     db = DB(str(tmp_path / "fundamental_schema.db"))
     init_db(db)

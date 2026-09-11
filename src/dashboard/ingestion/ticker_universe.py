@@ -130,7 +130,7 @@ class TickerUniverseRepository:
                 updated_at = now()
             """
         )
-        self.conn.execute(
+        deactivated_rows = self.conn.execute(
             f"""
             WITH held AS ({held_sql})
             UPDATE portfolio_ticker pt
@@ -142,7 +142,11 @@ class TickerUniverseRepository:
                 WHERE h.portfolio_id = pt.portfolio_id
                   AND h.asset_id = pt.asset_id
             )
+            RETURNING pt.asset_id
             """
+        ).fetchall()
+        self._retire_future_work_for_unsubscribed_assets(
+            {str(row[0]) for row in deactivated_rows}
         )
 
         row = self.conn.execute(
@@ -169,7 +173,19 @@ class TickerUniverseRepository:
                     """
                 )
 
-        if self._table_exists("txn"):
+        if self._table_exists("broker_portfolio_position_map"):
+            sources.append(
+                """
+                SELECT portfolio_id, asset_id
+                FROM broker_portfolio_position_map
+                WHERE asset_id IS NOT NULL
+                  AND COALESCE(quantity, 0) <> 0
+                """
+            )
+
+        # Raw transactions are a compatibility fallback only. Once a database has
+        # current-position storage, historical trades must not reactivate a ticker.
+        if not sources and self._table_exists("txn"):
             sources.append(
                 """
                 SELECT portfolio_id, asset_id
@@ -181,19 +197,73 @@ class TickerUniverseRepository:
                 """
             )
 
-        if self._table_exists("broker_portfolio_position_map"):
-            sources.append(
-                """
-                SELECT portfolio_id, asset_id
-                FROM broker_portfolio_position_map
-                WHERE asset_id IS NOT NULL
-                  AND COALESCE(quantity, 0) <> 0
-                """
-            )
-
         if not sources:
             return None
         return "\nUNION\n".join(sources)
+
+    def _retire_future_work_for_unsubscribed_assets(
+        self,
+        deactivated_asset_ids: set[str],
+    ) -> None:
+        if not deactivated_asset_ids:
+            return
+
+        candidate_ids = set(deactivated_asset_ids)
+        for asset_id, symbol, _exchange, subtype, name, description in self._asset_symbol_rows(
+            sorted(deactivated_asset_ids)
+        ):
+            underlying = cdr_underlying_symbol(
+                asset_id=asset_id,
+                symbol=symbol,
+                asset_subtype=subtype,
+                name=name,
+                description=description,
+            )
+            if underlying:
+                candidate_ids.add(underlying)
+
+        active_ids = {
+            item.asset_id
+            for item in self.stream_subscriptions(
+                include_portfolios=True,
+                include_watchlist=True,
+            )
+        }
+        retired_ids = sorted(candidate_ids - active_ids)
+        if not retired_ids:
+            return
+        placeholders = ", ".join("?" for _ in retired_ids)
+
+        if self._table_exists("ingestion_job"):
+            self.conn.execute(
+                f"""
+                UPDATE ingestion_job
+                SET status = 'superseded',
+                    error_message = NULL,
+                    terminal_reason = 'ticker subscription is no longer active',
+                    lease_owner = NULL,
+                    leased_at = NULL,
+                    lease_expires_at = NULL,
+                    completed_at = now(),
+                    updated_at = now()
+                WHERE status = 'pending'
+                  AND asset_id IN ({placeholders})
+                """,
+                retired_ids,
+            )
+
+        if self._table_exists("fundamental_subscription"):
+            self.conn.execute(
+                f"""
+                UPDATE fundamental_subscription
+                SET is_active = FALSE,
+                    next_refresh_at = TIMESTAMP '9999-12-31 00:00:00',
+                    updated_at = now()
+                WHERE asset_id IN ({placeholders})
+                  AND subscription_source = 'ticker_universe'
+                """,
+                retired_ids,
+            )
 
     def stream_subscriptions(
         self,

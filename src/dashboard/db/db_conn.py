@@ -14,6 +14,7 @@ import duckdb
 
 from dashboard.ingestion.fundamentals.schema import ensure_fundamental_phase1_schema
 from dashboard.ingestion.stock_catalog import seed_stock_catalog
+from dashboard.ingestion.ticker_universe import TickerUniverseRepository
 
 _CONNECT_LOCK = Lock()
 
@@ -114,6 +115,7 @@ def init_db(db: DB):
     candidate_schema = schema_path.parent / "migrations" / "candidate_runs.sql"
     db.conn.execute(candidate_schema.read_text(encoding="utf-8"))
     seed_stock_catalog(db.conn)
+    TickerUniverseRepository(db.conn).sync_portfolio_tickers_from_positions()
 
 
 def _reconcile_provider_blocked_work(conn) -> None:

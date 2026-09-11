@@ -353,6 +353,152 @@ def test_sync_portfolio_tickers_from_positions_deactivates_unheld_portfolio_tick
     ]
 
 
+def test_sync_does_not_reactivate_historical_transactions_when_positions_exist():
+    conn = make_new_universe_conn()
+    conn.execute(
+        """
+        CREATE TABLE txn (
+            portfolio_id BIGINT,
+            asset_id TEXT,
+            txn_type TEXT,
+            qty DOUBLE
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO position(portfolio_id, asset_id, qty)
+        VALUES (1, 'AAPL', 10)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO txn(portfolio_id, asset_id, txn_type, qty)
+        VALUES (1, 'OLD', 'buy', 25)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'OLD', TRUE, 'position')
+        """
+    )
+
+    TickerUniverseRepository(conn).sync_portfolio_tickers_from_positions()
+
+    assert conn.execute(
+        "SELECT is_active FROM portfolio_ticker WHERE asset_id = 'OLD'"
+    ).fetchone() == (False,)
+
+
+def test_sync_retires_future_work_but_preserves_historical_data():
+    conn = make_new_universe_conn()
+    conn.execute(
+        """
+        CREATE TABLE ingestion_job (
+            job_id BIGINT PRIMARY KEY,
+            asset_id TEXT,
+            status TEXT,
+            error_message TEXT,
+            terminal_reason TEXT,
+            lease_owner TEXT,
+            leased_at TIMESTAMP,
+            lease_expires_at TIMESTAMP,
+            completed_at TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT now()
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE fundamental_subscription (
+            asset_id TEXT PRIMARY KEY,
+            is_active BOOLEAN,
+            next_refresh_at TIMESTAMP,
+            subscription_source TEXT,
+            updated_at TIMESTAMP DEFAULT now()
+        )
+        """
+    )
+    conn.execute("CREATE TABLE stored_quote(asset_id TEXT, price DOUBLE)")
+    conn.execute("CREATE TABLE stored_transaction(asset_id TEXT, qty DOUBLE)")
+    conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'OLD', TRUE, 'position')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO ingestion_job(job_id, asset_id, status)
+        VALUES (1, 'OLD', 'pending'), (2, 'OLD', 'done')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO fundamental_subscription(
+            asset_id, is_active, next_refresh_at, subscription_source
+        )
+        VALUES ('OLD', TRUE, now(), 'ticker_universe')
+        """
+    )
+    conn.execute("INSERT INTO stored_quote VALUES ('OLD', 42)")
+    conn.execute("INSERT INTO stored_transaction VALUES ('OLD', 25)")
+
+    TickerUniverseRepository(conn).sync_portfolio_tickers_from_positions()
+
+    assert conn.execute(
+        "SELECT job_id, status FROM ingestion_job ORDER BY job_id"
+    ).fetchall() == [(1, "superseded"), (2, "done")]
+    assert conn.execute(
+        "SELECT is_active FROM fundamental_subscription WHERE asset_id = 'OLD'"
+    ).fetchone() == (False,)
+    assert conn.execute("SELECT * FROM stored_quote").fetchall() == [("OLD", 42.0)]
+    assert conn.execute("SELECT * FROM stored_transaction").fetchall() == [("OLD", 25.0)]
+
+
+def test_sync_keeps_future_work_when_asset_remains_watchlisted():
+    conn = make_new_universe_conn()
+    conn.execute(
+        """
+        CREATE TABLE ingestion_job (
+            job_id BIGINT PRIMARY KEY,
+            asset_id TEXT,
+            status TEXT,
+            error_message TEXT,
+            terminal_reason TEXT,
+            lease_owner TEXT,
+            leased_at TIMESTAMP,
+            lease_expires_at TIMESTAMP,
+            completed_at TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT now()
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'OLD', TRUE, 'position')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO watchlist_ticker(asset_id, is_active, source)
+        VALUES ('OLD', TRUE, 'manual')
+        """
+    )
+    conn.execute("INSERT INTO ingestion_job(job_id, asset_id, status) VALUES (1, 'OLD', 'pending')")
+
+    TickerUniverseRepository(conn).sync_portfolio_tickers_from_positions()
+
+    assert conn.execute(
+        "SELECT is_active FROM portfolio_ticker WHERE asset_id = 'OLD'"
+    ).fetchone() == (False,)
+    assert conn.execute(
+        "SELECT status FROM ingestion_job WHERE job_id = 1"
+    ).fetchone() == ("pending",)
+
+
 def test_legacy_position_and_watchlist_asset_fallbacks_still_work_without_new_tables():
     conn = duckdb.connect(":memory:")
     conn.execute(
