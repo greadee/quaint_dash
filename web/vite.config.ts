@@ -16,6 +16,7 @@ export default defineConfig({
           routing: ["react-router-dom", "@tanstack/react-query"],
           charts: ["recharts"],
           icons: ["lucide-react"],
+          designSystem: ["@prool-ui/react", "@prool-ui/themes", "@prool-ui/tokens"],
         },
       },
     },

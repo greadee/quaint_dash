@@ -34,9 +34,9 @@ def _int_env(name: str, default: int | None = None) -> int | None:
     return int(value)
 
 
-def cli_loop():
+def cli_loop(db_path="data/persistent_db.db"):
     """Start the dashboard, run startup maintenance, then enter the view loop."""
-    db = DB("data/persistent_db.db")
+    db = DB(db_path)
     init_db(db)
     manager = DashboardManager(db)
 

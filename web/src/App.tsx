@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
@@ -17,26 +17,28 @@ import {
   X,
 } from "lucide-react";
 import { Link, Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
-import { BenchmarkDetailPage, BenchmarksWorkspacePage } from "./benchmarks";
 import {
-  AssetDetailPage,
-  BrokersPage,
-  ComparePage,
-  NewsTerminalPage,
-  OperationsPage,
-  OverviewPage,
-  PortfolioDetailPage,
-  PortfolioWorkspacePage,
   RouteErrorBoundary,
-  RetailSentimentPage,
-  SettingsPage,
-  SignalDetailPage,
-  StockRankingsPage,
   type AppNotification,
   type AppSettings,
 } from "./appRoutes";
 import { PageFeatureProvider } from "./pageFeatureStore";
 import { api } from "./api";
+
+const OverviewPage = lazy(() => import("./routes/overviewRoute").then((module) => ({ default: module.OverviewPage })));
+const PortfolioWorkspacePage = lazy(() => import("./routes/portfolioRoute").then((module) => ({ default: module.PortfolioWorkspacePage })));
+const PortfolioDetailPage = lazy(() => import("./routes/portfolioRoute").then((module) => ({ default: module.PortfolioDetailPage })));
+const NewsTerminalPage = lazy(() => import("./routes/newsRoute").then((module) => ({ default: module.NewsTerminalPage })));
+const RetailSentimentPage = lazy(() => import("./routes/retailSentimentRoute").then((module) => ({ default: module.RetailSentimentPage })));
+const StockRankingsPage = lazy(() => import("./routes/signalsRoute").then((module) => ({ default: module.StockRankingsPage })));
+const SignalDetailPage = lazy(() => import("./routes/signalsRoute").then((module) => ({ default: module.SignalDetailPage })));
+const ComparePage = lazy(() => import("./routes/compareRoute").then((module) => ({ default: module.ComparePage })));
+const BenchmarksWorkspacePage = lazy(() => import("./benchmarks").then((module) => ({ default: module.BenchmarksWorkspacePage })));
+const BenchmarkDetailPage = lazy(() => import("./benchmarks").then((module) => ({ default: module.BenchmarkDetailPage })));
+const AssetDetailPage = lazy(() => import("./routes/assetRoute").then((module) => ({ default: module.AssetDetailPage })));
+const BrokersPage = lazy(() => import("./routes/brokersRoute").then((module) => ({ default: module.BrokersPage })));
+const OperationsPage = lazy(() => import("./routes/operationsRoute").then((module) => ({ default: module.OperationsPage })));
+const SettingsPage = lazy(() => import("./routes/settingsRoute").then((module) => ({ default: module.SettingsPage })));
 
 const defaultAppSettings: AppSettings = {
   theme: "dark",
@@ -108,6 +110,7 @@ export default function App() {
           <div className="avatar">CP</div>
         </header>
         <RouteErrorBoundary key={location.pathname}>
+          <Suspense fallback={<div className="page"><p role="status">Loading workspace…</p></div>}>
           <Routes>
             <Route path="/" element={<OverviewPage moverDefault={settings.moverDefault} />} />
             <Route path="/portfolios" element={<PortfolioWorkspacePage />} />
@@ -126,6 +129,7 @@ export default function App() {
             <Route path="/operations" element={<OperationsPage />} />
             <Route path="/settings" element={<SettingsPage settings={settings} onChange={updateSettings} />} />
           </Routes>
+          </Suspense>
         </RouteErrorBoundary>
         <ActionNotification notification={notification} onClose={() => setNotification(null)} />
       </main>

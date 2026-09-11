@@ -686,7 +686,7 @@ describe("App shell", () => {
     expect(screen.getByRole("button", { name: "Close navigation" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Overview/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /News/i })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
     expect(screen.getByText("Default holdings shown")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Comfortable" })).toBeInTheDocument();
   });
@@ -695,7 +695,7 @@ describe("App shell", () => {
     const user = userEvent.setup();
     renderApp("/settings");
 
-    await user.selectOptions(screen.getByLabelText(/Default holdings shown/i), "all");
+    await user.selectOptions(await screen.findByLabelText(/Default holdings shown/i), "all");
     await user.click(screen.getByLabelText(/Use color for feature icons/i));
 
     expect(window.localStorage.getItem("quaint_dash_app_settings")).toContain('"moverDefault":"all"');
