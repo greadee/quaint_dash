@@ -885,9 +885,13 @@ def test_ingestion_background_status_defaults_disabled(tmp_path):
         "last_run_at": None,
         "last_completed_count": None,
         "last_pending_count": None,
+        "started_at": None,
+        "last_progress_at": None,
+        "completed_since_start": 0,
         "last_error": None,
         "schedule_interval_seconds": 1800,
         "run_interval_seconds": 60,
+        "backlog_interval_seconds": 1,
         "max_jobs_per_tick": 5,
         "max_run_batches_per_tick": 1,
         "max_assets_per_schedule": 25,
@@ -934,8 +938,10 @@ def test_ingestion_background_start_stop_endpoints_toggle_worker(tmp_path):
     assert initial.json()["running"] is False
     assert started.status_code == 200
     assert started.json()["result"]["enabled"] is True
+    assert started.json()["result"]["running"] is True
+    assert started.json()["result"]["started_at"] is not None
     assert running.json()["enabled"] is True
-    assert running.json()["running"] is False
+    assert running.json()["running"] is True
     assert stopped.status_code == 200
     assert stopped.json()["result"]["enabled"] is False
     assert stopped.json()["result"]["running"] is False

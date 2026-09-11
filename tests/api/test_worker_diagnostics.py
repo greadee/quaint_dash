@@ -11,7 +11,11 @@ import duckdb
 import pytest
 
 from dashboard.api.data_readiness_background import DataReadinessConfig, DataReadinessWorker
-from dashboard.api.ingestion_background import IngestionBackgroundConfig, IngestionBackgroundWorker
+from dashboard.api.ingestion_background import (
+    IngestionBackgroundConfig,
+    IngestionBackgroundWorker,
+    _next_run_delay_seconds,
+)
 from dashboard.api.market_freshness_background import MarketFreshnessConfig, MarketFreshnessWorker
 from dashboard.api.worker_errors import classify_worker_error
 from dashboard.application.worker_diagnostics import WorkerDiagnostics
@@ -24,6 +28,26 @@ def ingestion_worker(tmp_path):
     return IngestionBackgroundWorker(
         tmp_path / "worker.db", Lock(), IngestionBackgroundConfig(enabled=False),
     )
+
+
+def test_productive_ingestion_backlog_preserves_one_hour_execution_budget():
+    config = IngestionBackgroundConfig(
+        run_interval_seconds=300,
+        backlog_interval_seconds=1,
+        max_jobs_per_tick=5,
+    )
+
+    assert _next_run_delay_seconds(config, completed=5, pending=495) == 1
+    assert _next_run_delay_seconds(config, completed=0, pending=495) == 300
+    assert _next_run_delay_seconds(config, completed=5, pending=0) == 300
+
+    jobs = 500
+    jobs_per_cycle = config.max_jobs_per_tick * config.max_run_batches_per_tick
+    cycles = (jobs + jobs_per_cycle - 1) // jobs_per_cycle
+    configured_wait_seconds = (cycles - 1) * config.backlog_interval_seconds
+    average_job_execution_budget = (3600 - configured_wait_seconds) / jobs
+    assert configured_wait_seconds == 99
+    assert average_job_execution_budget >= 7
 
 
 def test_diagnostic_snapshot_stays_consistent_during_threaded_status_reads():

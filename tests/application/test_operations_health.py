@@ -31,7 +31,7 @@ def worker(**overrides):
         "label": "Routine ingestion",
         "state": "idle",
         "enabled": True,
-        "running": False,
+        "running": True,
         "affected_data_products": ["Prices and market history"],
         "current_failures": {},
     }
@@ -162,6 +162,14 @@ def test_intentionally_disabled_worker_without_backlog_is_informational():
     assert result["incident_count"] == 0
     assert result["informational_count"] == 1
     assert result["incidents"][0]["code"] == "workers-disabled"
+
+
+def test_enabled_worker_without_background_task_is_critical():
+    result = summary(workers=[worker(running=False)])
+
+    assert result["status"] == "critical"
+    assert result["incidents"][0]["code"] == "worker-ingestion_background-not-running"
+    assert "no active background task" in result["incidents"][0]["detail"]
 
 
 def test_missing_social_credentials_are_specific_and_non_mutating():

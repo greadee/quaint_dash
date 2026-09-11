@@ -23,6 +23,7 @@ class IngestionBackgroundConfig:
     enabled: bool = True
     schedule_interval_seconds: int = 1800
     run_interval_seconds: int = 60
+    backlog_interval_seconds: int = 1
     max_jobs_per_tick: int = 5
     max_run_batches_per_tick: int = 1
     max_assets_per_schedule: int = 25
@@ -35,6 +36,7 @@ class IngestionBackgroundConfig:
             enabled=_truthy_env("INGESTION_BACKGROUND_ENABLED", default=False),
             schedule_interval_seconds=_int_env("INGESTION_BACKGROUND_SCHEDULE_INTERVAL_SECONDS", 1800),
             run_interval_seconds=_int_env("INGESTION_BACKGROUND_RUN_INTERVAL_SECONDS", 60),
+            backlog_interval_seconds=_int_env("INGESTION_BACKGROUND_BACKLOG_INTERVAL_SECONDS", 1),
             max_jobs_per_tick=_int_env("INGESTION_BACKGROUND_MAX_JOBS_PER_TICK", 5),
             max_run_batches_per_tick=_int_env("INGESTION_BACKGROUND_MAX_RUN_BATCHES_PER_TICK", 1),
             max_assets_per_schedule=_int_env("INGESTION_BACKGROUND_MAX_ASSETS_PER_SCHEDULE", 25),
@@ -58,6 +60,9 @@ class IngestionBackgroundWorker:
         self.last_run_at: datetime | None = None
         self.last_completed_count: int | None = None
         self.last_pending_count: int | None = None
+        self.started_at: datetime | None = None
+        self.last_progress_at: datetime | None = None
+        self.completed_since_start = 0
         self._diagnostics = WorkerDiagnostics(
             "ingestion_background", classify_error=classify_worker_error,
         )
@@ -76,6 +81,9 @@ class IngestionBackgroundWorker:
         if self._task is not None and not self._task.done():
             return
         self._stop_event = asyncio.Event()
+        self.started_at = _now()
+        self.last_progress_at = None
+        self.completed_since_start = 0
         self._task = asyncio.create_task(self._run_loop(), name="ingestion-background-worker")
         self._running = True
 
@@ -109,20 +117,31 @@ class IngestionBackgroundWorker:
         return {"scheduled_jobs": scheduled, "completed_jobs": completed}
 
     async def _run_loop(self) -> None:
-        next_schedule_delay = 0.0
+        next_schedule_at = 0.0
+        event_loop = asyncio.get_running_loop()
         try:
             self._diagnostics.recover("loop")
             while self._stop_event is not None and not self._stop_event.is_set():
-                if next_schedule_delay <= 0:
+                if event_loop.time() >= next_schedule_at:
                     await self.tick_schedule()
-                    next_schedule_delay = float(self.config.schedule_interval_seconds)
-                await self.tick_run()
-                delay = min(float(self.config.run_interval_seconds), next_schedule_delay)
+                    next_schedule_at = event_loop.time() + float(
+                        self.config.schedule_interval_seconds
+                    )
+                completed = await self.tick_run()
+                delay = min(
+                    _next_run_delay_seconds(
+                        self.config,
+                        completed=completed,
+                        pending=self.last_pending_count,
+                    ),
+                    max(0.0, next_schedule_at - event_loop.time()),
+                )
+                if delay <= 0:
+                    continue
                 try:
                     await asyncio.wait_for(self._stop_event.wait(), timeout=delay)
                 except TimeoutError:
                     pass
-                next_schedule_delay -= delay
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -144,6 +163,9 @@ class IngestionBackgroundWorker:
         def succeeded(count: int) -> None:
             self.last_run_at = _now()
             self.last_completed_count = count
+            if count > 0 and self.started_at is not None:
+                self.last_progress_at = self.last_run_at
+                self.completed_since_start += count
             LOGGER.info("Ingestion background runner completed %s job(s).", count)
 
         count = await self._diagnostics.run_phase("run", self._run_once, succeeded, LOGGER)
@@ -191,9 +213,13 @@ class IngestionBackgroundWorker:
             "last_run_at": self.last_run_at,
             "last_completed_count": self.last_completed_count,
             "last_pending_count": self.last_pending_count,
+            "started_at": self.started_at,
+            "last_progress_at": self.last_progress_at,
+            "completed_since_start": self.completed_since_start,
             "last_error": self.last_error,
             "schedule_interval_seconds": self.config.schedule_interval_seconds,
             "run_interval_seconds": self.config.run_interval_seconds,
+            "backlog_interval_seconds": self.config.backlog_interval_seconds,
             "max_jobs_per_tick": self.config.max_jobs_per_tick,
             "max_run_batches_per_tick": self.config.max_run_batches_per_tick,
             "max_assets_per_schedule": self.config.max_assets_per_schedule,
@@ -234,6 +260,18 @@ def _pending_job_count(conn) -> int:
         LOGGER.debug("Ingestion background pending-count skipped: %s", exc)
         return 0
     return int(row[0])
+
+
+def _next_run_delay_seconds(
+    config: IngestionBackgroundConfig,
+    *,
+    completed: int,
+    pending: int | None,
+) -> float:
+    """Use the short cadence only while a cycle is making backlog progress."""
+    if completed > 0 and pending is not None and pending > 0:
+        return float(min(config.backlog_interval_seconds, config.run_interval_seconds))
+    return float(config.run_interval_seconds)
 
 
 def _running_under_pytest() -> bool:

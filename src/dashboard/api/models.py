@@ -1802,9 +1802,13 @@ class IngestionBackgroundStatusResponse(WorkerDiagnosticsResponse):
     last_run_at: datetime | None = None
     last_completed_count: int | None = None
     last_pending_count: int | None = None
+    started_at: datetime | None = None
+    last_progress_at: datetime | None = None
+    completed_since_start: int = 0
     last_error: str | None = None
     schedule_interval_seconds: int
     run_interval_seconds: int
+    backlog_interval_seconds: int
     max_jobs_per_tick: int
     max_run_batches_per_tick: int
     max_assets_per_schedule: int

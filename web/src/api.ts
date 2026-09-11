@@ -1320,9 +1320,13 @@ export type IngestionBackgroundStatus = WorkerDiagnostics & {
   last_run_at: string | null;
   last_completed_count: number | null;
   last_pending_count: number | null;
+  started_at: string | null;
+  last_progress_at: string | null;
+  completed_since_start: number;
   last_error: string | null;
   schedule_interval_seconds: number;
   run_interval_seconds: number;
+  backlog_interval_seconds: number;
   max_jobs_per_tick: number;
   max_run_batches_per_tick: number;
   max_assets_per_schedule: number;

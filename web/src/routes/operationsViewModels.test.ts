@@ -23,9 +23,13 @@ describe("operationsViewModels", () => {
       last_run_at: null,
       last_completed_count: 2,
       last_pending_count: 4,
+      started_at: null,
+      last_progress_at: null,
+      completed_since_start: 0,
       last_error: null,
       schedule_interval_seconds: 3600,
       run_interval_seconds: 300,
+      backlog_interval_seconds: 1,
       max_jobs_per_tick: 5,
       max_run_batches_per_tick: 2,
       max_assets_per_schedule: 25,
@@ -34,7 +38,7 @@ describe("operationsViewModels", () => {
     });
 
     expect(detail).toBe(
-      "Scheduled never; ran never. Drain: 2 batches, 5 jobs each, 4 pending after last cycle. Scope: 25 assets, 10 years, prices/dividends/splits.",
+      "Scheduled never; ran never. Drain: 2 batches, 5 jobs each, 4 pending after last cycle; productive backlog follow-up 1 second. Scope: 25 assets, 10 years, prices/dividends/splits.",
     );
   });
 
@@ -54,7 +58,7 @@ describe("operationsViewModels", () => {
     });
 
     expect(detail).toBe(
-      "Polled never. 7 symbols refreshed from 9 subscriptions. Scope: 10 symbols, 1 day lookback, watchlist included.",
+      "Polled never. 7 symbols refreshed from 9 subscriptions. Scope: 10 symbols, 1 day lookback, watchlist included. This worker refreshes held prices directly; it does not consume ingestion-queue jobs.",
     );
   });
 
@@ -81,7 +85,7 @@ describe("operationsViewModels", () => {
     });
 
     expect(detail).toBe(
-      "Checked never. 8 readys of 12 targets; 6 valuations calculated. 3 jobs pending after last check.",
+      "Checked never. 8 readys of 12 targets; 6 valuations calculated. 3 jobs pending after last check. This worker may add missing-input jobs; routine ingestion is the primary queue drainer.",
     );
   });
 

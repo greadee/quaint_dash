@@ -29,7 +29,7 @@ export function backgroundStatusDetail(status: IngestionBackgroundStatus): strin
     status.prices_only ? "prices only" : "prices/dividends/splits"
   }`;
   const drain = `${status.max_run_batches_per_tick} batches, ${status.max_jobs_per_tick} jobs each, ${pending}`;
-  return `${schedule}; ${run}. Drain: ${drain}. Scope: ${scope}.`;
+  return `${schedule}; ${run}. Drain: ${drain}; productive backlog follow-up ${formatCount(status.backlog_interval_seconds, "second")}. Scope: ${scope}.`;
 }
 
 export function marketFreshnessStatusDetail(status: MarketFreshnessStatus): string {
@@ -41,7 +41,7 @@ export function marketFreshnessStatusDetail(status: MarketFreshnessStatus): stri
   const scope = `${status.max_symbols_per_tick} symbols, ${status.lookback_days} day lookback${
     status.include_watchlist ? ", watchlist included" : ""
   }`;
-  return `${lastPoll}. ${coverage}. Scope: ${scope}.`;
+  return `${lastPoll}. ${coverage}. Scope: ${scope}. This worker refreshes held prices directly; it does not consume ingestion-queue jobs.`;
 }
 
 export function dataReadinessStatusDetail(status: DataReadinessWorkerStatus): string {
@@ -51,5 +51,5 @@ export function dataReadinessStatusDetail(status: DataReadinessWorkerStatus): st
     "target",
   )}`;
   const valuation = `${formatCount(status.last_valuation_count, "valuation")} calculated`;
-  return `${lastCheck}. ${coverage}; ${valuation}. ${formatCount(status.last_pending_count, "job")} pending after last check.`;
+  return `${lastCheck}. ${coverage}; ${valuation}. ${formatCount(status.last_pending_count, "job")} pending after last check. This worker may add missing-input jobs; routine ingestion is the primary queue drainer.`;
 }

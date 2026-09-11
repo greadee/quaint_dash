@@ -209,10 +209,11 @@ def build_operations_health_summary(
     """Combine read-only diagnostics using one conservative severity policy.
 
     Any dead letter is critical. A backlog older than one hour is critical when
-    routine ingestion is disabled. Current worker failures and failed enabled
-    providers are critical. Stale essential evidence, stale providers, cached
-    signals, and missing optional social credentials are warnings. Workers that
-    are intentionally disabled without blocking old work are informational.
+    routine ingestion is disabled. Enabled workers without a running task,
+    current worker failures, and failed enabled providers are critical. Stale
+    essential evidence, stale providers, cached signals, and missing optional
+    social credentials are warnings. Workers that are intentionally disabled
+    without blocking old work are informational.
     """
     worker_rows = [dict(item) for item in workers]
     incidents: list[dict[str, Any]] = []
@@ -317,6 +318,15 @@ def build_operations_health_summary(
                 str(
                     failure.get("guidance") or "Review worker diagnostics before running more work."
                 ),
+                products,
+            )
+        elif worker.get("enabled") and not worker.get("running"):
+            add(
+                f"worker-{worker.get('worker_name', 'unknown')}-not-running",
+                "critical",
+                f"{label} is enabled but not running",
+                "The worker has no active background task, so its automatic cadence cannot execute.",
+                "Start the worker again and confirm its state changes to running.",
                 products,
             )
 
@@ -486,6 +496,9 @@ class WorkerCommandSource(WorkerStatusSource, Protocol):
     def enable(self) -> None:
         """Enable the worker for this process."""
 
+    def start(self) -> None:
+        """Start the enabled worker's background task."""
+
     async def disable(self) -> None:
         """Disable and stop the worker for this process."""
 
@@ -536,6 +549,7 @@ class OperationsWorkerCommands:
 
     def start_ingestion_background(self) -> dict[str, Any]:
         self._ingestion_background_worker.enable()
+        self._ingestion_background_worker.start()
         return dict(self._ingestion_background_worker.status())
 
     async def stop_ingestion_background(self) -> dict[str, Any]:
@@ -547,6 +561,7 @@ class OperationsWorkerCommands:
 
     def start_market_freshness(self) -> dict[str, Any]:
         self._market_freshness_worker.enable()
+        self._market_freshness_worker.start()
         return dict(self._market_freshness_worker.status())
 
     async def stop_market_freshness(self) -> dict[str, Any]:
@@ -558,6 +573,7 @@ class OperationsWorkerCommands:
 
     def start_data_readiness(self) -> dict[str, Any]:
         self._data_readiness_worker.enable()
+        self._data_readiness_worker.start()
         return dict(self._data_readiness_worker.status())
 
     async def stop_data_readiness(self) -> dict[str, Any]:

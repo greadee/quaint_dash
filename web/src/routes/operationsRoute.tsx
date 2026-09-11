@@ -487,8 +487,11 @@ function IngestionBackgroundCard({
       <div className="background-status-grid">
         <Signal label="Last scheduled" value={isLoading ? "Loading" : formatCount(status?.last_schedule_count, "job")} />
         <Signal label="Last completed" value={isLoading ? "Loading" : formatCount(status?.last_completed_count, "job")} />
+        <Signal label="Completed since start" value={isLoading ? "Loading" : formatCount(status?.completed_since_start, "job")} />
+        <Signal label="Last queue progress" value={isLoading ? "Loading" : formatTimestamp(status?.last_progress_at)} />
         <Signal label="Schedule cadence" value={status ? formatDuration(status.schedule_interval_seconds) : "Unavailable"} />
-        <Signal label="Run cadence" value={status ? `${formatDuration(status.run_interval_seconds)} / ${status.max_run_batches_per_tick} batches` : "Unavailable"} />
+        <Signal label="Idle run cadence" value={status ? `${formatDuration(status.run_interval_seconds)} / ${status.max_run_batches_per_tick} batches` : "Unavailable"} />
+        <Signal label="Productive backlog cadence" value={status ? formatDuration(status.backlog_interval_seconds) : "Unavailable"} />
         <Signal label="Current pending jobs" value={currentQueueCount(currentPendingCount, isCurrentPendingLoading, currentPendingError)} />
         <Signal label="Pending after last cycle" value={isLoading ? "Loading" : formatCount(status?.last_pending_count, "job")} />
         <div className="background-actions">

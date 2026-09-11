@@ -7,6 +7,7 @@ class FakeWorker:
     def __init__(self, status):
         self._status = status
         self.enabled_calls = 0
+        self.started_calls = 0
         self.disabled_calls = 0
         self.tick_calls = 0
 
@@ -17,9 +18,13 @@ class FakeWorker:
         self.enabled_calls += 1
         self._status = {**self._status, "enabled": True}
 
+    def start(self):
+        self.started_calls += 1
+        self._status = {**self._status, "running": True}
+
     async def disable(self):
         self.disabled_calls += 1
-        self._status = {**self._status, "enabled": False}
+        self._status = {**self._status, "enabled": False, "running": False}
 
     async def tick(self):
         self.tick_calls += 1
@@ -62,9 +67,22 @@ def test_operations_worker_commands_toggle_workers_and_return_status() -> None:
         data_readiness_worker=readiness,
     )
 
-    assert commands.start_ingestion_background() == {"enabled": True, "kind": "ingestion"}
-    assert asyncio.run(commands.stop_data_readiness()) == {"enabled": False, "kind": "readiness"}
+    assert commands.start_ingestion_background() == {
+        "enabled": True,
+        "kind": "ingestion",
+        "running": True,
+    }
+    assert commands.start_market_freshness()["running"] is True
+    assert commands.start_data_readiness()["running"] is True
+    assert asyncio.run(commands.stop_data_readiness()) == {
+        "enabled": False,
+        "kind": "readiness",
+        "running": False,
+    }
     assert ingestion.enabled_calls == 1
+    assert ingestion.started_calls == 1
+    assert market.started_calls == 1
+    assert readiness.started_calls == 1
     assert readiness.disabled_calls == 1
 
 

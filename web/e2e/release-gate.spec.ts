@@ -230,7 +230,7 @@ function productPayload(path: string): unknown {
   if (path === "/brokers/sync-history") return [];
   if (path === "/ingestion/jobs") return [];
   if (path === "/ingestion/queue/status") return queue;
-  if (path === "/ingestion/background/status") return { ...disabledWorker, schedule_interval_seconds: 3600, run_interval_seconds: 300, max_jobs_per_tick: 5, max_assets_per_schedule: 25, prices_only: false, last_schedule_at: null, last_schedule_count: null, last_run_at: null, last_completed_count: null };
+  if (path === "/ingestion/background/status") return { ...disabledWorker, schedule_interval_seconds: 3600, run_interval_seconds: 300, backlog_interval_seconds: 1, max_jobs_per_tick: 5, max_assets_per_schedule: 25, prices_only: false, last_schedule_at: null, last_schedule_count: null, last_run_at: null, last_completed_count: null, started_at: null, last_progress_at: null, completed_since_start: 0 };
   if (path === "/market/freshness/status") return { ...disabledWorker, worker_name: "market_freshness", lookback_days: 7, include_watchlist: false, max_symbols_per_tick: 25, last_poll_at: null, last_subscription_count: null, last_refreshed_count: null };
   if (path === "/data/readiness/status") return { ...disabledWorker, worker_name: "data_readiness", last_scheduled_count: null, last_completed_count: null };
   if (path === "/ingestion/retail-sentiment/status") return { providers: [{ provider: "reddit", configured: false, post_count: 0 }, { provider: "x", configured: false, post_count: 0 }], latest_snapshots: [], recent_posts: [], pending_jobs: 0, running_jobs: 0, failed_jobs: 0 };
@@ -249,7 +249,7 @@ async function installReleaseFixtures(page: Page, mode: "critical" | "healthy" =
     if (mode === "healthy") {
       if (path === "/operations/health-summary") payload = healthyHealth;
       if (path === "/ingestion/queue/status") payload = healthyQueue;
-      if (path === "/ingestion/background/status") payload = { ...disabledWorker, enabled: true, state: "idle", schedule_interval_seconds: 3600, run_interval_seconds: 300, max_jobs_per_tick: 5, max_assets_per_schedule: 25, prices_only: false, last_schedule_at: now, last_schedule_count: 0, last_run_at: now, last_completed_count: 0 };
+      if (path === "/ingestion/background/status") payload = { ...disabledWorker, enabled: true, running: true, state: "running", schedule_interval_seconds: 3600, run_interval_seconds: 300, backlog_interval_seconds: 1, max_jobs_per_tick: 5, max_assets_per_schedule: 25, prices_only: false, last_schedule_at: now, last_schedule_count: 0, last_run_at: now, last_completed_count: 0, started_at: now, last_progress_at: null, completed_since_start: 0 };
     }
     if (request.method() !== "GET" || payload === undefined) {
       unexpected.push(`${request.method()} ${path}`);
