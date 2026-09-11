@@ -745,6 +745,9 @@ export type BenchmarkIndexSummary = {
   daily_price_last_success_at: string | null;
   composition_last_success_at: string | null;
   last_error: string | null;
+  primary_provider: string | null;
+  primary_symbol: string | null;
+  primary_is_proxy: boolean;
   evidence?: EvidenceDisplay | null;
 };
 export type BenchmarkSymbol = {

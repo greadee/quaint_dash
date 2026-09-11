@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { RefreshCw, Trash2 } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { api, type DataReadinessWorkerStatus, type IngestionBackgroundStatus, type IngestionQueueStatus, type IngestionReadiness, type MarketFreshnessStatus, type OperationsHealthSummary, type RetailSentimentStatus, type StockRankingReadiness, type WorkerDiagnostics } from "../api";
 import { boundedInt, dateRange, formatActionResult, formatCount, formatDuration, formatTimestamp, percent, signedNumber } from "./routeFormatters";
 import { EmptyRow, ErrorPanel, HelpDisclosure, Loading, Signal } from "./routeShared";

@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { BenchmarkDetailPage, BenchmarksWorkspacePage } from "./benchmarks";
+import { BENCHMARK_ROUTE_BUDGET } from "./benchmarkPerformance";
 import type {
   ActionResult,
   BenchmarkConstituent,
@@ -68,6 +69,9 @@ const summaries: BenchmarkIndexSummary[] = [
     daily_price_last_success_at: "2026-06-18T20:00:00",
     composition_last_success_at: "2026-06-18T21:00:00",
     last_error: null,
+    primary_provider: "yfinance",
+    primary_symbol: "VEA",
+    primary_is_proxy: false,
   },
   {
     index_id: "IND_SEMICONDUCTORS",
@@ -92,6 +96,9 @@ const summaries: BenchmarkIndexSummary[] = [
     daily_price_last_success_at: "2026-06-18T20:00:00",
     composition_last_success_at: "2026-06-18T21:00:00",
     last_error: null,
+    primary_provider: "yfinance",
+    primary_symbol: "SOXX",
+    primary_is_proxy: true,
   },
 ];
 
@@ -190,21 +197,47 @@ function renderWithProviders(route: string, element: ReactNode) {
 
 describe("BenchmarksWorkspacePage", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     apiMock.benchmarks.mockResolvedValue(summaries);
     apiMock.benchmarkPrices.mockImplementation((id: string) => Promise.resolve(prices[id] ?? []));
     apiMock.seedBenchmarks.mockResolvedValue({ status: "ok", result: {} } satisfies ActionResult);
     apiMock.hardenBenchmarks.mockResolvedValue({ status: "ok", result: {} } satisfies ActionResult);
   });
 
-  it("renders the workspace, summary, actual chart copy, and explorer rows", async () => {
+  it("renders the workspace from one cached summary request without eager price history", async () => {
     renderWithProviders("/benchmarks", <BenchmarksWorkspacePage notify={vi.fn()} />);
 
     expect(await screen.findByRole("heading", { name: "Benchmarks" })).toBeInTheDocument();
     expect(screen.getByText("Benchmark price comparison")).toBeInTheDocument();
-    expect(screen.getByText(/Stored closes/)).toBeInTheDocument();
+    expect(screen.getByText("Choose a benchmark to compare")).toBeInTheDocument();
     expect(await screen.findAllByText("Developed International Equity")).not.toHaveLength(0);
     expect(screen.getAllByText("Semiconductors Industry")).not.toHaveLength(0);
     expect(screen.getAllByText(/Proxy \/ ETF proxy/)).not.toHaveLength(0);
+    expect(apiMock.benchmarks).toHaveBeenCalledTimes(BENCHMARK_ROUTE_BUDGET.initialBenchmarkApiRequests);
+    expect(apiMock.benchmarkPrices).not.toHaveBeenCalled();
+    expect(apiMock.benchmark).not.toHaveBeenCalled();
+    expect(apiMock.benchmarkMetrics).not.toHaveBeenCalled();
+    expect(apiMock.benchmarkExposures).not.toHaveBeenCalled();
+    expect(apiMock.benchmarkConstituents).not.toHaveBeenCalled();
+  });
+
+  it("meets the route-ready and payload budgets with 100 summaries under injected latency", async () => {
+    const representative = Array.from(
+      { length: BENCHMARK_ROUTE_BUDGET.representativeBenchmarks },
+      (_, index) => ({ ...summaries[index % summaries.length], index_id: `BENCH_${index}`, index_name: `Benchmark ${index}` }),
+    );
+    apiMock.benchmarks.mockImplementationOnce(() => new Promise((resolve) => {
+      window.setTimeout(() => resolve(representative), BENCHMARK_ROUTE_BUDGET.injectedApiLatencyMs);
+    }));
+    const started = performance.now();
+
+    renderWithProviders("/benchmarks", <BenchmarksWorkspacePage notify={vi.fn()} />);
+
+    expect((await screen.findAllByText("Benchmark 99", {}, { timeout: BENCHMARK_ROUTE_BUDGET.routeReadyMs })).length).toBeGreaterThan(0);
+    expect(performance.now() - started).toBeLessThan(BENCHMARK_ROUTE_BUDGET.routeReadyMs);
+    expect(apiMock.benchmarks).toHaveBeenCalledTimes(BENCHMARK_ROUTE_BUDGET.initialBenchmarkApiRequests);
+    expect(apiMock.benchmarkPrices).not.toHaveBeenCalled();
+    expect(new TextEncoder().encode(JSON.stringify(representative)).byteLength).toBeLessThan(BENCHMARK_ROUTE_BUDGET.summaryPayloadBytes);
   });
 
   it("updates query-driven filters and can add a benchmark to comparison", async () => {
@@ -212,17 +245,20 @@ describe("BenchmarksWorkspacePage", () => {
     renderWithProviders("/benchmarks?selected=DEV_INTL", <BenchmarksWorkspacePage notify={vi.fn()} />);
 
     await screen.findByRole("heading", { name: "Benchmarks" });
+    await waitFor(() => expect(apiMock.benchmarkPrices).toHaveBeenCalledTimes(1));
     await user.selectOptions(screen.getByLabelText(/Proxy/i), "proxy");
     await user.selectOptions(screen.getByLabelText(/Freshness/i), "proxy");
     await user.click(screen.getAllByRole("button", { name: "Add" })[0]);
 
     expect(screen.getByRole("button", { name: /IND_SEMICONDUCTORS/i })).toBeInTheDocument();
-    await waitFor(() => expect(apiMock.benchmarkPrices).toHaveBeenCalled());
+    await waitFor(() => expect(apiMock.benchmarkPrices).toHaveBeenCalledTimes(2));
+    expect(apiMock.benchmarkPrices).toHaveBeenLastCalledWith("IND_SEMICONDUCTORS", expect.objectContaining({ limit: 1400 }));
   });
 });
 
 describe("BenchmarkDetailPage", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     apiMock.benchmark.mockResolvedValue(detail);
     apiMock.benchmarkPrices.mockResolvedValue(prices.IND_SEMICONDUCTORS);
     apiMock.benchmarkMetrics.mockResolvedValue([

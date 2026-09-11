@@ -106,44 +106,44 @@ export function BenchmarksWorkspacePage({ notify }: { notify: Notify }) {
   const showStatus = usePageFeature("benchmarks", "benchmarks.status");
 
   const benchmarks = useQuery({
-    queryKey: ["benchmarks-workspace", search, category, currency],
-    queryFn: () => api.benchmarks({
-      q: search.trim() || undefined,
-      category: category === "all" ? undefined : category,
-      currency: currency.trim().toUpperCase() || undefined,
-      is_active: true,
-      limit: 500,
-    }),
-    placeholderData: (previous) => previous,
-  });
-  const allBenchmarks = useQuery({
-    queryKey: ["benchmarks-baseline-options"],
+    queryKey: ["benchmarks-workspace-summary"],
     queryFn: () => api.benchmarks({ is_active: true, limit: 500 }),
-    staleTime: 60000,
+    staleTime: 60_000,
+    gcTime: 5 * 60_000,
   });
-  const baselineOptions = useMemo(() => allBenchmarks.data ?? [], [allBenchmarks.data]);
+  const baselineOptions = useMemo(() => benchmarks.data ?? [], [benchmarks.data]);
   const eligibleBaselines = baselineOptions.filter((item) => item.evidence?.action_eligibility !== "blocked");
   const defaultBaseline = eligibleBaselines.find((item) => item.index_id === "SP500")?.index_id ?? eligibleBaselines[0]?.index_id ?? baselineOptions[0]?.index_id ?? "SP500";
   const baseline = (params.get("baseline") ?? defaultBaseline).toUpperCase();
 
-  const fallbackSelected = useMemo(() => {
-    const rows = baselineOptions.length ? baselineOptions : benchmarks.data ?? [];
-    return [baseline, ...rows.filter((item) => item.index_id !== baseline).slice(0, 2).map((item) => item.index_id)];
-  }, [baseline, baselineOptions, benchmarks.data]);
-  const selected = parseSelected(params.get("selected"), fallbackSelected);
-  const selectedWithBaseline = Array.from(new Set([baseline, ...selected])).slice(0, 6);
+  const selected = parseSelected(params.get("selected"), []);
+  const selectedWithBaseline = selected.length ? Array.from(new Set([baseline, ...selected])).slice(0, 6) : [];
   const rows = useMemo(() => {
-    const raw = benchmarks.data ?? [];
+    const normalizedSearch = search.trim().toLowerCase();
+    const normalizedCurrency = currency.trim().toUpperCase();
+    const raw = baselineOptions;
     const filtered = raw.filter((item) => {
+      if (category !== "all" && item.index_category !== category) return false;
+      if (normalizedCurrency && item.currency.toUpperCase() !== normalizedCurrency) return false;
+      if (normalizedSearch && ![
+        item.index_id,
+        item.index_name,
+        item.index_family,
+        item.notes,
+        item.region,
+        item.country_code,
+        item.primary_provider,
+        item.primary_symbol,
+      ].some((value) => value?.toLowerCase().includes(normalizedSearch))) return false;
       if (proxy === "proxy" && !isProxyBenchmark(item)) return false;
       if (proxy === "direct" && isProxyBenchmark(item)) return false;
       if (freshness !== "all" && benchmarkFreshness(item) !== freshness) return false;
       return true;
     });
     return sortBenchmarks(filtered, sort, direction);
-  }, [benchmarks.data, direction, freshness, proxy, sort]);
+  }, [baselineOptions, category, currency, direction, freshness, proxy, search, sort]);
   const selectedBenchmarks = selectedWithBaseline
-    .map((id) => (allBenchmarks.data ?? benchmarks.data ?? []).find((item) => item.index_id.toUpperCase() === id.toUpperCase()))
+    .map((id) => baselineOptions.find((item) => item.index_id.toUpperCase() === id.toUpperCase()))
     .filter((item): item is BenchmarkIndexSummary => Boolean(item));
 
   const startDate = periodStartDate(period);
@@ -166,8 +166,7 @@ export function BenchmarksWorkspacePage({ notify }: { notify: Notify }) {
     onSuccess: () => {
       notify("Benchmark universe seeded.");
       queryClient.invalidateQueries({ queryKey: ["benchmarks"] });
-      queryClient.invalidateQueries({ queryKey: ["benchmarks-workspace"] });
-      queryClient.invalidateQueries({ queryKey: ["benchmarks-baseline-options"] });
+      queryClient.invalidateQueries({ queryKey: ["benchmarks-workspace-summary"] });
     },
     onError: (error) => notify(actionErrorMessage(error), "error"),
   });
@@ -176,7 +175,7 @@ export function BenchmarksWorkspacePage({ notify }: { notify: Notify }) {
     onSuccess: () => {
       notify("Benchmark hardening finished.");
       queryClient.invalidateQueries({ queryKey: ["benchmarks"] });
-      queryClient.invalidateQueries({ queryKey: ["benchmarks-workspace"] });
+      queryClient.invalidateQueries({ queryKey: ["benchmarks-workspace-summary"] });
       queryClient.invalidateQueries({ queryKey: ["benchmark-compare-prices"] });
     },
     onError: (error) => notify(actionErrorMessage(error), "error"),
@@ -340,8 +339,10 @@ function BenchmarkComparisonChart({
 }) {
   return (
     <ChartFrame eyebrow="Actual benchmark levels" title="Benchmark price comparison" detail={`Stored closes for the selected ${period} window. Delta values compare period return against ${baseline}.`} className="benchmark-chart-card" id="benchmark-compare-chart" tabIndex={-1} tools={<><ChartTypeToggle value={chartType} onChange={onChartTypeChange} /><div className="benchmark-chip-row" aria-label="Selected benchmarks">{selected.map((id) => <button key={id} onClick={() => onRemove(id)} aria-label={`Remove ${id} from comparison`}>{id}<X size={13} /></button>)}</div></>}>
-      {isLoading ? <BenchmarkSkeleton rows={6} /> : chartData.length < 2 ? (
-        <BenchmarkEmpty title="No overlapping chart history" detail="Select benchmarks with daily prices for this period, or run benchmark hardening to backfill history." />
+      {selected.length === 0 ? (
+        <BenchmarkEmpty title="Choose a benchmark to compare" detail="The catalog loads without price history. Use Add on a current benchmark to fetch only that series and its baseline." />
+      ) : isLoading ? <BenchmarkSkeleton rows={6} /> : chartData.length < 2 ? (
+        <BenchmarkEmpty title="No overlapping chart history" detail="Choose benchmarks with daily prices for this period, or run benchmark hardening to backfill history." />
       ) : (
         <>
           <div className="benchmark-comparison-chart" aria-label={`Actual benchmark chart with ${normalized.length} series`}>

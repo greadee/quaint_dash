@@ -436,6 +436,18 @@ class BenchmarkApiService:
                     ) AS last_error
                 FROM benchmark_index_sync_state
                 GROUP BY index_id
+            ),
+            primary_symbols AS (
+                SELECT index_id, provider, provider_symbol, is_proxy
+                FROM benchmark_index_symbol
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY index_id
+                    ORDER BY
+                        is_primary DESC,
+                        CASE symbol_purpose WHEN 'price_daily' THEN 0 WHEN 'price_intraday' THEN 1 ELSE 2 END,
+                        provider,
+                        provider_symbol
+                ) = 1
             )
             SELECT
                 b.index_id,
@@ -459,12 +471,16 @@ class BenchmarkApiService:
                 c.data_quality,
                 s.daily_price_last_success_at,
                 s.composition_last_success_at,
-                s.last_error
+                s.last_error,
+                sym.provider,
+                sym.provider_symbol,
+                COALESCE(sym.is_proxy, FALSE)
             FROM benchmark_index b
             LEFT JOIN latest_metrics m ON m.index_id = b.index_id
             LEFT JOIN latest_prices p ON p.index_id = b.index_id
             LEFT JOIN latest_compositions c ON c.index_id = b.index_id
             LEFT JOIN sync_rollup s ON s.index_id = b.index_id
+            LEFT JOIN primary_symbols sym ON sym.index_id = b.index_id
             {where_sql}
             ORDER BY b.is_core DESC, b.index_category, b.index_id
             LIMIT ? OFFSET ?
@@ -1253,6 +1269,9 @@ class BenchmarkApiService:
             daily_price_last_success_at=row[19],
             composition_last_success_at=row[20],
             last_error=row[21],
+            primary_provider=row[22],
+            primary_symbol=row[23],
+            primary_is_proxy=bool(row[24]),
         )
 
     def _get_summary(self, index_id: str) -> BenchmarkIndexSummary | None:

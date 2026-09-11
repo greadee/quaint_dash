@@ -43,6 +43,9 @@ const benchmark = (overrides: Partial<BenchmarkIndexSummary> = {}): BenchmarkInd
   daily_price_last_success_at: "2026-06-18T21:00:00",
   composition_last_success_at: "2026-06-18T21:30:00",
   last_error: null,
+  primary_provider: "yfinance",
+  primary_symbol: "^GSPC",
+  primary_is_proxy: false,
   ...overrides,
 });
 

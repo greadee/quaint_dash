@@ -1215,6 +1215,9 @@ class BenchmarkIndexSummary(BaseModel):
     daily_price_last_success_at: datetime | None = None
     composition_last_success_at: datetime | None = None
     last_error: str | None = None
+    primary_provider: str | None = None
+    primary_symbol: str | None = None
+    primary_is_proxy: bool = False
     evidence: EvidenceDisplayResponse | None = None
 
 

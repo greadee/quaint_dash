@@ -11,7 +11,8 @@
     "test:watch": "vitest --config vite.config.ts --configLoader native",
     "test:coverage": "vitest run --config vite.config.ts --configLoader native --coverage",
     "test:e2e": "playwright test",
-    "perf:signals": "node ../tools/profile_signals_browser.mjs"
+    "perf:signals": "node ../tools/profile_signals_browser.mjs",
+    "perf:benchmarks": "node ../tools/profile_benchmarks_browser.mjs"
   },
   "dependencies": {
     "@prool-ui/react": "file:vendor/prool-ui/prool-ui-react-0.1.0.tgz",

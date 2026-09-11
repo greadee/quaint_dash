@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from fastapi.testclient import TestClient
 
 from dashboard.api.app import create_app
+from dashboard.api.services import BenchmarkApiService
 from dashboard.db.db_conn import DB
 from dashboard.ingestion.indices.index_ingestion_service import BenchmarkIndexIngestionService
 from dashboard.ingestion.indices.index_models import IndexConstituent
@@ -185,7 +186,27 @@ def test_list_benchmarks_filters_and_latest_rollups(tmp_path):
     assert payload[0]["latest_close"] == 102
     assert payload[0]["composition_quality"] == "proxy"
     assert payload[0]["last_error"] == "proxy only"
+    assert payload[0]["primary_provider"] == "yfinance"
+    assert payload[0]["primary_symbol"] == "^GSPC"
+    assert payload[0]["primary_is_proxy"] is False
+    assert payload[0]["evidence"]["source_name"] == "yfinance"
     assert payload[0]["evidence"]["action_eligibility"] == "blocked"
+
+
+def test_list_benchmarks_does_not_load_per_benchmark_details(tmp_path, monkeypatch):
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("summary route must not load per-benchmark details")
+
+    monkeypatch.setattr(BenchmarkApiService, "get_benchmark", fail_if_called)
+    with _client_with_benchmarks(tmp_path) as client:
+        response = client.get("/api/v1/benchmarks?limit=500")
+
+    assert response.status_code == 200
+    assert len(response.json()) == 4
+    proxy = next(item for item in response.json() if item["index_id"] == "IND_SEMICONDUCTORS")
+    assert proxy["primary_symbol"] == "SOXX"
+    assert proxy["primary_is_proxy"] is True
+    assert proxy["evidence"]["source_kind"] == "proxy"
 
 
 def test_list_benchmarks_searches_proxy_symbols_without_changing_canonical_index(tmp_path):

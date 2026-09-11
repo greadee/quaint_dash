@@ -76,7 +76,7 @@ export function formatDateTime(value: string | null | undefined): string {
 }
 
 export function isProxyBenchmark(item: BenchmarkIndexSummary): boolean {
-  return item.composition_quality === "proxy" || item.notes?.toLowerCase().includes("proxy") === true;
+  return item.primary_is_proxy || item.evidence?.source_kind === "proxy" || item.composition_quality === "proxy" || item.notes?.toLowerCase().includes("proxy") === true;
 }
 
 export function proxyLabel(item: BenchmarkIndexSummary): string {

@@ -473,21 +473,26 @@ def present_comparison_workspace(
     )
 
 
-def _benchmark_kind(detail: BenchmarkIndexDetail | None) -> tuple[str, str | None]:
-    symbols = detail.symbols if detail else []
-    selected = next((item for item in symbols if item.is_primary), symbols[0] if symbols else None)
+def _benchmark_kind(
+    item: BenchmarkIndexSummary | BenchmarkIndexDetail,
+) -> tuple[str, str | None]:
+    symbols = item.symbols if isinstance(item, BenchmarkIndexDetail) else []
+    selected = next((symbol for symbol in symbols if symbol.is_primary), symbols[0] if symbols else None)
+    if selected is None:
+        return (
+            _source_kind(item.primary_provider, proxy=item.primary_is_proxy),
+            item.primary_provider,
+        )
     return (
-        _source_kind(
-            selected.provider if selected else None, proxy=bool(selected and selected.is_proxy)
-        ),
-        selected.provider if selected else None,
+        _source_kind(selected.provider, proxy=selected.is_proxy),
+        selected.provider,
     )
 
 
 def present_benchmark_summary(
     item: BenchmarkIndexSummary, detail: BenchmarkIndexDetail | None = None
 ) -> BenchmarkIndexSummary:
-    kind, source = _benchmark_kind(detail)
+    kind, source = _benchmark_kind(detail or item)
     evidence = _display(
         EvidencePolicyInput(
             evidence_type="benchmark",

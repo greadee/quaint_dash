@@ -653,7 +653,7 @@ def list_benchmarks(
         limit=limit,
         offset=offset,
     )
-    return [present_benchmark_summary(item, service.get_benchmark(item.index_id)) for item in items]
+    return [present_benchmark_summary(item) for item in items]
 
 
 @router.get("/benchmarks/defaults/asset/{asset_id}", response_model=BenchmarkDefaultResponse)
