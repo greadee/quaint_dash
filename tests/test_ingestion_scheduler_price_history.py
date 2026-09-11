@@ -194,7 +194,7 @@ def test_market_claim_skips_obsolete_pending_jobs_with_newer_done_job(manager):
         ORDER BY job_id
         """
     ).fetchall()
-    assert rows == [(10, "pending"), (12, "running")]
+    assert rows == [(10, "superseded"), (12, "running")]
 
 
 def test_market_claim_skips_pending_jobs_already_satisfied_by_sync_state(manager):
@@ -233,7 +233,7 @@ def test_market_claim_skips_pending_jobs_already_satisfied_by_sync_state(manager
         ORDER BY job_id
         """
     ).fetchall()
-    assert rows == [(10, "pending"), (11, "running")]
+    assert rows == [(10, "superseded"), (11, "running")]
 
 
 def test_market_claim_skips_jobs_at_attempt_budget(manager):

@@ -77,6 +77,34 @@ class PriceHistoryIngestionRepository:
         )
 
     def claim_next_pending_job(self) -> Optional[IngestionJob]:
+        # Work excluded by the claim query must leave the visible pending queue.
+        self.conn.execute("""
+            UPDATE ingestion_job AS candidate
+            SET status = 'superseded',
+                terminal_reason = 'newer successful market ingestion covers this job',
+                completed_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE candidate.domain = 'market' AND candidate.status = 'pending'
+              AND (
+                EXISTS (
+                    SELECT 1 FROM ingestion_job newer
+                    WHERE newer.asset_id = candidate.asset_id
+                      AND newer.domain = candidate.domain
+                      AND newer.dataset = candidate.dataset
+                      AND newer.status = 'done' AND newer.job_id > candidate.job_id
+                ) OR EXISTS (
+                    SELECT 1 FROM asset_sync_state sync
+                    WHERE sync.asset_id = candidate.asset_id
+                      AND sync.domain = candidate.domain
+                      AND sync.dataset = candidate.dataset
+                      AND (sync.backfill_status = 'done'
+                           OR sync.last_successful_at IS NOT NULL
+                           OR sync.last_successful_date IS NOT NULL)
+                      AND COALESCE(sync.last_successful_at, sync.last_attempted_at,
+                          TIMESTAMP '1970-01-01') >= candidate.updated_at
+                )
+              )
+        """)
         row = self.conn.execute(
             qry.CLAIM_NEXT_PENDING_JOB,
             [

@@ -16,6 +16,9 @@ from dashboard.ingestion.corporate_calendar.jobs import (
 )
 from dashboard.ingestion.corporate_calendar.provider_fmp import FmpCorporateCalendarProvider
 from dashboard.ingestion.corporate_calendar.provider_yahoo import YahooEarningsProvider
+from dashboard.ingestion.corporate_calendar.provider_yahoo_fundamentals import (
+    YahooFundamentalsProvider,
+)
 from dashboard.ingestion.corporate_calendar.worker import CorporateCalendarWorker
 from dashboard.ingestion.corporate_calendar.scheduler import CorporateCalendarScheduler
 
@@ -30,11 +33,13 @@ class CorporateCalendarIngestionService:
         conn,
         provider: FmpCorporateCalendarProvider | None = None,
         backup_earnings_provider=None,
+        backup_statement_provider=None,
     ) -> None:
         self.conn = conn
         self.repo = CorporateCalendarIngestionRepository(conn)
         self.provider = provider
         self.backup_earnings_provider = backup_earnings_provider
+        self.backup_statement_provider = backup_statement_provider
 
     def enqueue_calendar_refresh(
         self,
@@ -73,12 +78,16 @@ class CorporateCalendarIngestionService:
     def process_jobs(self, max_jobs: int = 1) -> int:
         primary_provider = self.provider or FmpCorporateCalendarProvider()
         backup_provider = self.backup_earnings_provider
+        backup_statement_provider = self.backup_statement_provider
         if backup_provider is None and self.provider is None:
             backup_provider = YahooEarningsProvider()
+        if backup_statement_provider is None and self.provider is None:
+            backup_statement_provider = YahooFundamentalsProvider()
         worker = CorporateCalendarWorker(
             self.conn,
             primary_provider,
             backup_earnings_provider=backup_provider,
+            backup_statement_provider=backup_statement_provider,
         )
 
         completed = 0

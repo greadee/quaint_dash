@@ -5,6 +5,8 @@ from fastapi.testclient import TestClient
 from dashboard.api.app import create_app
 from dashboard.db.db_conn import DB, init_db
 from dashboard.news.ingestion import NewsIngestionService
+from dashboard.news.api_service import NewsApiService
+from dashboard.news.providers.fmp_provider import FmpNewsProviderError
 from dashboard.news.providers.mock_provider import MockNewsProvider
 
 
@@ -196,3 +198,29 @@ def test_news_provider_health_and_alert_rules(tmp_path):
     assert updated.json()["breaking_only"] is False
     assert deleted.status_code == 200
     assert deleted.json()["result"]["alert_rule_id"] == alert_id
+
+
+def test_permanent_fmp_news_failure_disables_future_refreshes(tmp_path, monkeypatch):
+    db = DB(tmp_path / "api-news-permanent-provider.db")
+    init_db(db)
+
+    class PermanentlyBlockedProvider:
+        def __init__(self):
+            raise FmpNewsProviderError(
+                "FMP HTTP error 402: plan does not include news"
+            )
+
+    monkeypatch.setattr(
+        "dashboard.news.api_service.FmpNewsProvider",
+        PermanentlyBlockedProvider,
+    )
+    service = NewsApiService(db.conn)
+
+    first = service.refresh_subscribed(min_interval_minutes=0)
+    second = service.refresh_subscribed(min_interval_minutes=0)
+
+    assert any(result["provider_code"] == "fmp_news" for result in first.results)
+    assert all(result["provider_code"] != "fmp_news" for result in second.results)
+    assert db.conn.execute(
+        "SELECT is_enabled FROM news_provider WHERE provider_code = 'fmp_news'"
+    ).fetchone() == (False,)

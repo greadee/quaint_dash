@@ -112,6 +112,16 @@ class NewsRepository:
         )
         return provider_id
 
+    def set_provider_enabled(self, provider_id: int, *, enabled: bool) -> None:
+        self.conn.execute(
+            """
+            UPDATE news_provider
+            SET is_enabled = ?, updated_at = now()
+            WHERE provider_id = ?
+            """,
+            [enabled, provider_id],
+        )
+
     def upsert_article(
         self,
         provider_id: int,

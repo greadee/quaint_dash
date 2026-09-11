@@ -149,6 +149,10 @@ class FmpNewsProvider:
         except urllib.error.HTTPError as exc:
             if exc.code == 401 or exc.code == 403:
                 raise FmpNewsProviderError("FMP authentication or entitlement failed") from exc
+            if exc.code == 402:
+                raise FmpNewsProviderError(
+                    "FMP HTTP error 402: plan does not include news"
+                ) from exc
             if exc.code == 429:
                 raise RateLimitExceeded("FMP rate limit exceeded") from exc
             raise FmpNewsProviderError(f"FMP HTTP error {exc.code}") from exc

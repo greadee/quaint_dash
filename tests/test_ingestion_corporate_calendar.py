@@ -73,6 +73,24 @@ class EntitlementFailingProvider(FakeCorporateProvider):
         )
 
 
+class BackupStatementsProvider:
+    source = "backup"
+
+    def fetch_quarterly_statements(self, asset_id, limit=16):
+        return [
+            FinancialStatementRow(
+                asset_id=asset_id,
+                statement_type="income",
+                fiscal_year=2026,
+                fiscal_quarter=2,
+                period_end_date=date(2026, 6, 30),
+                report_date=None,
+                data_json={"revenue": 100.0},
+                source="backup",
+            )
+        ]
+
+
 class PartialEarningsProvider(FakeCorporateProvider):
     def fetch_earnings_for_symbol(self, asset_id, limit=16):
         return [
@@ -263,6 +281,36 @@ def test_stage_2_due_earnings_update_appends_actuals_and_financials():
     """).fetchone()
 
     assert stmt == ("income", 2026, 1)
+
+
+def test_financial_statement_job_uses_backup_when_primary_provider_is_blocked():
+    conn = make_conn()
+    service = CorporateCalendarIngestionService(
+        conn,
+        provider=EntitlementFailingProvider(),
+        backup_statement_provider=BackupStatementsProvider(),
+    )
+    job_id = service.repo.create_job(
+        asset_id="AAPL",
+        job_type="backfill",
+        dataset="financial_statements",
+        priority=90,
+        start_date=None,
+        end_date=None,
+    )
+
+    assert service.process_jobs(max_jobs=1) == 1
+    assert conn.execute(
+        "SELECT status, error_message FROM ingestion_job WHERE job_id = ?",
+        [job_id],
+    ).fetchone() == ("done", None)
+    assert conn.execute(
+        """
+        SELECT statement_type, year, quarter, source
+        FROM financial_statement
+        WHERE asset_id = 'AAPL'
+        """
+    ).fetchone() == ("income", 2026, 2, "backup")
 
 
 def test_yahoo_earnings_provider_parses_estimate_and_reported_eps(monkeypatch):

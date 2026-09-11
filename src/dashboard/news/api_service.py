@@ -21,6 +21,7 @@ from dashboard.api.models import (
     NewsUserStateResponse,
 )
 from dashboard.news.ingestion import NewsIngestionService
+from dashboard.ingestion.job_policy import is_permanent_ingestion_failure
 from dashboard.news.models import ProviderCapabilities
 from dashboard.news.providers.fmp_provider import FmpNewsProvider, FmpNewsProviderError
 
@@ -389,31 +390,45 @@ class NewsApiService:
             )
         service = NewsIngestionService(self.conn)
         results = []
-        try:
-            provider = FmpNewsProvider()
-            watermark = self._latest_provider_timestamp(provider.provider_code, "subscribed")
-            result = service.ingest_subscribed(provider, since=watermark, limit=limit)
-            results.append(self._result_dict(result))
-        except (FmpNewsProviderError, RuntimeError) as exc:
-            provider_id = service.repo.upsert_provider(
-                provider_code="fmp_news",
-                provider_name="Financial Modeling Prep News",
-                provider_type="api",
-                base_url="https://financialmodelingprep.com/stable",
-                capabilities=ProviderCapabilities(
-                    supports_latest_news=True,
-                    supports_symbol_news=True,
-                    supports_summaries=True,
-                    supports_images=True,
-                    supports_categories=True,
-                    supports_press_releases=True,
-                ),
-            )
-            from dashboard.news.models import NewsIngestionResult
+        if self._provider_enabled("fmp_news"):
+            try:
+                provider = FmpNewsProvider()
+                watermark = self._latest_provider_timestamp(provider.provider_code, "subscribed")
+                result = service.ingest_subscribed(provider, since=watermark, limit=limit)
+                if result.status == "failed" and is_permanent_ingestion_failure(result.error_message):
+                    provider_row = self.conn.execute(
+                        "SELECT provider_id FROM news_provider WHERE provider_code = ?",
+                        [provider.provider_code],
+                    ).fetchone()
+                    if provider_row:
+                        service.repo.set_provider_enabled(int(provider_row[0]), enabled=False)
+                results.append(self._result_dict(result))
+            except (FmpNewsProviderError, RuntimeError) as exc:
+                provider_id = service.repo.upsert_provider(
+                    provider_code="fmp_news",
+                    provider_name="Financial Modeling Prep News",
+                    provider_type="api",
+                    base_url="https://financialmodelingprep.com/stable",
+                    capabilities=ProviderCapabilities(
+                        supports_latest_news=True,
+                        supports_symbol_news=True,
+                        supports_summaries=True,
+                        supports_images=True,
+                        supports_categories=True,
+                        supports_press_releases=True,
+                    ),
+                )
+                from dashboard.news.models import NewsIngestionResult
 
-            result = NewsIngestionResult(provider_code="fmp_news", status="failed", error_message=str(exc))
-            service.repo.mark_ingestion_state(provider_id, "subscribed", result)
-            results.append(self._result_dict(result))
+                result = NewsIngestionResult(
+                    provider_code="fmp_news",
+                    status="failed",
+                    error_message=str(exc),
+                )
+                service.repo.mark_ingestion_state(provider_id, "subscribed", result)
+                if is_permanent_ingestion_failure(str(exc)):
+                    service.repo.set_provider_enabled(provider_id, enabled=False)
+                results.append(self._result_dict(result))
         earnings = service.ingest_earnings_events()
         results.append(self._result_dict(earnings))
         return NewsRefreshResponse(
@@ -421,6 +436,13 @@ class NewsApiService:
             generated_at=datetime.now(UTC),
             results=results,
         )
+
+    def _provider_enabled(self, provider_code: str) -> bool:
+        row = self.conn.execute(
+            "SELECT is_enabled FROM news_provider WHERE provider_code = ?",
+            [provider_code],
+        ).fetchone()
+        return row is None or bool(row[0])
 
     def create_alert_rule(
         self,

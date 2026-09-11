@@ -5,6 +5,8 @@ from pathlib import Path
 import duckdb
 
 from dashboard.db.db_conn import DB, init_db
+from dashboard.news.models import NewsIngestionResult, ProviderCapabilities
+from dashboard.news.repository import NewsRepository
 
 
 def table_columns(conn, table_name: str) -> dict[str, str]:
@@ -141,6 +143,67 @@ def test_init_db_repairs_ingestion_job_sequence_after_explicit_ids(tmp_path: Pat
         """
     ).fetchone()
     assert allocated == (10001, 10002)
+
+
+def test_init_db_routes_provider_blocked_work_to_available_fallbacks(tmp_path: Path):
+    db = DB(str(tmp_path / "provider_reconciliation.db"))
+    init_db(db)
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy)
+        VALUES ('AAPL', 'AAPL', 'stock', 'USD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO ingestion_job(
+            job_id, asset_id, domain, job_type, dataset, status, priority,
+            attempt_count, error_message
+        )
+        VALUES (
+            500, 'AAPL', 'corporate', 'backfill', 'financial_statements',
+            'dead_letter', 90, 3, 'Provider request limit reached.'
+        ), (
+            501, 'AAPL', 'corporate', 'refresh', 'financial_statements',
+            'failed', 90, 1, 'FMP HTTP error 402: plan does not include this endpoint'
+        )
+        """
+    )
+    repo = NewsRepository(db.conn)
+    provider_id = repo.upsert_provider(
+        provider_code="fmp_news",
+        provider_name="Financial Modeling Prep News",
+        provider_type="api",
+        base_url="https://financialmodelingprep.com/stable",
+        capabilities=ProviderCapabilities(supports_latest_news=True),
+    )
+    repo.mark_ingestion_state(
+        provider_id,
+        "subscribed",
+        NewsIngestionResult(
+            provider_code="fmp_news",
+            status="failed",
+            error_message="FMP HTTP error 402",
+        ),
+    )
+
+    init_db(db)
+
+    assert db.conn.execute(
+        """
+        SELECT status, attempt_count, error_message
+        FROM ingestion_job
+        WHERE job_id IN (500, 501)
+        ORDER BY job_id
+        """
+    ).fetchall() == [("pending", 3, None), ("pending", 1, None)]
+    db.conn.execute("UPDATE ingestion_job SET status = 'failed', error_message = 'FMP HTTP error 402' WHERE job_id = 501")
+    init_db(db)
+    assert db.conn.execute("SELECT status, max_attempts FROM ingestion_job WHERE job_id = 501").fetchone() == ("failed", 6)
+    assert db.conn.execute(
+        "SELECT is_enabled FROM news_provider WHERE provider_id = ?",
+        [provider_id],
+    ).fetchone() == (False,)
 
 
 def test_init_db_adds_backfill_columns_to_existing_fundamental_subscription(tmp_path: Path):

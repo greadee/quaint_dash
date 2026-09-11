@@ -28,10 +28,12 @@ class CorporateCalendarWorker:
         conn,
         provider: FmpCorporateCalendarProvider,
         backup_earnings_provider=None,
+        backup_statement_provider=None,
     ) -> None:
         self.repo = CorporateCalendarIngestionRepository(conn)
         self.provider = provider
         self.backup_earnings_provider = backup_earnings_provider
+        self.backup_statement_provider = backup_statement_provider
 
     def run_once(self) -> bool:
         job = self.repo.claim_next_pending_job()
@@ -66,7 +68,7 @@ class CorporateCalendarWorker:
                 last_date = max((r.earnings_date for r in rows), default=None)
 
             elif job.dataset == DATASET_FINANCIAL_STATEMENTS:
-                rows = self.provider.fetch_quarterly_statements(job.asset_id, limit=16)
+                rows = self._fetch_statements_with_backup(job.asset_id)
 
                 self.repo.upsert_financial_statement_rows(rows)
                 last_date = max((r.period_end_date for r in rows), default=None)
@@ -112,6 +114,23 @@ class CorporateCalendarWorker:
             )
 
             return False
+
+    def _fetch_statements_with_backup(self, asset_id: str):
+        try:
+            return self.provider.fetch_quarterly_statements(asset_id, limit=16)
+        except Exception as primary_error:
+            if self.backup_statement_provider is None:
+                raise
+            try:
+                return self.backup_statement_provider.fetch_quarterly_statements(
+                    asset_id,
+                    limit=16,
+                )
+            except Exception as backup_error:
+                raise RuntimeError(
+                    f"primary fundamentals provider failed: {primary_error}; "
+                    f"backup fundamentals provider failed: {backup_error}"
+                ) from backup_error
 
     def _fetch_earnings_with_backup(
         self,

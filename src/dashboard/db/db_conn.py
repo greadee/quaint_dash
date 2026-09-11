@@ -110,9 +110,74 @@ def init_db(db: DB):
     db.conn.execute(financial_news_schema.read_text(encoding="utf-8"))
     ingestion_job_schema = schema_path.parent / "migrations" / "ingestion_job_recovery.sql"
     db.conn.execute(ingestion_job_schema.read_text(encoding="utf-8"))
+    _reconcile_provider_blocked_work(db.conn)
     candidate_schema = schema_path.parent / "migrations" / "candidate_runs.sql"
     db.conn.execute(candidate_schema.read_text(encoding="utf-8"))
     seed_stock_catalog(db.conn)
+
+
+def _reconcile_provider_blocked_work(conn) -> None:
+    """Route known provider-blocked work to available fallbacks on startup."""
+    conn.execute(
+        """
+        UPDATE ingestion_job
+        SET status = 'pending',
+            max_attempts = GREATEST(COALESCE(attempt_count, 0) + 3, 6),
+            error_message = NULL,
+            terminal_reason = NULL,
+            lease_owner = NULL,
+            leased_at = NULL,
+            lease_expires_at = NULL,
+            completed_at = NULL,
+            updated_at = now()
+        WHERE status IN ('failed', 'dead_letter')
+          AND COALESCE(max_attempts, 3) <= 3
+          AND domain = 'corporate'
+          AND dataset = 'financial_statements'
+          AND (
+                LOWER(COALESCE(error_message, '')) LIKE '%provider request limit reached%'
+                OR LOWER(COALESCE(error_message, '')) LIKE '%fmp rate limit%'
+                OR LOWER(COALESCE(error_message, '')) LIKE '%http error 402%'
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM ingestion_job newer
+              WHERE newer.asset_id = ingestion_job.asset_id
+                AND newer.domain = ingestion_job.domain
+                AND newer.dataset = ingestion_job.dataset
+                AND newer.status = 'done'
+                AND newer.job_id > ingestion_job.job_id
+          )
+        """
+    )
+    conn.execute(
+        """
+        UPDATE news_provider
+        SET is_enabled = FALSE, updated_at = now()
+        WHERE provider_id IN (
+            SELECT provider_id
+            FROM (
+                SELECT
+                    s.provider_id,
+                    s.sync_status,
+                    s.last_error_message,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY s.provider_id
+                        ORDER BY s.last_attempted_at DESC NULLS LAST, s.updated_at DESC
+                    ) AS recency
+                FROM news_ingestion_state s
+            ) latest
+            WHERE recency = 1
+              AND sync_status = 'failed'
+              AND (
+                    LOWER(COALESCE(last_error_message, '')) LIKE '%http error 402%'
+                    OR LOWER(COALESCE(last_error_message, '')) LIKE '%entitlement%'
+                    OR LOWER(COALESCE(last_error_message, '')) LIKE '%api_key is not configured%'
+              )
+        )
+          AND provider_code = 'fmp_news'
+        """
+    )
 
 
 def _ensure_mutable_signal_cache_heaps(conn) -> None:
