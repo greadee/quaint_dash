@@ -104,4 +104,48 @@ describe("AssetDetailPage", () => {
     expect(screen.getAllByText(/Audit only/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Not decision eligible/i).length).toBeGreaterThan(0);
   });
+
+  it("keeps news headlines and publication dates together", async () => {
+    apiMock.asset.mockResolvedValue({
+      asset_id: "NVDA",
+      symbol: "NVDA",
+      name: "NVIDIA Corporation with a deliberately descriptive company name",
+      sector: "Technology",
+      latest_price: 120,
+      currency: "USD",
+    });
+    apiMock.assetNews.mockResolvedValue({
+      items: [{
+        article_id: 1,
+        headline: "A long asset headline stays paired with its publication timestamp",
+        summary: null,
+        body_text: null,
+        url: null,
+        canonical_url: null,
+        image_url: null,
+        language: "en",
+        published_at: "2026-06-30T14:40:00Z",
+        ingested_at: "2026-06-30T14:41:00Z",
+        source_name: "Local feed",
+        provider: "local",
+        provider_article_id: "news-1",
+        is_press_release: false,
+        is_breaking: false,
+        categories: [],
+        assets: [],
+        user_state: { is_read: false, is_saved: false },
+      }],
+      total: 1,
+      limit: 10,
+      offset: 0,
+      sort: "recency",
+      generated_at: "2026-06-30T14:41:00Z",
+    });
+
+    renderAsset("/assets/NVDA?tab=news");
+
+    expect(await screen.findByRole("heading", { name: "News" })).toBeInTheDocument();
+    const copy = screen.getByText(/long asset headline/i).closest(".asset-news-copy");
+    expect(copy?.querySelector("time")).toHaveAttribute("datetime", "2026-06-30T14:40:00Z");
+  });
 });

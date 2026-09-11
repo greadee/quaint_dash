@@ -40,6 +40,13 @@ async function mockOperations(page: Page) {
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname.replace("/api/v1", "");
     const payloads: Record<string, unknown> = {
+      "/operations/health-summary": {
+        observed_at: "2026-09-07T12:00:00Z", status: "critical",
+        headline: "Data health needs immediate attention",
+        summary: "Old queued work and provider failures need review.", incident_count: 2,
+        informational_count: 0, affected_data_products: queue.affected_data_products,
+        queue, workers: [], incidents: [], operations_url: "/operations#operations-health",
+      },
       "/ingestion/jobs": [], "/ingestion/queue/status": queue,
       "/ingestion/retail-sentiment/status": { providers: [], latest_snapshots: [], recent_posts: [], pending_jobs: 0, running_jobs: 0, failed_jobs: 0 },
       "/ingestion/readiness": { items: [], total: 0, ready_count: 0 },
@@ -94,7 +101,7 @@ test("read-only refresh distinguishes recovered history and unavailable queue", 
   await expect(diagnostics.getByText("Routine ingestion: failed", { exact: true })).toBeVisible();
   state.recovered = true;
   state.unavailable = true;
-  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await page.getByRole("button", { name: "Refresh status", exact: true }).click();
   await expect(diagnostics.getByText(/Counts and backlog age are unknown/)).toBeVisible({ timeout: 15000 });
   await expect(diagnostics.getByText("Routine ingestion: idle", { exact: true })).toBeVisible();
   await expect(diagnostics.getByText(/Previous failure:/)).toBeVisible();

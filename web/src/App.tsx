@@ -81,10 +81,10 @@ export default function App() {
   return (
     <PageFeatureProvider>
     <div className={`app-shell ${settings.density === "compact" ? "density-compact" : ""} ${settings.featureColor ? "" : "feature-muted"}`}>
-      <aside className={menuOpen ? "sidebar sidebar-open" : "sidebar"}>
+      <aside id="primary-navigation" className={menuOpen ? "sidebar sidebar-open" : "sidebar"}>
         <div className="brand"><ChartNoAxesCombined size={21} /><span>Quaint Dash</span></div>
-        <button className="mobile-close" onClick={() => setMenuOpen(false)}><X /></button>
-        <nav>
+        <button type="button" className="mobile-close" onClick={() => setMenuOpen(false)} aria-label="Close navigation" title="Close navigation"><X aria-hidden="true" /></button>
+        <nav aria-label="Primary navigation">
           <NavLink to="/" end><LayoutDashboard />Overview</NavLink>
           <NavLink to="/portfolios"><WalletCards />Portfolios</NavLink>
           <NavLink to="/news"><Newspaper />News</NavLink>
@@ -103,7 +103,7 @@ export default function App() {
       </aside>
       <main>
         <header>
-          <button className="mobile-menu" onClick={() => setMenuOpen(true)}><Menu /></button>
+          <button type="button" className="mobile-menu" onClick={() => setMenuOpen(true)} aria-label="Open navigation" title="Open navigation" aria-controls="primary-navigation" aria-expanded={menuOpen}><Menu aria-hidden="true" /></button>
           <div><p className="eyebrow">Personal finance workspace</p><strong>Investment dashboard</strong></div>
           <div className="avatar">CP</div>
         </header>

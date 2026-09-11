@@ -353,7 +353,7 @@ export function BrokersPage({ notify }: { notify: (message: string, tone?: AppNo
   return (
     <div className="page broker-page">
       <section className="broker-hero">
-        <div>
+        <div className="broker-hero-copy">
           <p className="eyebrow">Broker profile</p>
           <h1>Brokers</h1>
           <p className="page-subtitle">Read-only brokerage connections retrieve accounts, holdings and activity. Brokerage credentials are entered only in a provider-hosted portal, and refreshing broker data does not modify local portfolios.</p>

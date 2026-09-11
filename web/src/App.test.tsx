@@ -680,6 +680,10 @@ describe("App shell", () => {
     renderApp("/settings");
 
     expect(screen.getByText("Quaint Dash")).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Primary navigation" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open navigation" })).toHaveAttribute("aria-controls", "primary-navigation");
+    expect(screen.getByRole("button", { name: "Open navigation" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: "Close navigation" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Overview/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /News/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();

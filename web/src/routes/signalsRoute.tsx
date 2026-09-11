@@ -118,6 +118,7 @@ export function StockRankingsPage({ notify }: { notify: (message: string, tone?:
     </div>
     <PageLayoutToolbar pageId="signals" />
     <OptionalFeaturesEmpty pageId="signals" />
+    {signalSummary?.partial_provider_failures.length ? <div className="signal-degraded" role="status">Partial provider coverage: {signalSummary.partial_provider_failures.join(", ")}. Valid cached signals remain visible.</div> : null}
     {showSummaryStrip ? <LayoutWidget pageId="signals" widgetId="signals.summaryStrip"><section className="signal-summary-strip" aria-label="Signal summary">
       {signals.isLoading ? Array.from({ length: 6 }).map((_item, index) => <div className="signal-summary-tile skeleton" key={index} />) : signalSummary?.metrics.map((metric) => (
         <button key={metric.key} className="signal-summary-tile" onClick={() => applyMetric(metric.filter_params)}>
@@ -126,7 +127,6 @@ export function StockRankingsPage({ notify }: { notify: (message: string, tone?:
         </button>
       ))}
     </section></LayoutWidget> : null}
-    {signalSummary?.partial_provider_failures.length ? <div className="signal-degraded" role="status">Partial provider coverage: {signalSummary.partial_provider_failures.join(", ")}. Valid cached signals remain visible.</div> : null}
     {signals.isError ? <ErrorPanel error={signals.error} /> : null}
     {showPriorityPanels ? <LayoutWidget pageId="signals" widgetId="signals.priorityPanels"><section className="signal-priority-grid">
       <SignalPrioritySection title="Needs attention" items={signalSummary?.needs_attention ?? []} empty="No high-priority risks currently meet the filters." onOpen={openSignal} />
