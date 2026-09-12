@@ -261,17 +261,20 @@ class BrokerPortfolioIntegrationService:
         return int(row[0])
 
     def _ensure_asset(self, txn: "_NormalizedBrokerTxn") -> None:
+        from dashboard.assets.funds import fund_type
+
         if txn.asset_id is None:
             return
         self.conn.execute(
             """
             INSERT INTO asset(asset_id, symbol, asset_type, ccy, track, created_at, updated_at)
-            VALUES (?, ?, 'stock', ?, TRUE, now(), now())
+            VALUES (?, ?, ?, ?, TRUE, now(), now())
             ON CONFLICT(asset_id) DO UPDATE SET
                 symbol = COALESCE(asset.symbol, excluded.symbol),
                 updated_at = now()
             """,
-            [txn.asset_id, txn.asset_id, txn.ccy or "CAD"],
+            [txn.asset_id, txn.asset_id, fund_type(asset_id=txn.asset_id) or 'stock',
+             txn.ccy or "CAD"],
         )
         self.conn.execute(
             """
@@ -283,10 +286,12 @@ class BrokerPortfolioIntegrationService:
         )
 
     def _ensure_position_asset(self, position: "_NormalizedBrokerPosition") -> None:
+        from dashboard.assets.funds import fund_type
+
         self.conn.execute(
             """
             INSERT INTO asset(asset_id, symbol, asset_type, ccy, name, track, created_at, updated_at)
-            VALUES (?, ?, 'stock', ?, ?, TRUE, now(), now())
+            VALUES (?, ?, ?, ?, ?, TRUE, now(), now())
             ON CONFLICT(asset_id) DO UPDATE SET
                 symbol = COALESCE(asset.symbol, excluded.symbol),
                 name = COALESCE(asset.name, excluded.name),
@@ -295,6 +300,7 @@ class BrokerPortfolioIntegrationService:
             [
                 position.asset_id,
                 position.asset_id,
+                fund_type(asset_id=position.asset_id, name=position.description) or 'stock',
                 position.currency or "CAD",
                 position.description,
             ],

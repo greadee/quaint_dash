@@ -116,6 +116,9 @@ def init_db(db: DB):
     db.conn.execute(candidate_schema.read_text(encoding="utf-8"))
     seed_stock_catalog(db.conn)
     TickerUniverseRepository(db.conn).sync_portfolio_tickers_from_positions()
+    from dashboard.assets.funds import reconcile_fund_assets
+
+    reconcile_fund_assets(db.conn)
 
 
 def _reconcile_provider_blocked_work(conn) -> None:

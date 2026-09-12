@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from dashboard.assets import cdr_underlying_symbol
+from dashboard.assets.funds import fund_type
 
 
 @dataclass(frozen=True)
@@ -76,7 +77,13 @@ class TickerUniverseRepository:
             [*ordered, *asset_types],
         ).fetchall()
 
-        return [row[0] for row in rows]
+        selected = [row[0] for row in rows]
+        if set(asset_types) <= {"stock", "adr"}:
+            return [asset_id for asset_id, symbol, _, subtype, name, description
+                    in self._asset_symbol_rows(selected)
+                    if fund_type(asset_id=asset_id, symbol=symbol,
+                                 asset_subtype=subtype, name=name) is None]
+        return selected
 
     def earnings_asset_ids(self, include_watchlist: bool = True) -> list[str]:
         """Return source symbols that can carry company-level earnings events."""

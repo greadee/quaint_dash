@@ -20,6 +20,7 @@ from dashboard.ingestion.corporate_calendar.db.ingestion_repo import (
 from dashboard.ingestion.corporate_calendar.provider_fmp import FmpCorporateCalendarProvider
 from dashboard.ingestion.corporate_calendar.provider_fmp import FmpEntitlementError
 from dashboard.ingestion.job_policy import is_permanent_ingestion_failure
+from dashboard.assets.funds import fund_type
 
 
 class CorporateCalendarWorker:
@@ -40,6 +41,22 @@ class CorporateCalendarWorker:
 
         if job is None:
             return False
+
+        columns = {row[1] for row in self.repo.conn.execute("PRAGMA table_info('asset')").fetchall()}
+        fields = [field for field in ("asset_id", "symbol", "asset_type", "asset_subtype", "name")
+                  if field in columns]
+        row = self.repo.conn.execute(
+            f"SELECT {', '.join(fields)} FROM asset WHERE asset_id = ?", [job.asset_id]
+        ).fetchone()
+        if row and fund_type(**dict(zip(fields, row))) is not None:
+            self.repo.conn.execute("""
+                UPDATE ingestion_job SET status = 'unsupported',
+                    terminal_reason = 'company earnings and statements do not apply to funds',
+                    lease_owner = NULL, leased_at = NULL, lease_expires_at = NULL,
+                    completed_at = now(), updated_at = now()
+                WHERE job_id = ?
+            """, [job.job_id])
+            return True
 
         try:
             self.repo.mark_sync_running(

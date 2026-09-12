@@ -158,6 +158,10 @@ class AssetImporter:
         shares_outstanding = self._shares_outstanding_from_profile(profile, market_cap)
 
         asset_type = self._infer_asset_type(profile)
+        from dashboard.assets.funds import fund_type
+
+        asset_type = fund_type(asset_id=asset_id, asset_type=asset_type,
+                               name=profile.get("companyName")) or asset_type
         size = self._infer_size(market_cap)
 
         return {

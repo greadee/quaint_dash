@@ -919,6 +919,11 @@ def _fund_identity(
     asset_subtype,
     name,
 ) -> bool:
+    from dashboard.assets.funds import fund_type
+
+    if fund_type(asset_id=asset_id, symbol=symbol, asset_type=asset_type,
+                 asset_subtype=asset_subtype, name=name) is not None:
+        return True
     if str(asset_type or "").lower() in {"etf", "fund", "mutual_fund", "index"}:
         return True
     identity = " ".join(
