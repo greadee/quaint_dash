@@ -74,7 +74,8 @@ jobs:
         run: npm run lint
 
       - name: Run web tests
-        run: npm test
+        # Avoid competing jsdom workers distorting the wall-clock route budget.
+        run: npm test -- --no-file-parallelism
 
       - name: Build web application
         run: npm run build
