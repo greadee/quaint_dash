@@ -29,6 +29,13 @@ class FakeRedditProvider:
         ]
 
 
+class FailingRedditProvider:
+    name = "reddit"
+
+    def fetch_posts_for_ticker(self, ticker: str, since: datetime | None):
+        raise RuntimeError("provider unavailable")
+
+
 def test_sentiment_worker_processes_job_with_fake_provider(tmp_path):
     db = DB(str(tmp_path / "sentiment_worker.db"))
     init_db(db)
@@ -65,3 +72,41 @@ def test_sentiment_worker_processes_job_with_fake_provider(tmp_path):
     assert status == "done"
     assert observation_count == 1
 
+
+def test_sentiment_worker_failure_counts_toward_max_jobs(tmp_path):
+    db = DB(str(tmp_path / "sentiment_worker_failure.db"))
+    init_db(db)
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy)
+        VALUES
+            ('AMD', 'AMD', 'stock', 'USD'),
+            ('NVDA', 'NVDA', 'stock', 'USD')
+        """
+    )
+    repo = SentimentIngestionRepository(db.conn)
+    for asset_id in ["AMD", "NVDA"]:
+        repo.create_job(
+            asset_id=asset_id,
+            job_type=JOB_TYPE_SENTIMENT_REDDIT_REFRESH,
+            dataset=DATASET_REDDIT,
+            priority=PRIORITY_RETAIL_REFRESH,
+        )
+    service = SentimentIngestionService(
+        db.conn,
+        social_providers=[FailingRedditProvider()],
+    )
+    worker = SentimentIngestionWorker(db.conn, service=service)
+
+    processed = worker.process_jobs(max_jobs=1)
+
+    rows = db.conn.execute(
+        """
+        SELECT asset_id, status, error_message
+        FROM ingestion_job
+        ORDER BY asset_id
+        """
+    ).fetchall()
+    assert processed == 0
+    assert rows[0] == ("AMD", "failed", "provider unavailable")
+    assert rows[1] == ("NVDA", "pending", None)

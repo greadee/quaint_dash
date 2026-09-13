@@ -1,0 +1,14 @@
+flowchart LR
+  OldUI["Existing web route"]
+  OldAPI["Existing API route"]
+  Legacy["Legacy service/analytics/db call"]
+  Adapter["Compatibility facade/adapter"]
+  UseCase["New application use case"]
+  Domain["New domain module"]
+  Infra["Repository/provider adapter"]
+
+  OldUI --> OldAPI --> Legacy
+  OldAPI -. milestone migration .-> Adapter --> UseCase --> Domain
+  UseCase -. interface .-> Infra
+  Adapter -. deletion after consumers migrate .-> Legacy
+

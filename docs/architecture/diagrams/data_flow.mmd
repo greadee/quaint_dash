@@ -1,0 +1,19 @@
+flowchart TB
+  Providers["Market/news/fundamentals/broker providers"]
+  Infra["Provider adapters\nnormalize raw payloads"]
+  Db["DuckDB/repositories"]
+  App["Application use cases"]
+  Domain["Domain calculations"]
+  Contracts["Contracts\nfreshness/provenance"]
+  API["API adapter"]
+  UI["Web/desktop/mobile UI"]
+  AI["AI insights"]
+
+  Providers --> Infra --> Db
+  Db --> App
+  App --> Domain
+  Domain --> Contracts
+  App --> Contracts
+  Contracts --> API --> UI
+  Contracts --> AI
+

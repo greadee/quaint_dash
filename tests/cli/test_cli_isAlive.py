@@ -4,7 +4,7 @@ cli smoke test
 
 from dashboard.cli import cli_loop, run_startup_broker_sync
 
-def test_cli_isAlive(monkeypatch, capsys):
+def test_cli_isAlive(monkeypatch, capsys, tmp_path):
     '''
     test_cli_isAlive: test that the CLI starts and exits properly.
     Uses monkeypatch to simulate user input, and capsys to capture stdout. 
@@ -14,7 +14,7 @@ def test_cli_isAlive(monkeypatch, capsys):
     monkeypatch.setattr("builtins.input", lambda _: next(inputs))
     
     try:
-        cli_loop()
+        cli_loop(tmp_path / "cli-smoke.db")
     except SystemExit: # allow for reading sys.out after SystemExit
         pass
 

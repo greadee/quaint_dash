@@ -2,7 +2,9 @@
 SQL helpers for Domain B corporate calendar ingestion.
 """
 
-NEXT_JOB_ID = "SELECT nextval('seq_ingestion_job_id')"
+NEXT_JOB_ID = """
+SELECT nextval('seq_ingestion_job_id')
+"""
 
 INSERT_JOB = """
 INSERT INTO ingestion_job (
@@ -23,8 +25,32 @@ INSERT INTO ingestion_job (
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 """
 
-SELECT_NEXT_PENDING_JOB = """
-SELECT
+CLAIM_NEXT_PENDING_JOB = """
+UPDATE ingestion_job
+SET
+    status = ?,
+    attempt_count = attempt_count + 1,
+    error_message = NULL,
+    lease_owner = ?,
+    leased_at = CURRENT_TIMESTAMP,
+    lease_expires_at = CURRENT_TIMESTAMP + (? * INTERVAL '1 second'),
+    terminal_reason = NULL,
+    completed_at = NULL,
+    updated_at = CURRENT_TIMESTAMP
+WHERE job_id = (
+    SELECT candidate.job_id
+    FROM ingestion_job candidate
+    WHERE candidate.domain = ?
+      AND candidate.status = ?
+      AND COALESCE(candidate.attempt_count, 0) < COALESCE(
+          candidate.max_attempts,
+          ?
+      )
+    ORDER BY candidate.priority DESC, candidate.created_at ASC
+    LIMIT 1
+)
+  AND status = ?
+RETURNING
     job_id,
     asset_id,
     domain,
@@ -36,20 +62,6 @@ SELECT
     requested_end_date,
     attempt_count,
     error_message
-FROM ingestion_job
-WHERE domain = ?
-  AND status = ?
-ORDER BY priority DESC, created_at ASC
-LIMIT 1
-"""
-
-MARK_JOB_RUNNING = """
-UPDATE ingestion_job
-SET
-    status = ?,
-    attempt_count = attempt_count + 1,
-    updated_at = CURRENT_TIMESTAMP
-WHERE job_id = ?
 """
 
 MARK_JOB_DONE = """
@@ -57,6 +69,10 @@ UPDATE ingestion_job
 SET
     status = ?,
     error_message = NULL,
+    lease_owner = NULL,
+    leased_at = NULL,
+    lease_expires_at = NULL,
+    completed_at = CURRENT_TIMESTAMP,
     updated_at = CURRENT_TIMESTAMP
 WHERE job_id = ?
 """
@@ -66,6 +82,10 @@ UPDATE ingestion_job
 SET
     status = ?,
     error_message = ?,
+    lease_owner = NULL,
+    leased_at = NULL,
+    lease_expires_at = NULL,
+    completed_at = CURRENT_TIMESTAMP,
     updated_at = CURRENT_TIMESTAMP
 WHERE job_id = ?
 """
@@ -166,13 +186,13 @@ INSERT INTO earnings_calendar_event (
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (asset_id, earnings_date)
 DO UPDATE SET
-    fiscal_year = excluded.fiscal_year,
-    fiscal_quarter = excluded.fiscal_quarter,
-    "time" = excluded."time",
-    eps_estimated = excluded.eps_estimated,
-    eps_actual = excluded.eps_actual,
-    revenue_estimated = excluded.revenue_estimated,
-    revenue_actual = excluded.revenue_actual,
+    fiscal_year = COALESCE(excluded.fiscal_year, earnings_calendar_event.fiscal_year),
+    fiscal_quarter = COALESCE(excluded.fiscal_quarter, earnings_calendar_event.fiscal_quarter),
+    "time" = COALESCE(excluded."time", earnings_calendar_event."time"),
+    eps_estimated = COALESCE(excluded.eps_estimated, earnings_calendar_event.eps_estimated),
+    eps_actual = COALESCE(excluded.eps_actual, earnings_calendar_event.eps_actual),
+    revenue_estimated = COALESCE(excluded.revenue_estimated, earnings_calendar_event.revenue_estimated),
+    revenue_actual = COALESCE(excluded.revenue_actual, earnings_calendar_event.revenue_actual),
     source = excluded.source,
     as_of_ts = now()
 """

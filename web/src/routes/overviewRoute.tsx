@@ -1,0 +1,92 @@
+import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Activity, AlertTriangle, Building2, CircleDollarSign, Database, WalletCards } from "lucide-react";
+import { Link } from "react-router-dom";
+import { api } from "../api";
+import { money, percent } from "./routeFormatters";
+import { DataList, EmptyRow, Loading, Metric } from "./routeShared";
+import type { MoverDefault } from "./routeTypes";
+import { LayoutWidget, OptionalFeaturesEmpty, PageFeatureMenu, PageLayoutButton, PageLayoutToolbar } from "../pageFeatureStore";
+
+const MARKET_REFRESH_REFETCH_MS = 60_000;
+
+export function OverviewPage({ moverDefault }: { moverDefault: MoverDefault }) {
+  const [showAllMovers, setShowAllMovers] = useState(moverDefault === "all");
+  const updates = useQuery({ queryKey: ["overview-updates"], queryFn: api.overviewUpdates, refetchInterval: MARKET_REFRESH_REFETCH_MS });
+  const portfolios = useQuery({ queryKey: ["portfolios"], queryFn: api.portfolios, refetchInterval: MARKET_REFRESH_REFETCH_MS });
+  const brokers = useQuery({ queryKey: ["broker-accounts"], queryFn: api.brokerAccounts });
+  const health = useQuery({ queryKey: ["operations-health-summary"], queryFn: api.operationsHealthSummary, refetchInterval: MARKET_REFRESH_REFETCH_MS });
+  const portfolioCount = portfolios.data?.length ?? 0;
+  const mappedAccounts = brokers.data?.filter((account) => account.portfolio_id != null).length ?? 0;
+  const attentionCount = health.data?.incident_count;
+  const openAccounts = brokers.data?.length ?? 0;
+  const topMover = updates.data?.price_movers[0];
+  const movers = updates.data?.price_movers ?? [];
+  const visibleMovers = showAllMovers ? movers : movers.slice(0, 8);
+
+  useEffect(() => {
+    setShowAllMovers(moverDefault === "all");
+  }, [moverDefault]);
+
+  return <div className="page">
+    <div className="page-title">
+      <div><p className="eyebrow">Today at a glance</p><h1>Overview</h1><p className="page-subtitle">A compact status screen for account coverage, tracked value, recent movement, and anything that needs attention.</p></div>
+      <div className="actions"><PageLayoutButton pageId="overview" /><PageFeatureMenu pageId="overview" /><Link className="button-link" to="/signals"><Activity size={17}/>Review signals</Link><Link className="button-link primary" to="/portfolios"><WalletCards size={17}/>Open portfolios</Link></div>
+    </div>
+    <PageLayoutToolbar pageId="overview" />
+    <section className={`status-banner overview-health ${health.data?.status === "critical" || health.error ? "danger" : health.data?.status === "degraded" ? "warning" : ""}`} aria-live="polite">
+      {health.data?.status === "healthy" ? <Database size={20} /> : <AlertTriangle size={20} />}
+      <div>
+        <strong>{health.isLoading ? "Checking data health" : health.error ? "Data health is unavailable" : health.data?.headline ?? "Data health is unavailable"}</strong>
+        <p>{health.isLoading ? "Reading queue, worker, provider, and evidence status." : health.error ? "The app cannot verify current data health. Open Operations before relying on analytical outputs." : health.data?.summary}</p>
+        {health.data?.affected_data_products.length ? <span>Affected: {health.data.affected_data_products.join(", ")}</span> : null}
+      </div>
+      <Link className="button-link" to={health.data?.operations_url ?? "/operations#operations-health"}>Review data status</Link>
+    </section>
+    <section className="metric-grid">
+      <Metric icon={<CircleDollarSign />} label="Total market value" value={money(updates.data?.total_market_value)} />
+      <Metric icon={<Activity />} label="Active holdings" value={String(updates.data?.position_count ?? 0)} />
+      <Metric icon={<WalletCards />} label="Portfolios" value={String(portfolioCount)} />
+      <Metric icon={<Building2 />} label="Broker accounts" value={`${mappedAccounts}/${openAccounts}`} detail="mapped" positive={Boolean(mappedAccounts)} />
+      <Metric icon={<Database />} label="Data-health incidents" value={attentionCount == null ? "—" : String(attentionCount)} detail={health.isLoading ? "checking" : health.error ? "status unavailable" : health.data?.status ?? "unavailable"} positive={health.data?.status === "healthy"} />
+    </section>
+    <section className="overview-focus-grid">
+      <section className="card overview-primary">
+        <div className="card-heading">
+          <div><p className="eyebrow">Largest move</p><h2>{topMover?.symbol ?? "Waiting for prices"}</h2></div>
+          <span>{topMover ? percent(topMover.change_percent) : "no data"}</span>
+        </div>
+        <div className="overview-hero-value">
+          <strong>{topMover ? money(topMover.change) : "No movement yet"}</strong>
+          <p>{topMover ? `${topMover.name ?? topMover.asset_id} represents ${percent(topMover.weight)} of tracked holdings.` : "Once held assets have at least two prices, this panel shows the most important daily movement."}</p>
+          {topMover ? <Link className="portal-link" to={`/asset/${topMover.asset_id}`}>Open asset detail</Link> : <Link className="portal-link" to="/operations">Refresh market data</Link>}
+        </div>
+      </section>
+      <LayoutWidget pageId="overview" widgetId="overview.quickActions"><section className="card overview-primary">
+        <div className="card-heading"><div><p className="eyebrow">Next action</p><h2>{health.data?.status !== "healthy" ? "Review data health" : mappedAccounts ? "Review portfolio exposure" : "Connect a broker account"}</h2></div><span>{health.data?.status !== "healthy" ? `${attentionCount ?? "—"} incidents` : `${mappedAccounts} mapped`}</span></div>
+        <div className="overview-hero-value">
+          <strong>{health.data?.status !== "healthy" ? "Data attention" : mappedAccounts ? "Portfolio review" : "Broker setup"}</strong>
+          <p>{health.data?.status !== "healthy" ? "Operations explains the affected products, safe next step, backlog, workers, and provider failures without running any work." : mappedAccounts ? "Portfolios contains holdings, exposure, analytics, and account mapping views." : "Broker setup stays in the broker workspace so account connection steps are not mixed into overview."}</p>
+          <Link className="portal-link" to={health.data?.status !== "healthy" ? health.data?.operations_url ?? "/operations#operations-health" : mappedAccounts ? "/portfolios" : "/brokers"}>{health.data?.status !== "healthy" ? "Open read-only status" : mappedAccounts ? "Open portfolio workspace" : "Start broker setup"}</Link>
+        </div>
+      </section></LayoutWidget>
+    </section>
+    <OptionalFeaturesEmpty pageId="overview" />
+    <section className="update-grid">
+      <section className="card">
+        <div className="card-heading">
+          <div><p className="eyebrow">Price movers</p><h2>Holdings moving most</h2></div>
+          <div className="card-tools">
+            <span>{updates.data?.mover_count ?? 0} tracked</span>
+            {movers.length > 8 ? <button onClick={() => setShowAllMovers((value) => !value)}>{showAllMovers ? "Show 8" : "See all"}</button> : null}
+          </div>
+        </div>
+        {updates.isLoading ? <Loading compact /> : movers.length ? <DataList className="mover-list">{visibleMovers.map((item) => <Link to={`/asset/${item.asset_id}`} className="data-list-row mover-row" key={item.asset_id}><div className="mover-asset"><strong>{item.symbol}</strong><span>{item.name ?? "Held asset"}</span></div><b className={(item.change_percent ?? 0) >= 0 ? "positive" : "negative"}>{percent(item.change_percent)}</b><span>{money(item.market_value)}</span></Link>)}</DataList> : <EmptyRow text="No price movers yet. Add price history for held assets to light this up." />}
+      </section>
+      <LayoutWidget pageId="overview" widgetId="overview.marketNews"><section className="card">
+        <div className="card-heading"><div><p className="eyebrow">Market notes</p><h2>News affecting holdings</h2></div><span>{updates.data?.news_count ?? 0} items</span></div>
+        {updates.isLoading ? <Loading compact /> : updates.data?.news.length ? <DataList className="news-list">{updates.data.news.map((item, index) => <a href={item.url ?? undefined} target="_blank" rel="noreferrer" className="data-list-row news-row" key={`${item.title}-${index}`}><div><strong>{item.title}</strong><span>{[item.symbol, item.provider, item.published_at ? new Date(item.published_at).toLocaleDateString() : null].filter(Boolean).join(" - ")}</span></div></a>)}</DataList> : <EmptyRow text="No local news found yet. Run sentiment/news ingestion to populate this panel." />}
+      </section></LayoutWidget>
+    </section>
+  </div>;
+}

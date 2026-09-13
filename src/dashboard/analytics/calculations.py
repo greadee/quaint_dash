@@ -19,7 +19,7 @@ def risk_return_metrics(
     prices: list[PricePoint],
     risk_free_rate: float = 0.0,
 ) -> RiskReturnMetrics:
-    clean = [p for p in prices if p.close > 0]
+    clean = sorted((p for p in prices if p.close > 0), key=lambda p: p.date)
     returns = simple_returns([p.close for p in clean])
     start_date = clean[0].date if clean else None
     end_date = clean[-1].date if clean else None
@@ -333,6 +333,7 @@ def portfolio_risk_decomposition(
         average_pairwise_correlation=average_corr,
         correlation_matrix=correlation_mat,
         volatility_contributions=contributions,
+        asset_class_exposure=dimension_exposure(weights, exposure_metadata, "asset_class"),
         sector_exposure=dimension_exposure(weights, exposure_metadata, "sector"),
         country_exposure=dimension_exposure(weights, exposure_metadata, "country"),
         currency_exposure=dimension_exposure(weights, exposure_metadata, "currency"),
@@ -502,6 +503,99 @@ def dimension_exposure(
         value = exposure_metadata.get(asset_id, {}).get(dimension) or "Unknown"
         exposure[value] = exposure.get(value, 0.0) + weight
     return dict(sorted(exposure.items()))
+
+
+def allocation_class(
+    *,
+    asset_id: str | None = None,
+    symbol: str | None = None,
+    name: str | None = None,
+    asset_type: str | None = None,
+    asset_subtype: str | None = None,
+    sector: str | None = None,
+    industry: str | None = None,
+) -> str:
+    """Normalize held instruments into portfolio allocation classes."""
+    text = " ".join(
+        str(value or "")
+        for value in (asset_id, symbol, name, asset_type, asset_subtype, sector, industry)
+    ).lower()
+    symbol_key = str(symbol or asset_id or "").upper().strip()
+    symbol_base = symbol_key.split(".", maxsplit=1)[0]
+    asset_type_key = str(asset_type or "").lower().strip()
+    asset_subtype_key = str(asset_subtype or "").lower().strip()
+
+    if asset_type_key == "cash" or asset_subtype_key == "cash":
+        return "Cash"
+    if symbol_key in {"CASH.TO", "PSA.TO", "CSAV.TO", "HISA.TO"}:
+        return "Money market"
+    if any(term in text for term in ("money market", "high interest savings", "cash etf")):
+        return "Money market"
+    if asset_subtype_key in {"money_market", "money market"}:
+        return "Money market"
+    if any(term in text for term in ("bond", "fixed income", "treasury", "government bill", "t-bill", "tbill")):
+        return "Fixed income"
+    if asset_type_key in {"bond", "fixed_income", "fixed income"} or asset_subtype_key in {"bond", "fixed_income", "fixed income"}:
+        return "Fixed income"
+    known_cdr_bases = {
+        "AAPL",
+        "AMD",
+        "AMZN",
+        "ANET",
+        "ASML",
+        "AVGO",
+        "BKNG",
+        "CEG",
+        "CEGS",
+        "GEV",
+        "GOOG",
+        "ISRG",
+        "LLY",
+        "META",
+        "MSFT",
+        "MU",
+        "NOW",
+        "NOWS",
+        "NVDA",
+        "NVO",
+        "NVON",
+        "SPGI",
+        "TSLA",
+        "UBER",
+        "V",
+        "VISA",
+    }
+    if (
+        asset_subtype_key == "cdr"
+        or " cdr" in f" {text} "
+        or "depositary receipt" in text
+        or "depository receipt" in text
+        or (symbol_key.endswith((".TO", ".NE")) and symbol_base in known_cdr_bases)
+    ):
+        return "CDR"
+    if any(
+        term in text
+        for term in (
+            " etf",
+            " exchange traded fund",
+            " exchange-traded fund",
+            " index fund",
+            " mutual fund",
+            "split corp class a etf",
+        )
+    ):
+        return "ETF"
+    if asset_type_key in {"etf", "fund", "mutual_fund", "mutual fund"}:
+        return "ETF"
+    if asset_subtype_key in {
+        "delisted",
+        "inactive_listing",
+        "inactive listing",
+    }:
+        return "Other"
+    if asset_type_key in {"stock", "equity", "adr"}:
+        return "Stock"
+    return asset_type_key.replace("_", " ").title() if asset_type_key else "Other"
 
 
 def valuation_depth_metrics(
@@ -847,9 +941,16 @@ def portfolio_forecast_metrics(
     market_value: float,
     risk: RiskReturnMetrics | None,
     performance: PortfolioPerformanceMetrics,
+    valuation_expected_cagr: float | None = None,
     forecast_years: int = 5,
 ) -> ForecastMetrics:
-    expected = risk.cagr if risk and risk.cagr is not None else performance.money_weighted_return
+    expected = (
+        valuation_expected_cagr
+        if valuation_expected_cagr is not None
+        else risk.cagr
+        if risk and risk.cagr is not None
+        else performance.money_weighted_return
+    )
     simulation = simulated_forecast_band(
         start_value=market_value if market_value > 0 else None,
         expected_cagr=expected,
@@ -867,7 +968,7 @@ def portfolio_forecast_metrics(
 
     return ForecastMetrics(
         horizon_years=forecast_years,
-        expected_cagr_from_valuation=None,
+        expected_cagr_from_valuation=valuation_expected_cagr,
         dividend_growth_projection=None,
         fundamental_growth_assumption=None,
         blended_expected_cagr=expected,

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import ast
+from dataclasses import dataclass, replace
 from datetime import datetime, time
+import json
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -12,6 +15,15 @@ class BrokerPortfolioImportResult:
     imported_transactions: int
     skipped_transactions: int
     batch_id: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class BrokerPortfolioProjectionResult:
+    provider: str
+    provider_account_id: str
+    portfolio_id: int
+    upserted_positions: int
+    skipped_positions: int
 
 
 class BrokerPortfolioIntegrationService:
@@ -25,6 +37,8 @@ class BrokerPortfolioIntegrationService:
     ) -> BrokerPortfolioImportResult:
         rows = self._pending_rows(provider, portfolio_id)
         if not rows:
+            if self.recalculate_projected_book_costs(provider, portfolio_id):
+                self._refresh_positions()
             return BrokerPortfolioImportResult(
                 provider=provider,
                 imported_transactions=0,
@@ -53,6 +67,7 @@ class BrokerPortfolioIntegrationService:
             """,
             [batch_id, batch_id],
         )
+        self.recalculate_projected_book_costs(provider, portfolio_id)
         self._refresh_positions()
         return BrokerPortfolioImportResult(
             provider=provider,
@@ -60,6 +75,143 @@ class BrokerPortfolioIntegrationService:
             skipped_transactions=skipped,
             batch_id=batch_id if imported else None,
         )
+
+    def project_account_positions(
+        self,
+        provider_account_id: str,
+        portfolio_id: int,
+        provider: str = "snaptrade",
+    ) -> BrokerPortfolioProjectionResult:
+        rows = self._latest_position_rows(provider, provider_account_id)
+        self.conn.execute(
+            """
+            DELETE FROM broker_portfolio_position_map
+            WHERE provider = ?
+              AND provider_account_id = ?
+            """,
+            [provider, provider_account_id],
+        )
+
+        upserted = 0
+        skipped = 0
+        for row in rows:
+            normalized = _normalize_broker_position(row, portfolio_id)
+            if normalized is None:
+                skipped += 1
+                continue
+            normalized = replace(
+                normalized,
+                book_cost=self._projected_book_cost(normalized),
+            )
+            self._ensure_position_asset(normalized)
+            self._insert_position_mapping(normalized)
+            upserted += 1
+
+        self._refresh_positions()
+        return BrokerPortfolioProjectionResult(
+            provider=provider,
+            provider_account_id=provider_account_id,
+            portfolio_id=portfolio_id,
+            upserted_positions=upserted,
+            skipped_positions=skipped,
+        )
+
+    def recalculate_projected_book_costs(
+        self,
+        provider: str = "snaptrade",
+        portfolio_id: int | None = None,
+    ) -> int:
+        where = ["provider = ?"]
+        params: list[object] = [provider]
+        if portfolio_id is not None:
+            where.append("portfolio_id = ?")
+            params.append(portfolio_id)
+        rows = self.conn.execute(
+            f"""
+            SELECT
+                provider,
+                provider_account_id,
+                provider_position_id,
+                portfolio_id,
+                asset_id,
+                quantity,
+                book_cost,
+                currency
+            FROM broker_portfolio_position_map
+            WHERE {" AND ".join(where)}
+            """,
+            params,
+        ).fetchall()
+        updated = 0
+        for row in rows:
+            position = _NormalizedBrokerPosition(
+                provider=row[0],
+                provider_account_id=row[1],
+                provider_position_id=row[2],
+                portfolio_id=int(row[3]),
+                asset_id=row[4],
+                description=None,
+                quantity=float(row[5]),
+                book_cost=float(row[6]),
+                currency=row[7],
+            )
+            book_cost = self._projected_book_cost(position)
+            if abs(book_cost - position.book_cost) < 0.0001:
+                continue
+            self.conn.execute(
+                """
+                UPDATE broker_portfolio_position_map
+                SET book_cost = ?,
+                    updated_at = now()
+                WHERE provider = ?
+                  AND provider_account_id = ?
+                  AND provider_position_id = ?
+                """,
+                [
+                    book_cost,
+                    position.provider,
+                    position.provider_account_id,
+                    position.provider_position_id,
+                ],
+            )
+            updated += 1
+        return updated
+
+    def _latest_position_rows(self, provider: str, provider_account_id: str) -> list[tuple]:
+        return self.conn.execute(
+            """
+            WITH latest_positions AS (
+                SELECT
+                    provider,
+                    provider_account_id,
+                    provider_position_id,
+                    MAX(as_of_date) AS as_of_date
+                FROM broker_position_snapshot
+                WHERE provider = ?
+                  AND provider_account_id = ?
+                GROUP BY provider, provider_account_id, provider_position_id
+            )
+            SELECT
+                p.provider,
+                p.provider_account_id,
+                p.provider_position_id,
+                p.asset_id,
+                p.symbol,
+                p.description,
+                p.quantity,
+                p.market_value,
+                p.currency,
+                p.raw_json
+            FROM broker_position_snapshot p
+            JOIN latest_positions latest
+              ON latest.provider = p.provider
+             AND latest.provider_account_id = p.provider_account_id
+             AND latest.provider_position_id = p.provider_position_id
+             AND latest.as_of_date = p.as_of_date
+            ORDER BY p.provider_position_id
+            """,
+            [provider, provider_account_id],
+        ).fetchall()
 
     def _pending_rows(self, provider: str, portfolio_id: int | None) -> list[tuple]:
         where = [
@@ -109,17 +261,20 @@ class BrokerPortfolioIntegrationService:
         return int(row[0])
 
     def _ensure_asset(self, txn: "_NormalizedBrokerTxn") -> None:
+        from dashboard.assets.funds import fund_type
+
         if txn.asset_id is None:
             return
         self.conn.execute(
             """
             INSERT INTO asset(asset_id, symbol, asset_type, ccy, track, created_at, updated_at)
-            VALUES (?, ?, 'stock', ?, TRUE, now(), now())
+            VALUES (?, ?, ?, ?, TRUE, now(), now())
             ON CONFLICT(asset_id) DO UPDATE SET
                 symbol = COALESCE(asset.symbol, excluded.symbol),
                 updated_at = now()
             """,
-            [txn.asset_id, txn.asset_id, txn.ccy or "CAD"],
+            [txn.asset_id, txn.asset_id, fund_type(asset_id=txn.asset_id) or 'stock',
+             txn.ccy or "CAD"],
         )
         self.conn.execute(
             """
@@ -128,6 +283,35 @@ class BrokerPortfolioIntegrationService:
             ON CONFLICT(asset_id) DO NOTHING
             """,
             [txn.asset_id],
+        )
+
+    def _ensure_position_asset(self, position: "_NormalizedBrokerPosition") -> None:
+        from dashboard.assets.funds import fund_type
+
+        self.conn.execute(
+            """
+            INSERT INTO asset(asset_id, symbol, asset_type, ccy, name, track, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, TRUE, now(), now())
+            ON CONFLICT(asset_id) DO UPDATE SET
+                symbol = COALESCE(asset.symbol, excluded.symbol),
+                name = COALESCE(asset.name, excluded.name),
+                updated_at = now()
+            """,
+            [
+                position.asset_id,
+                position.asset_id,
+                fund_type(asset_id=position.asset_id, name=position.description) or 'stock',
+                position.currency or "CAD",
+                position.description,
+            ],
+        )
+        self.conn.execute(
+            """
+            INSERT INTO asset_metadata_sync(asset_id, source, sync_status, next_retry_at)
+            VALUES (?, 'fmp', 'pending', now())
+            ON CONFLICT(asset_id) DO NOTHING
+            """,
+            [position.asset_id],
         )
 
     def _insert_txn(self, txn: "_NormalizedBrokerTxn", batch_id: int) -> int:
@@ -185,10 +369,218 @@ class BrokerPortfolioIntegrationService:
             ],
         )
 
-    def _refresh_positions(self) -> None:
-        from dashboard.db import queries as qry
+    def _insert_position_mapping(self, position: "_NormalizedBrokerPosition") -> None:
+        self.conn.execute(
+            """
+            INSERT INTO broker_portfolio_position_map (
+                provider,
+                provider_account_id,
+                provider_position_id,
+                portfolio_id,
+                asset_id,
+                quantity,
+                book_cost,
+                currency,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, now())
+            ON CONFLICT(provider, provider_account_id, provider_position_id)
+            DO UPDATE SET
+                portfolio_id = excluded.portfolio_id,
+                asset_id = excluded.asset_id,
+                quantity = excluded.quantity,
+                book_cost = excluded.book_cost,
+                currency = excluded.currency,
+                updated_at = excluded.updated_at
+            """,
+            [
+                position.provider,
+                position.provider_account_id,
+                position.provider_position_id,
+                position.portfolio_id,
+                position.asset_id,
+                position.quantity,
+                position.book_cost,
+                position.currency,
+            ],
+        )
 
-        self.conn.execute(qry.UPDATE_POSITIONS)
+    def _projected_book_cost(self, position: "_NormalizedBrokerPosition") -> float:
+        return (
+            self._book_cost_from_position_snapshot(position)
+            or self._book_cost_from_broker_transactions(position)
+            or position.book_cost
+        )
+
+    def _book_cost_from_position_snapshot(self, position: "_NormalizedBrokerPosition") -> float | None:
+        row = self.conn.execute(
+            """
+            SELECT raw_json
+            FROM broker_position_snapshot
+            WHERE provider = ?
+              AND provider_account_id = ?
+              AND provider_position_id = ?
+            ORDER BY as_of_date DESC
+            LIMIT 1
+            """,
+            [
+                position.provider,
+                position.provider_account_id,
+                position.provider_position_id,
+            ],
+        ).fetchone()
+        if row is None:
+            return None
+        payload = _json_payload(row[0])
+        direct_cost = _first_payload_float(
+            payload,
+            "book_cost",
+            "bookCost",
+            "book_value",
+            "bookValue",
+            "cost_basis",
+            "costBasis",
+            "total_cost",
+            "totalCost",
+        )
+        if direct_cost is not None and direct_cost > 0:
+            return direct_cost
+        average_price = _first_payload_float(
+            payload,
+            "average_purchase_price",
+            "averagePurchasePrice",
+            "averagePrice",
+            "avgPrice",
+            "average_cost",
+            "averageCost",
+            "book_price",
+            "bookPrice",
+        )
+        if average_price is None or average_price <= 0:
+            return None
+        return average_price * position.quantity
+
+    def _book_cost_from_broker_transactions(self, position: "_NormalizedBrokerPosition") -> float | None:
+        rows = self.conn.execute(
+            """
+            SELECT
+                trade_date,
+                txn_type,
+                asset_id,
+                symbol,
+                quantity,
+                price,
+                amount,
+                raw_json
+            FROM broker_transaction
+            WHERE provider = ?
+              AND provider_account_id = ?
+            ORDER BY trade_date, provider_transaction_id
+            """,
+            [position.provider, position.provider_account_id],
+        ).fetchall()
+        quantity = 0.0
+        cost = 0.0
+        matched_trade_count = 0
+        for row in rows:
+            txn_type = _normalize_type(row[1])
+            if txn_type not in {"buy", "sell"}:
+                continue
+            asset_id = _normalize_asset_id(row[2] or row[3])
+            if asset_id != position.asset_id:
+                continue
+            txn_qty = _normalize_quantity(txn_type, row[4])
+            payload = _json_payload(row[7])
+            if txn_qty is None:
+                txn_qty = _normalize_quantity(
+                    txn_type,
+                    _payload_value(payload, "units") or _payload_value(payload, "quantity"),
+                )
+            price = _float_or_none(row[5])
+            amount = _float_or_none(row[6])
+            if price is None:
+                price = _float_or_none(
+                    _payload_value(payload, "price")
+                    or _payload_value(payload, "trade_price")
+                    or _payload_value(payload, "execution_price")
+                )
+            if amount is None:
+                amount = _float_or_none(
+                    _payload_value(payload, "amount")
+                    or _payload_value(payload, "net_amount")
+                    or _payload_value(payload, "value")
+                )
+            if price is None and amount is not None and txn_qty not in (None, 0):
+                price = abs(amount) / abs(txn_qty)
+            if txn_qty is None or price is None:
+                continue
+            matched_trade_count += 1
+            if txn_type == "buy":
+                buy_qty = abs(txn_qty)
+                quantity += buy_qty
+                cost += buy_qty * price
+                continue
+            sell_qty = min(abs(txn_qty), quantity)
+            if sell_qty <= 0 or quantity <= 0:
+                continue
+            average_cost = cost / quantity if quantity else 0.0
+            quantity -= sell_qty
+            cost -= average_cost * sell_qty
+
+        if not matched_trade_count or quantity <= 0 or cost <= 0:
+            return None
+        average_cost = cost / quantity
+        return average_cost * position.quantity
+
+    def _refresh_positions(self) -> None:
+        self.conn.execute("DELETE FROM position")
+        self.conn.execute(
+            """
+            INSERT INTO position (portfolio_id, asset_id, qty, book_cost, created_at, updated_at)
+            SELECT
+                portfolio_id,
+                asset_id,
+                SUM(quantity) AS qty,
+                SUM(book_cost) AS book_cost,
+                now() AS created_at,
+                now() AS updated_at
+            FROM (
+                SELECT
+                    portfolio_id,
+                    asset_id,
+                    SUM(qty) AS quantity,
+                    SUM(price * qty) AS book_cost
+                FROM txn
+                WHERE txn_type IN ('buy', 'sell')
+                  AND asset_id IS NOT NULL
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM broker_portfolio_position_map mapped_positions
+                    WHERE mapped_positions.portfolio_id = txn.portfolio_id
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM broker_portfolio_txn_map tm
+                    JOIN broker_portfolio_position_map pm
+                      ON pm.provider = tm.provider
+                     AND pm.provider_account_id = tm.provider_account_id
+                     AND pm.portfolio_id = txn.portfolio_id
+                     AND pm.asset_id = txn.asset_id
+                    WHERE tm.txn_id = txn.txn_id
+                  )
+                GROUP BY portfolio_id, asset_id
+                UNION ALL
+                SELECT
+                    portfolio_id,
+                    asset_id,
+                    quantity,
+                    book_cost
+                FROM broker_portfolio_position_map
+            ) holdings
+            GROUP BY portfolio_id, asset_id
+            HAVING SUM(quantity) <> 0
+            """
+        )
         try:
             from dashboard.ingestion.ticker_universe import TickerUniverseRepository
 
@@ -210,6 +602,59 @@ class _NormalizedBrokerTxn:
     price: float | None
     ccy: str | None
     cash_amt: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class _NormalizedBrokerPosition:
+    provider: str
+    provider_account_id: str
+    provider_position_id: str
+    portfolio_id: int
+    asset_id: str
+    description: str | None
+    quantity: float
+    book_cost: float
+    currency: str | None
+
+
+def _normalize_broker_position(row: tuple, portfolio_id: int) -> _NormalizedBrokerPosition | None:
+    (
+        provider,
+        provider_account_id,
+        provider_position_id,
+        raw_asset_id,
+        raw_symbol,
+        description,
+        quantity,
+        market_value,
+        currency,
+        raw_json,
+    ) = row
+    symbol_payload = _symbol_payload(raw_symbol)
+    asset_id = _normalize_asset_id(raw_asset_id or raw_symbol)
+    qty = _float_or_none(quantity)
+    value = _float_or_none(market_value)
+    payload = _json_payload(raw_json)
+    weighting = _position_weighting(payload)
+    if asset_id is None or qty is None or abs(qty) < 0.0001:
+        return None
+    if value is not None and abs(value) < 0.01:
+        return None
+    if weighting is not None and abs(weighting) < 0.0001:
+        return None
+    currency = _normalize_currency(currency) or _normalize_currency(_payload_value(symbol_payload, "currency"))
+    return _NormalizedBrokerPosition(
+        provider=str(provider),
+        provider_account_id=str(provider_account_id),
+        provider_position_id=str(provider_position_id),
+        portfolio_id=portfolio_id,
+        asset_id=asset_id,
+        description=str(description or _payload_value(symbol_payload, "description") or "")
+        or None,
+        quantity=qty,
+        book_cost=value or 0.0,
+        currency=currency,
+    )
 
 
 def _normalize_broker_transaction(row: tuple) -> _NormalizedBrokerTxn | None:
@@ -283,8 +728,108 @@ def _normalize_type(value) -> str:
 def _normalize_asset_id(value) -> str | None:
     if value is None:
         return None
+    payload = _symbol_payload(value)
+    if payload:
+        symbol = _payload_value(payload, "symbol") or _payload_value(payload, "ticker")
+        symbol = symbol or _payload_value(payload, "raw_symbol")
+        if symbol:
+            return str(symbol).strip().upper()
     text = str(value).strip().upper()
+    if text.startswith("{"):
+        return None
     return text or None
+
+
+def _normalize_currency(value) -> str | None:
+    if isinstance(value, dict):
+        value = _payload_value(value, "code") or _payload_value(value, "currency")
+    if value is None:
+        return None
+    text = str(value).strip().upper()
+    return text if len(text) == 3 and text.isalpha() else None
+
+
+def _symbol_payload(value) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if value is None:
+        return {}
+    text = str(value).strip()
+    if not text.startswith("{"):
+        return {}
+    normalized = (
+        text.replace(": TRUE", ": True")
+        .replace(": FALSE", ": False")
+        .replace(": NONE", ": None")
+    )
+    try:
+        payload = ast.literal_eval(normalized)
+    except (SyntaxError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _json_payload(value) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if value is None:
+        return {}
+    try:
+        payload = json.loads(str(value))
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _payload_value(payload: dict[str, Any], key: str) -> Any:
+    if key in payload:
+        value = payload[key]
+    elif key.upper() in payload:
+        value = payload[key.upper()]
+    elif key.lower() in payload:
+        value = payload[key.lower()]
+    else:
+        return None
+    if isinstance(value, dict):
+        return (
+            _payload_value(value, "amount")
+            or _payload_value(value, "value")
+            or _payload_value(value, "code")
+            or _payload_value(value, "symbol")
+        )
+    return value
+
+
+def _first_payload_float(payload: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        value = _payload_value(payload, key)
+        parsed = _float_or_none(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _position_weighting(payload: dict[str, Any]) -> float | None:
+    for key in (
+        "weight",
+        "weighting",
+        "weight_percent",
+        "weightPercentage",
+        "allocation",
+        "allocation_percent",
+        "portfolio_weight",
+        "portfolioWeight",
+        "percentage",
+    ):
+        value = _payload_value(payload, key)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            value = value.strip().removesuffix("%")
+        parsed = _float_or_none(value)
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def _normalize_quantity(txn_type: str, value) -> float | None:

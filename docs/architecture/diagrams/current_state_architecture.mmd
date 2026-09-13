@@ -1,0 +1,38 @@
+flowchart TB
+  subgraph Legend
+    L1[Current runtime]
+    L2[Mixed responsibility]
+  end
+  subgraph Web["web/src"]
+    Routes["routes/*.tsx\npages + widgets + view formatting"]
+    ApiClient["api.ts\nHTTP client + TS DTOs"]
+    FeatureStore["pageFeatureStore.ts\nwidget visibility"]
+  end
+  subgraph Backend["src/dashboard"]
+    Api["api\nFastAPI routes + orchestration"]
+    Analytics["analytics\nportfolio/asset calculations"]
+    Services["services/business_strength\nscore rules"]
+    News["news\nnews ingestion/service"]
+    Brokers["brokers\nbroker sync/import"]
+    Ingestion["ingestion + ingestion_sentiment\nproviders/jobs/readiness"]
+    Db["db.py + models.py\nDuckDB access/facade"]
+  end
+  Providers["External providers\nmarket/news/broker/fundamentals"]
+  Jobs["Tools/background workers"]
+  Routes --> ApiClient --> Api
+  FeatureStore --> Routes
+  Api --> Analytics
+  Api --> Services
+  Api --> News
+  Api --> Brokers
+  Api --> Ingestion
+  Analytics --> Db
+  Services --> Db
+  News --> Db
+  Brokers --> Db
+  Ingestion --> Db
+  Ingestion --> Providers
+  News --> Providers
+  Brokers --> Providers
+  Jobs --> Ingestion
+

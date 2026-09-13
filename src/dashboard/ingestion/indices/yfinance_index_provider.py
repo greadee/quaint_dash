@@ -24,8 +24,8 @@ class YFinanceIndexProvider:
     yfinance provider.
 
     Use this primarily for price bars because it avoids burning FMP API calls.
-    Composition is intentionally unsupported here because yfinance is not a
-    reliable source of benchmark index constituents.
+    ETF top holdings are used only as proxy composition data when benchmark
+    provider constituent endpoints are unavailable.
     """
 
     provider_name = "yfinance"
@@ -144,11 +144,92 @@ class YFinanceIndexProvider:
         provider_symbol: str,
         is_proxy: bool,
     ) -> list[IndexConstituent]:
-        return []
+        if not is_proxy:
+            return []
+
+        holdings = self._top_holdings(provider_symbol)
+        if holdings is None or holdings.empty:
+            return []
+
+        holdings = self._flatten_yfinance_columns(holdings.copy())
+        constituents: list[IndexConstituent] = []
+
+        for raw_index, row in holdings.iterrows():
+            symbol = self._first_present(
+                row,
+                [
+                    "Symbol",
+                    "symbol",
+                    "Ticker",
+                    "ticker",
+                    "Holding",
+                    "holding",
+                ],
+            )
+            if symbol is None and raw_index is not None:
+                symbol = str(raw_index)
+
+            if symbol is None or str(symbol).strip() == "":
+                continue
+
+            weight = self._first_present(
+                row,
+                [
+                    "Holding Percent",
+                    "holdingPercent",
+                    "Weight",
+                    "weight",
+                    "% Assets",
+                    "percent",
+                ],
+            )
+
+            constituents.append(
+                IndexConstituent(
+                    index_id=index_id,
+                    constituent_symbol=str(symbol).strip(),
+                    constituent_name=self._str_or_none(
+                        self._first_present(row, ["Name", "name", "Company", "company"])
+                    ),
+                    exchange_code=None,
+                    country_code=None,
+                    currency=None,
+                    sector=self._str_or_none(
+                        self._first_present(row, ["Sector", "sector"])
+                    ),
+                    industry=self._str_or_none(
+                        self._first_present(row, ["Industry", "industry"])
+                    ),
+                    weight_pct=self._weight_to_percent(weight),
+                    market_cap=self._float_or_none(
+                        self._first_present(row, ["Market Value", "marketValue"])
+                    ),
+                    source=self.provider_name,
+                    is_proxy=True,
+                )
+            )
+
+        return constituents
 
     def _download(self, *args, **kwargs) -> pd.DataFrame:
         self.rate_limiter.acquire(self.rate_limit_policy)
         return yf.download(*args, **kwargs)
+
+    def _top_holdings(self, provider_symbol: str) -> pd.DataFrame | None:
+        self.rate_limiter.acquire(self.rate_limit_policy)
+        ticker = yf.Ticker(provider_symbol)
+        funds_data = getattr(ticker, "funds_data", None)
+        if funds_data is None:
+            return None
+
+        top_holdings = getattr(funds_data, "top_holdings", None)
+        if callable(top_holdings):
+            top_holdings = top_holdings()
+
+        if isinstance(top_holdings, pd.DataFrame):
+            return top_holdings
+
+        return None
 
     def _flatten_yfinance_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -200,3 +281,27 @@ class YFinanceIndexProvider:
             return float(value)
         except (TypeError, ValueError):
             return None
+
+    def _weight_to_percent(self, value: Any) -> float | None:
+        weight = self._float_or_none(value)
+        if weight is None:
+            return None
+        if 0 <= weight <= 1:
+            return weight * 100
+        return weight
+
+    def _first_present(self, row: pd.Series, keys: list[str]) -> Any:
+        for key in keys:
+            if key not in row:
+                continue
+            value = row.get(key)
+            if value is None or pd.isna(value):
+                continue
+            return value
+        return None
+
+    def _str_or_none(self, value: Any) -> str | None:
+        if value is None or pd.isna(value):
+            return None
+        text = str(value).strip()
+        return text or None

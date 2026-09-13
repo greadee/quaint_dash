@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from dashboard.assets import cdr_underlying_symbol
+from dashboard.assets.funds import fund_type
+
 
 @dataclass(frozen=True)
 class TickerSubscription:
@@ -74,14 +77,40 @@ class TickerUniverseRepository:
             [*ordered, *asset_types],
         ).fetchall()
 
-        return [row[0] for row in rows]
+        selected = [row[0] for row in rows]
+        if set(asset_types) <= {"stock", "adr"}:
+            return [asset_id for asset_id, symbol, _, subtype, name, description
+                    in self._asset_symbol_rows(selected)
+                    if fund_type(asset_id=asset_id, symbol=symbol,
+                                 asset_subtype=subtype, name=name) is None]
+        return selected
+
+    def earnings_asset_ids(self, include_watchlist: bool = True) -> list[str]:
+        """Return source symbols that can carry company-level earnings events."""
+        asset_ids = self.ingestible_asset_ids(
+            include_watchlist=include_watchlist,
+            asset_types=("stock", "adr"),
+        )
+        targets: set[str] = set()
+        for asset_id, symbol, _exchange, asset_subtype, name, description in (
+            self._asset_symbol_rows(asset_ids)
+        ):
+            underlying = cdr_underlying_symbol(
+                asset_id=asset_id,
+                symbol=symbol,
+                asset_subtype=asset_subtype,
+                name=name,
+                description=description,
+            )
+            targets.add(underlying or asset_id)
+        return sorted(targets)
 
     def sync_portfolio_tickers_from_positions(self) -> int:
-        if not self._table_exists("portfolio_ticker") or not self._table_exists("position"):
+        if not self._table_exists("portfolio_ticker"):
             return 0
 
-        quantity_column = self._quantity_column()
-        if quantity_column is None:
+        held_sql = self._held_portfolio_assets_sql()
+        if held_sql is None:
             return 0
 
         self.conn.execute(
@@ -101,14 +130,30 @@ class TickerUniverseRepository:
                 'position',
                 now(),
                 now()
-            FROM position
-            WHERE asset_id IS NOT NULL
-              AND COALESCE({quantity_column}, 0) <> 0
+            FROM ({held_sql}) held
             ON CONFLICT (portfolio_id, asset_id)
             DO UPDATE SET
                 is_active = TRUE,
                 updated_at = now()
             """
+        )
+        deactivated_rows = self.conn.execute(
+            f"""
+            WITH held AS ({held_sql})
+            UPDATE portfolio_ticker pt
+            SET is_active = FALSE,
+                updated_at = now()
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM held h
+                WHERE h.portfolio_id = pt.portfolio_id
+                  AND h.asset_id = pt.asset_id
+            )
+            RETURNING pt.asset_id
+            """
+        ).fetchall()
+        self._retire_future_work_for_unsubscribed_assets(
+            {str(row[0]) for row in deactivated_rows}
         )
 
         row = self.conn.execute(
@@ -119,6 +164,113 @@ class TickerUniverseRepository:
             """
         ).fetchone()
         return int(row[0])
+
+    def _held_portfolio_assets_sql(self) -> str | None:
+        sources: list[str] = []
+
+        if self._table_exists("position"):
+            quantity_column = self._quantity_column()
+            if quantity_column is not None:
+                sources.append(
+                    f"""
+                    SELECT portfolio_id, asset_id
+                    FROM position
+                    WHERE asset_id IS NOT NULL
+                      AND COALESCE({quantity_column}, 0) <> 0
+                    """
+                )
+
+        if self._table_exists("broker_portfolio_position_map"):
+            sources.append(
+                """
+                SELECT portfolio_id, asset_id
+                FROM broker_portfolio_position_map
+                WHERE asset_id IS NOT NULL
+                  AND COALESCE(quantity, 0) <> 0
+                """
+            )
+
+        # Raw transactions are a compatibility fallback only. Once a database has
+        # current-position storage, historical trades must not reactivate a ticker.
+        if not sources and self._table_exists("txn"):
+            sources.append(
+                """
+                SELECT portfolio_id, asset_id
+                FROM txn
+                WHERE asset_id IS NOT NULL
+                  AND txn_type IN ('buy', 'sell')
+                GROUP BY portfolio_id, asset_id
+                HAVING SUM(COALESCE(qty, 0)) <> 0
+                """
+            )
+
+        if not sources:
+            return None
+        return "\nUNION\n".join(sources)
+
+    def _retire_future_work_for_unsubscribed_assets(
+        self,
+        deactivated_asset_ids: set[str],
+    ) -> None:
+        if not deactivated_asset_ids:
+            return
+
+        candidate_ids = set(deactivated_asset_ids)
+        for asset_id, symbol, _exchange, subtype, name, description in self._asset_symbol_rows(
+            sorted(deactivated_asset_ids)
+        ):
+            underlying = cdr_underlying_symbol(
+                asset_id=asset_id,
+                symbol=symbol,
+                asset_subtype=subtype,
+                name=name,
+                description=description,
+            )
+            if underlying:
+                candidate_ids.add(underlying)
+
+        active_ids = {
+            item.asset_id
+            for item in self.stream_subscriptions(
+                include_portfolios=True,
+                include_watchlist=True,
+            )
+        }
+        retired_ids = sorted(candidate_ids - active_ids)
+        if not retired_ids:
+            return
+        placeholders = ", ".join("?" for _ in retired_ids)
+
+        if self._table_exists("ingestion_job"):
+            self.conn.execute(
+                f"""
+                UPDATE ingestion_job
+                SET status = 'superseded',
+                    error_message = NULL,
+                    terminal_reason = 'ticker subscription is no longer active',
+                    lease_owner = NULL,
+                    leased_at = NULL,
+                    lease_expires_at = NULL,
+                    completed_at = now(),
+                    updated_at = now()
+                WHERE status = 'pending'
+                  AND asset_id IN ({placeholders})
+                """,
+                retired_ids,
+            )
+
+        if self._table_exists("fundamental_subscription"):
+            self.conn.execute(
+                f"""
+                UPDATE fundamental_subscription
+                SET is_active = FALSE,
+                    next_refresh_at = TIMESTAMP '9999-12-31 00:00:00',
+                    updated_at = now()
+                WHERE asset_id IN ({placeholders})
+                  AND subscription_source = 'ticker_universe'
+                """,
+                retired_ids,
+            )
 
     def stream_subscriptions(
         self,
@@ -134,7 +286,7 @@ class TickerUniverseRepository:
             scopes.append(("watchlist", self.watchlist_asset_ids()))
 
         for scope, asset_ids in scopes:
-            for asset_id, symbol, exchange_code in self._asset_symbol_rows(asset_ids):
+            for asset_id, symbol, exchange_code, asset_subtype, name, description in self._asset_symbol_rows(asset_ids):
                 subscriptions.setdefault(
                     symbol,
                     TickerSubscription(
@@ -144,6 +296,23 @@ class TickerUniverseRepository:
                         source_scope=scope,
                     ),
                 )
+                underlying = cdr_underlying_symbol(
+                    asset_id=asset_id,
+                    symbol=symbol,
+                    asset_subtype=asset_subtype,
+                    name=name,
+                    description=description,
+                )
+                if underlying and underlying != symbol:
+                    subscriptions.setdefault(
+                        underlying,
+                        TickerSubscription(
+                            asset_id=underlying,
+                            symbol=underlying,
+                            exchange_code=None,
+                            source_scope=f"{scope}_underlying",
+                        ),
+                    )
 
         return sorted(subscriptions.values(), key=lambda item: item.symbol)
 
@@ -210,17 +379,29 @@ class TickerUniverseRepository:
         ).fetchall()
         return [row[0] for row in rows]
 
-    def _asset_symbol_rows(self, asset_ids: list[str]) -> list[tuple[str, str, str | None]]:
+    def _asset_symbol_rows(
+        self,
+        asset_ids: list[str],
+    ) -> list[tuple[str, str, str | None, str | None, str | None, str | None]]:
         if not asset_ids:
             return []
 
         placeholders = ", ".join("?" for _ in asset_ids)
         symbol_expr = "COALESCE(symbol, asset_id)" if self._has_column("asset", "symbol") else "asset_id"
         exchange_expr = "exchange_code" if self._has_column("asset", "exchange_code") else "NULL"
+        subtype_expr = "asset_subtype" if self._has_column("asset", "asset_subtype") else "NULL"
+        name_expr = "name" if self._has_column("asset", "name") else "NULL"
+        description_expr = "description" if self._has_column("asset", "description") else "NULL"
 
         rows = self.conn.execute(
             f"""
-            SELECT asset_id, {symbol_expr} AS symbol, {exchange_expr} AS exchange_code
+            SELECT
+                asset_id,
+                {symbol_expr} AS symbol,
+                {exchange_expr} AS exchange_code,
+                {subtype_expr} AS asset_subtype,
+                {name_expr} AS name,
+                {description_expr} AS description
             FROM asset
             WHERE asset_id IN ({placeholders})
             ORDER BY symbol
@@ -228,7 +409,7 @@ class TickerUniverseRepository:
             asset_ids,
         ).fetchall()
 
-        return [(row[0], row[1], row[2]) for row in rows]
+        return [(row[0], row[1], row[2], row[3], row[4], row[5]) for row in rows]
 
     def _quantity_column(self) -> str | None:
         if self._has_column("position", "qty"):

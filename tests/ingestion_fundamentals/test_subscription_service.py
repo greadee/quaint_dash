@@ -69,6 +69,14 @@ def test_schema_uses_text_asset_ids_and_is_idempotent():
 
     assert subscription_cols["asset_id"].upper() == "VARCHAR"
     assert sync_cols["asset_id"].upper() == "VARCHAR"
+    assert conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM duckdb_constraints()
+        WHERE table_name = 'fundamental_subscription'
+          AND constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY', 'UNIQUE')
+        """
+    ).fetchone() == (0,)
 
 
 def test_subscribe_ticker_creates_active_subscription_for_asset_id_schema():

@@ -257,15 +257,27 @@ def test_cli_market_refresh_enqueue_uses_latest_quote_date(test_manager):
     """
     Refresh enqueue should start after the latest stored quote date.
 
-    Since fake backfill inserts through 2024-01-03,
-    the refresh job should start on 2024-01-04.
+    Stored quotes without a completed sync window should make the refresh job
+    start on the day after the latest quote.
     """
 
     manager, _ = test_manager
     view = DashboardView(manager)
 
-    view.handle_input("job schedule price-backfill --target BN.TO --years 10 --prices-only")
-    view.handle_input("job run market --max-jobs 1")
+    manager.conn.execute(
+        """
+        INSERT INTO asset_quote_daily (
+            asset_id,
+            date,
+            close,
+            adj_close,
+            ing_source
+        )
+        VALUES
+            ('BN.TO', DATE '2024-01-02', 104, 104, 'test'),
+            ('BN.TO', DATE '2024-01-03', 107, 107, 'test')
+        """
+    )
 
     view.handle_input("job schedule price-refresh --target BN.TO --prices-only")
 

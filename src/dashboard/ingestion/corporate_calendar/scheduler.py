@@ -13,6 +13,7 @@ from dashboard.ingestion.corporate_calendar.constants import (
     DOMAIN_CORPORATE,
     JOB_TYPE_BACKFILL,
     JOB_TYPE_CALENDAR_REFRESH,
+    JOB_TYPE_EARNINGS_BACKUP,
     JOB_TYPE_EARNINGS_UPDATE,
     JOB_TYPE_REFRESH,
     PRIORITY_CORPORATE_BACKFILL,
@@ -148,6 +149,7 @@ class CorporateCalendarScheduler:
     def schedule_due_fundamental_subscription_refreshes(
         self,
         max_assets: int = 25,
+        asset_id: str | None = None,
     ) -> list[int]:
         """
         Enqueue recurring financial statement refresh jobs for subscribed assets.
@@ -165,6 +167,8 @@ class CorporateCalendarScheduler:
         existing financial statement ingestion path.
         """
         ensure_fundamental_phase1_schema(self.conn)
+        self._ensure_active_universe_subscriptions()
+        self._deactivate_entitlement_blocked_subscriptions()
 
         now = datetime.now()
         today = date.today()
@@ -173,6 +177,9 @@ class CorporateCalendarScheduler:
             include_watchlist=True,
             asset_types=("stock", "adr"),
         )
+        if asset_id is not None:
+            normalized = asset_id.upper().strip()
+            asset_ids = [normalized] if normalized in set(asset_ids) else []
         if not asset_ids:
             return []
 
@@ -225,9 +232,96 @@ class CorporateCalendarScheduler:
 
         return job_ids
 
+    def schedule_missing_earnings_surprise_updates(
+        self,
+        max_assets: int = 25,
+        asset_id: str | None = None,
+        force: bool = False,
+    ) -> list[int]:
+        """Queue daily repair jobs when subscribed assets lack an actual/estimate pair."""
+        ensure_fundamental_phase1_schema(self.conn)
+        self._ensure_active_universe_subscriptions()
+
+        asset_ids = self.ticker_universe.earnings_asset_ids(include_watchlist=True)
+        if asset_id is not None:
+            normalized = asset_id.upper().strip()
+            asset_ids = [normalized] if normalized in set(asset_ids) else []
+        if not asset_ids:
+            return []
+
+        for earnings_asset_id in asset_ids:
+            self.conn.execute(
+                """
+                INSERT INTO asset(asset_id, asset_type, ccy, track)
+                VALUES (?, 'stock', 'USD', TRUE)
+                ON CONFLICT(asset_id) DO NOTHING
+                """,
+                [earnings_asset_id],
+            )
+
+        placeholders = ", ".join("?" for _ in asset_ids)
+        rows = self.conn.execute(
+            f"""
+            SELECT a.asset_id
+            FROM asset a
+            WHERE a.asset_id IN ({placeholders})
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM earnings_calendar_event e
+                    WHERE e.asset_id = a.asset_id
+                      AND e.earnings_date <= current_date
+                      AND e.earnings_date = (
+                            SELECT MAX(latest.earnings_date)
+                            FROM earnings_calendar_event latest
+                            WHERE latest.asset_id = a.asset_id
+                              AND latest.earnings_date <= current_date
+                      )
+                      AND (
+                            (e.eps_estimated IS NOT NULL AND e.eps_actual IS NOT NULL)
+                            OR (
+                                e.revenue_estimated IS NOT NULL
+                                AND e.revenue_actual IS NOT NULL
+                            )
+                      )
+              )
+            ORDER BY a.asset_id
+            LIMIT ?
+            """,
+            [*asset_ids, max_assets],
+        ).fetchall()
+
+        today = date.today()
+        start_date = today - timedelta(days=365 * 5)
+        job_ids: list[int] = []
+        for (due_asset_id,) in rows:
+            if self._has_open_dataset_job(
+                asset_id=due_asset_id,
+                dataset=DATASET_EARNINGS_ACTUALS,
+            ):
+                continue
+            if not force and self._has_open_or_today_job(
+                asset_id=due_asset_id,
+                dataset=DATASET_EARNINGS_ACTUALS,
+                job_type=JOB_TYPE_EARNINGS_BACKUP,
+                today=today,
+            ):
+                continue
+            job_ids.append(
+                self.repo.create_job(
+                    asset_id=due_asset_id,
+                    job_type=JOB_TYPE_EARNINGS_BACKUP,
+                    dataset=DATASET_EARNINGS_ACTUALS,
+                    priority=PRIORITY_EARNINGS_UPDATE,
+                    start_date=start_date,
+                    end_date=today,
+                )
+            )
+        return job_ids
+
     def schedule_due_fundamental_subscription_backfills(
         self,
         max_assets: int = 25,
+        asset_id: str | None = None,
     ) -> list[int]:
         """
         Enqueue one historical financial-statement backfill for subscribed assets.
@@ -237,11 +331,16 @@ class CorporateCalendarScheduler:
         - refresh keeps already-subscribed assets current over time
         """
         ensure_fundamental_phase1_schema(self.conn)
+        self._ensure_active_universe_subscriptions()
+        self._deactivate_entitlement_blocked_subscriptions()
 
         asset_ids = self.ticker_universe.ingestible_asset_ids(
             include_watchlist=True,
             asset_types=("stock", "adr"),
         )
+        if asset_id is not None:
+            normalized = asset_id.upper().strip()
+            asset_ids = [normalized] if normalized in set(asset_ids) else []
         if not asset_ids:
             return []
 
@@ -282,6 +381,89 @@ class CorporateCalendarScheduler:
             self.repo.mark_fundamental_subscription_backfill_requested(asset_id)
 
         return job_ids
+
+    def _ensure_active_universe_subscriptions(self) -> int:
+        """
+        Keep fundamental ingestion subscribed to the current ticker universe.
+
+        Portfolio and watchlist membership are the source of truth for which
+        stock-like assets need valuation inputs. Subscriptions still remain the
+        scheduling control table, but missing rows should not silently block
+        statement backfills or recurring refreshes.
+        """
+        asset_ids = self.ticker_universe.ingestible_asset_ids(
+            include_watchlist=True,
+            asset_types=("stock", "adr"),
+        )
+        if not asset_ids:
+            return 0
+
+        now = datetime.now()
+        for asset_id in asset_ids:
+            existing = self.conn.execute(
+                """
+                SELECT is_active
+                FROM fundamental_subscription
+                WHERE asset_id = ?
+                LIMIT 1
+                """,
+                [asset_id],
+            ).fetchone()
+            if existing is None:
+                self.conn.execute(
+                    """
+                    INSERT INTO fundamental_subscription (
+                        asset_id,
+                        is_active,
+                        refresh_interval_days,
+                        next_refresh_at,
+                        subscription_source,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES (?, TRUE, ?, ?, 'ticker_universe', ?, ?)
+                    """,
+                    [
+                        asset_id,
+                        DEFAULT_FUNDAMENTAL_REFRESH_INTERVAL_DAYS,
+                        now,
+                        now,
+                        now,
+                    ],
+                )
+            elif bool(existing[0]):
+                self.conn.execute(
+                    """
+                    UPDATE fundamental_subscription
+                    SET next_refresh_at = COALESCE(next_refresh_at, ?),
+                        updated_at = ?
+                    WHERE asset_id = ?
+                    """,
+                    [now, now, asset_id],
+                )
+        return len(asset_ids)
+
+    def _deactivate_entitlement_blocked_subscriptions(self) -> int:
+        rows = self.conn.execute(
+            """
+            SELECT DISTINCT s.asset_id, s.last_error
+            FROM asset_sync_state s
+            JOIN fundamental_subscription f
+              ON f.asset_id = s.asset_id
+            WHERE s.domain = ?
+              AND s.dataset = ?
+              AND f.is_active = TRUE
+              AND s.last_error ILIKE '%FMP HTTP error 402%'
+            """,
+            [DOMAIN_CORPORATE, DATASET_FINANCIAL_STATEMENTS],
+        ).fetchall()
+        for asset_id, last_error in rows:
+            self.repo.deactivate_fundamental_subscription(
+                asset_id,
+                str(last_error)
+                or "FMP HTTP error 402: plan does not include this corporate endpoint",
+            )
+        return len(rows)
 
     def _mark_subscription_refresh_scheduled(
         self,
@@ -394,4 +576,22 @@ class CorporateCalendarScheduler:
             [asset_id, DOMAIN_CORPORATE, dataset, job_type],
         ).fetchone()
 
+        return int(row[0]) > 0
+
+    def _has_open_dataset_job(
+        self,
+        asset_id: str,
+        dataset: str,
+    ) -> bool:
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM ingestion_job
+            WHERE asset_id = ?
+              AND domain = ?
+              AND dataset = ?
+              AND status IN ('pending', 'running')
+            """,
+            [asset_id, DOMAIN_CORPORATE, dataset],
+        ).fetchone()
         return int(row[0]) > 0

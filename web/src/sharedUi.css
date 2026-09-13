@@ -1,0 +1,63 @@
+/*
+ * Application theme adapter for canonical @prool-ui rendering.
+ * Domain state and content remain in Quaint Dash.
+ */
+.pui-segmented-control.segmented-control
+  > .pui-segmented-control__option--selected {
+  background: linear-gradient(
+    135deg,
+    var(--accent-violet),
+    var(--accent-cobalt)
+  );
+  color: var(--pui-color-white);
+  box-shadow: var(--dash-shadow-soft);
+}
+
+.pui-chart-frame.chart-frame {
+  gap: 0;
+  padding: 0;
+  color: var(--dash-text);
+}
+
+.chart-frame > .pui-chart-frame__header {
+  align-items: center;
+  gap: 14px;
+  padding: 20px 22px 15px;
+}
+
+.chart-frame .pui-chart-frame__eyebrow {
+  color: var(--dash-text-faint);
+  font-size: 10px;
+  font-weight: var(--font-label);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.chart-frame .pui-chart-frame__header h2 {
+  margin-top: 2px;
+  font-size: 17px;
+  font-weight: var(--font-heading);
+  letter-spacing: var(--tracking-heading);
+}
+
+.chart-frame > .pui-chart-frame__body {
+  min-height: 0;
+}
+
+.chart-frame > .pui-chart-frame__footer {
+  margin: -8px 20px 18px;
+  color: var(--dash-text-soft);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.density-compact .chart-frame > .pui-chart-frame__header {
+  padding: 16px 18px 12px;
+}
+
+@media (max-width: 560px) {
+  .chart-frame > .pui-chart-frame__header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

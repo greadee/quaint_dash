@@ -1,0 +1,48 @@
+{
+  "name": "quaint-dash-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --configLoader native",
+    "build": "tsc -b && vite build --configLoader native",
+    "lint": "eslint .",
+    "test": "vitest run --config vite.config.ts --configLoader native",
+    "test:watch": "vitest --config vite.config.ts --configLoader native",
+    "test:coverage": "vitest run --config vite.config.ts --configLoader native --coverage",
+    "test:e2e": "playwright test",
+    "perf:signals": "node ../tools/profile_signals_browser.mjs",
+    "perf:benchmarks": "node ../tools/profile_benchmarks_browser.mjs"
+  },
+  "dependencies": {
+    "@prool-ui/react": "file:vendor/prool-ui/prool-ui-react-0.1.0.tgz",
+    "@prool-ui/themes": "file:vendor/prool-ui/prool-ui-themes-0.1.0.tgz",
+    "@prool-ui/tokens": "file:vendor/prool-ui/prool-ui-tokens-0.1.0.tgz",
+    "@tanstack/react-query": "^5.66.0",
+    "lucide-react": "^0.475.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.18.3",
+    "recharts": "^2.15.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.19.0",
+    "@playwright/test": "^1.61.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "@vitest/coverage-v8": "^4.1.9",
+    "eslint": "^9.19.0",
+    "eslint-plugin-react-hooks": "^5.0.0",
+    "eslint-plugin-react-refresh": "^0.4.18",
+    "globals": "^15.14.0",
+    "jsdom": "^29.1.1",
+    "typescript": "~5.7.2",
+    "typescript-eslint": "^8.22.0",
+    "vite": "^6.1.0",
+    "vitest": "^4.1.9"
+  }
+}

@@ -1,0 +1,20 @@
+flowchart TB
+  Web["Web\nfull dashboard/admin/config"]
+  Desktop["Desktop\nheavy analytics/AI/export"]
+  Mobile["Mobile\nquick overview/watchlists/alerts"]
+  API["HTTP API\ncompatibility + future v2"]
+  LocalDesktop["Desktop local service\nfuture"]
+  Notifications["Notification payloads\nfuture"]
+  App["Application use cases"]
+  Workers["Background workers"]
+  AI["AI service/worker"]
+
+  Web --> API
+  Desktop --> API
+  Desktop --> LocalDesktop --> App
+  Mobile --> API
+  Notifications --> Mobile
+  API --> App
+  Workers --> App
+  AI --> App
+

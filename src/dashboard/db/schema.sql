@@ -17,6 +17,37 @@ CREATE TABLE IF NOT EXISTS portfolio (
     base_ccy TEXT DEFAULT 'CAD'
 );
 
+CREATE TABLE IF NOT EXISTS portfolio_analytics_snapshot (
+    portfolio_id BIGINT NOT NULL,
+    snapshot_date DATE NOT NULL,
+    market_value DOUBLE PRECISION,
+    cagr DOUBLE PRECISION,
+    sharpe_ratio DOUBLE PRECISION,
+    sortino_ratio DOUBLE PRECISION,
+    beta DOUBLE PRECISION,
+    alpha_annualized DOUBLE PRECISION,
+    position_count INTEGER NOT NULL DEFAULT 0,
+    state_signature TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    missing_inputs_json TEXT,
+    refreshed_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (portfolio_id, snapshot_date)
+);
+
+DROP INDEX IF EXISTS idx_portfolio_analytics_snapshot_latest;
+
+CREATE TABLE IF NOT EXISTS fx_rate (
+    from_ccy TEXT NOT NULL,
+    to_ccy TEXT NOT NULL,
+    rate_date DATE NOT NULL,
+    rate DOUBLE PRECISION NOT NULL,
+    source TEXT NOT NULL DEFAULT 'manual',
+    as_of_ts TIMESTAMP NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (from_ccy, to_ccy, rate_date)
+);
+
 CREATE TABLE IF NOT EXISTS position ( 
     portfolio_id BIGINT, 
     asset_id TEXT, 
@@ -53,6 +84,22 @@ CREATE TABLE IF NOT EXISTS asset (
     updated_at TIMESTAMP NOT NULL DEFAULT now(),
 );
 
+CREATE TABLE IF NOT EXISTS stock_catalog (
+    asset_id TEXT PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    exchange_code TEXT NOT NULL,
+    asset_type TEXT NOT NULL DEFAULT 'stock',
+    ccy TEXT NOT NULL,
+    name TEXT NOT NULL,
+    sector TEXT,
+    industry TEXT,
+    country TEXT,
+    region TEXT,
+    source TEXT NOT NULL DEFAULT 'seed',
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
 ALTER TABLE asset ADD COLUMN IF NOT EXISTS symbol TEXT;
 ALTER TABLE asset ADD COLUMN IF NOT EXISTS exchange_code TEXT;
 ALTER TABLE asset ADD COLUMN IF NOT EXISTS asset_subtype TEXT;
@@ -85,6 +132,189 @@ CREATE TABLE IF NOT EXISTS watchlist_ticker (
 
     FOREIGN KEY (asset_id) REFERENCES asset(asset_id)
 );
+
+CREATE TABLE IF NOT EXISTS stock_ranking_snapshot (
+    asset_id TEXT NOT NULL,
+    factor TEXT NOT NULL,
+    snapshot_date DATE NOT NULL,
+    universe TEXT NOT NULL,
+    score DOUBLE PRECISION NOT NULL,
+    action TEXT NOT NULL,
+    confidence DOUBLE PRECISION NOT NULL,
+    data_status TEXT NOT NULL,
+    latest_data_date DATE,
+    components_json TEXT NOT NULL DEFAULT '[]',
+    missing_inputs_json TEXT NOT NULL DEFAULT '[]',
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (asset_id, factor, snapshot_date),
+    FOREIGN KEY (asset_id) REFERENCES asset(asset_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_ranking_snapshot_factor_date
+ON stock_ranking_snapshot(factor, snapshot_date);
+
+CREATE TABLE IF NOT EXISTS signal_definition (
+    definition_id TEXT PRIMARY KEY,
+    signal_name TEXT NOT NULL,
+    category TEXT NOT NULL,
+    factor TEXT NOT NULL,
+    description TEXT NOT NULL,
+    trigger_threshold DOUBLE PRECISION,
+    lookback_period TEXT NOT NULL,
+    methodology_version TEXT NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS signal_evaluation (
+    signal_id TEXT PRIMARY KEY,
+    definition_id TEXT NOT NULL,
+    asset_id TEXT NOT NULL,
+    summary TEXT,
+    status TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    strength DOUBLE PRECISION NOT NULL,
+    confidence DOUBLE PRECISION NOT NULL,
+    portfolio_priority DOUBLE PRECISION NOT NULL,
+    raw_observed_value DOUBLE PRECISION,
+    normalized_value DOUBLE PRECISION,
+    trigger_threshold DOUBLE PRECISION,
+    first_detected_at TIMESTAMP,
+    confirmation_at TIMESTAMP,
+    last_evaluated_at TIMESTAMP NOT NULL DEFAULT now(),
+    data_as_of TIMESTAMP,
+    expires_at TIMESTAMP,
+    resolved_at TIMESTAMP,
+    resolution_reason TEXT,
+    model_version TEXT NOT NULL,
+    source TEXT NOT NULL,
+    missing_data_status TEXT NOT NULL,
+    input_data_timestamps_json TEXT NOT NULL DEFAULT '{}',
+    missing_inputs_json TEXT NOT NULL DEFAULT '[]',
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    FOREIGN KEY (definition_id) REFERENCES signal_definition(definition_id),
+    FOREIGN KEY (asset_id) REFERENCES asset(asset_id)
+);
+
+ALTER TABLE signal_evaluation ADD COLUMN IF NOT EXISTS summary TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_signal_evaluation_summary
+ON signal_evaluation(status, direction, portfolio_priority, confidence, last_evaluated_at);
+
+CREATE TABLE IF NOT EXISTS signal_evaluation_current (
+    signal_id TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    status TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    strength DOUBLE PRECISION NOT NULL,
+    confidence DOUBLE PRECISION NOT NULL,
+    portfolio_priority DOUBLE PRECISION NOT NULL,
+    raw_observed_value DOUBLE PRECISION,
+    normalized_value DOUBLE PRECISION,
+    trigger_threshold DOUBLE PRECISION,
+    first_detected_at TIMESTAMP,
+    confirmation_at TIMESTAMP,
+    last_evaluated_at TIMESTAMP NOT NULL,
+    data_as_of TIMESTAMP,
+    expires_at TIMESTAMP,
+    resolved_at TIMESTAMP,
+    resolution_reason TEXT,
+    model_version TEXT NOT NULL,
+    source TEXT NOT NULL,
+    missing_data_status TEXT NOT NULL,
+    input_data_timestamps_json TEXT NOT NULL DEFAULT '{}',
+    missing_inputs_json TEXT NOT NULL DEFAULT '[]',
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+-- This table is bounded to the current signal set and is bulk-updated on refresh.
+-- DuckDB can invalidate the database while maintaining this mutable compound index.
+DROP INDEX IF EXISTS idx_signal_evaluation_current_summary;
+
+CREATE TABLE IF NOT EXISTS signal_evidence (
+    signal_id TEXT NOT NULL,
+    evidence_id TEXT NOT NULL,
+    evidence_type TEXT NOT NULL,
+    label TEXT NOT NULL,
+    metric TEXT NOT NULL,
+    value DOUBLE PRECISION,
+    score DOUBLE PRECISION,
+    detail TEXT NOT NULL,
+    source TEXT NOT NULL,
+    as_of TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS signal_portfolio_impact (
+    signal_id TEXT NOT NULL,
+    portfolio_id BIGINT NOT NULL,
+    portfolio_name TEXT NOT NULL,
+    weight DOUBLE PRECISION,
+    market_value DOUBLE PRECISION,
+    currency TEXT NOT NULL DEFAULT 'CAD',
+    concentration_note TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+DROP INDEX IF EXISTS idx_signal_portfolio_impact_portfolio;
+
+CREATE TABLE IF NOT EXISTS signal_user_state (
+    signal_id TEXT PRIMARY KEY,
+    definition_id TEXT NOT NULL,
+    asset_id TEXT NOT NULL,
+    reviewed_at TIMESTAMP,
+    muted_until TIMESTAMP,
+    dismissed_until TIMESTAMP,
+    note TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE SEQUENCE IF NOT EXISTS seq_signal_alert_rule_id START 1;
+
+CREATE TABLE IF NOT EXISTS signal_alert_rule (
+    alert_rule_id BIGINT PRIMARY KEY DEFAULT nextval('seq_signal_alert_rule_id'),
+    signal_id TEXT NOT NULL,
+    definition_id TEXT NOT NULL,
+    asset_id TEXT NOT NULL,
+    condition TEXT NOT NULL,
+    threshold DOUBLE PRECISION,
+    channel TEXT NOT NULL DEFAULT 'in_app',
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_signal_alert_rule_signal
+ON signal_alert_rule(signal_id, is_active);
+
+CREATE TABLE IF NOT EXISTS institutional_buying_daily (
+    asset_id TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    date DATE NOT NULL,
+    net_flow_score DOUBLE NOT NULL,
+    accumulation_score DOUBLE NOT NULL,
+    volume_ratio DOUBLE,
+    buy_volume_proxy DOUBLE,
+    sell_volume_proxy DOUBLE,
+    source TEXT NOT NULL DEFAULT 'ranking_local_estimate',
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (asset_id, date),
+    FOREIGN KEY (asset_id) REFERENCES asset(asset_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_institutional_buying_daily_asset_date
+ON institutional_buying_daily(asset_id, date);
 
 INSERT INTO portfolio_ticker (
     portfolio_id,
@@ -272,6 +502,34 @@ CREATE TABLE IF NOT EXISTS broker_portfolio_txn_map (
     FOREIGN KEY (portfolio_id) REFERENCES portfolio(portfolio_id)
 );
 
+CREATE TABLE IF NOT EXISTS broker_portfolio_position_map (
+    provider TEXT NOT NULL,
+    provider_account_id TEXT NOT NULL,
+    provider_position_id TEXT NOT NULL,
+    portfolio_id BIGINT NOT NULL,
+    asset_id TEXT NOT NULL,
+    quantity DOUBLE PRECISION NOT NULL,
+    book_cost DOUBLE PRECISION NOT NULL,
+    currency TEXT,
+    imported_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (provider, provider_account_id, provider_position_id),
+    FOREIGN KEY (portfolio_id) REFERENCES portfolio(portfolio_id)
+);
+
+CREATE TABLE IF NOT EXISTS broker_account_return_override (
+    provider TEXT NOT NULL,
+    provider_account_id TEXT NOT NULL,
+    total_return_percent DOUBLE PRECISION NOT NULL,
+    note TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (provider, provider_account_id),
+    FOREIGN KEY (provider, provider_account_id) REFERENCES broker_account(provider, provider_account_id)
+);
+
 CREATE TABLE IF NOT EXISTS broker_sync_run (
     sync_run_id BIGINT PRIMARY KEY DEFAULT nextval('seq_broker_sync_run_id'),
     provider TEXT NOT NULL,
@@ -378,6 +636,14 @@ CREATE TABLE IF NOT EXISTS ingestion_job (
 
     attempt_count INTEGER NOT NULL DEFAULT 0,
     error_message TEXT,
+    work_key TEXT,
+    lease_owner TEXT,
+    leased_at TIMESTAMP,
+    lease_expires_at TIMESTAMP,
+    max_attempts INTEGER DEFAULT 3,
+    terminal_reason TEXT,
+    completed_at TIMESTAMP,
+    superseded_by_job_id BIGINT,
 
     created_at TIMESTAMP NOT NULL DEFAULT now(),
     updated_at TIMESTAMP NOT NULL DEFAULT now(),
@@ -385,8 +651,10 @@ CREATE TABLE IF NOT EXISTS ingestion_job (
     FOREIGN KEY(asset_id) REFERENCES asset(asset_id)
 );
 
-CREATE INDEX IF NOT EXISTS ingestion_job_pending_idx
-ON ingestion_job(domain, status, priority, created_at);
+-- DuckDB can invalidate the database when an indexed mutable status column is
+-- updated under sustained queue processing. The queue is small enough for a
+-- bounded status scan, so keep this mutable-column index retired.
+DROP INDEX IF EXISTS ingestion_job_pending_idx;
 
 CREATE TABLE IF NOT EXISTS asset_sync_state (
     asset_id TEXT NOT NULL,
@@ -542,7 +810,7 @@ CREATE TABLE IF NOT EXISTS ingestion_run (
 
 
 CREATE TABLE IF NOT EXISTS fundamental_subscription (
-    asset_id TEXT PRIMARY KEY,
+    asset_id TEXT NOT NULL,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
 
     refresh_interval_days INTEGER NOT NULL DEFAULT 7,
@@ -556,9 +824,7 @@ CREATE TABLE IF NOT EXISTS fundamental_subscription (
     subscription_source TEXT NOT NULL DEFAULT 'manual',
 
     created_at TIMESTAMP NOT NULL DEFAULT now(),
-    updated_at TIMESTAMP NOT NULL DEFAULT now(),
-
-    FOREIGN KEY(asset_id) REFERENCES asset(asset_id)
+    updated_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
 ALTER TABLE fundamental_subscription
@@ -584,8 +850,7 @@ CREATE TABLE IF NOT EXISTS fundamental_sync_state (
     PRIMARY KEY (asset_id, dataset, sync_mode)
 );
 
-CREATE INDEX IF NOT EXISTS idx_fundamental_subscription_due
-ON fundamental_subscription (is_active, next_refresh_at);
+DROP INDEX IF EXISTS idx_fundamental_subscription_due;
 
 CREATE INDEX IF NOT EXISTS idx_fundamental_sync_state_asset
 ON fundamental_sync_state (asset_id);

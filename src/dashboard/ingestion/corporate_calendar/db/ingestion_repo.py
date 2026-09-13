@@ -23,6 +23,11 @@ from dashboard.ingestion.corporate_calendar.models import (
     CorporateIngestionJob,
     FinancialStatementRow,
 )
+from dashboard.ingestion.job_policy import (
+    INGESTION_JOB_LEASE_SECONDS,
+    MAX_INGESTION_JOB_ATTEMPTS,
+    ingestion_worker_id,
+)
 from dashboard.ingestion.ticker_universe import TickerUniverseRepository
 import dashboard.ingestion.corporate_calendar.db.queries as qry
 
@@ -68,23 +73,26 @@ class CorporateCalendarIngestionRepository:
         self.conn.execute(qry.ENSURE_SYNC_STATE, [asset_id, DOMAIN_CORPORATE, dataset])
 
     def get_tracked_stock_asset_ids(self) -> list[str]:
-        return self.ticker_universe.ingestible_asset_ids(
-            include_watchlist=True,
-            asset_types=("stock", "adr"),
-        )
+        return self.ticker_universe.earnings_asset_ids(include_watchlist=True)
 
     def claim_next_pending_job(self) -> Optional[CorporateIngestionJob]:
         row = self.conn.execute(
-            qry.SELECT_NEXT_PENDING_JOB,
-            [DOMAIN_CORPORATE, STATUS_PENDING],
+            qry.CLAIM_NEXT_PENDING_JOB,
+            [
+                STATUS_RUNNING,
+                ingestion_worker_id(),
+                INGESTION_JOB_LEASE_SECONDS,
+                DOMAIN_CORPORATE,
+                STATUS_PENDING,
+                MAX_INGESTION_JOB_ATTEMPTS,
+                STATUS_PENDING,
+            ],
         ).fetchone()
 
         if row is None:
             return None
 
-        job = CorporateIngestionJob(*row)
-        self.conn.execute(qry.MARK_JOB_RUNNING, [STATUS_RUNNING, job.job_id])
-        return job
+        return CorporateIngestionJob(*row)
 
     def mark_sync_running(
         self,
@@ -236,6 +244,28 @@ class CorporateCalendarIngestionRepository:
             WHERE asset_id = ?
             """,
             [asset_id],
+        )
+
+    def deactivate_fundamental_subscription(self, asset_id: str, reason: str) -> None:
+        if not self._table_exists("fundamental_subscription"):
+            return
+
+        self.conn.execute(
+            """
+            UPDATE fundamental_subscription
+            SET
+                is_active = FALSE,
+                next_refresh_at = TIMESTAMP '9999-12-31 00:00:00',
+                updated_at = now()
+            WHERE asset_id = ?
+            """,
+            [asset_id],
+        )
+
+        self.ensure_sync_state(asset_id, "financial_statements")
+        self.conn.execute(
+            qry.UPDATE_SYNC_STATE_FAILED,
+            [BACKFILL_FAILED, reason, asset_id, DOMAIN_CORPORATE, "financial_statements"],
         )
 
     def select_due_earnings_update_asset_ids(

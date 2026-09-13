@@ -134,6 +134,11 @@ class DashboardView(View):
                 factor-refresh <ticker|all>,
                 quant-refresh <ticker|all>,
                 quant-summary <ticker>,
+                business-strength-run <ticker|all> [--force] [--max-assets N],
+                business-strength-show <ticker>,
+                business-strength-validate <ticker|all>,
+                business-strength-template-list,
+                business-strength-template-show <template-code>,
                 live-price-stream [--include-watchlist] [--no-extended-hours],
                 analytics asset <asset-id> [--benchmark index-id],
                 analytics portfolio <portfolio-id> [--benchmark index-id],
@@ -338,6 +343,34 @@ class DashboardView(View):
 
         if cmd == "quant-summary":
             print(self.access.quant_summary(ns.ticker))
+            return self
+
+        if cmd == "business-strength-run":
+            scorecards = self.access.business_strength_run(ns.target, force=ns.force, max_assets=ns.max_assets)
+            print(f"Processed {len(scorecards)} Business Strength scorecard(s).")
+            return self
+
+        if cmd == "business-strength-refresh":
+            scorecards = self.access.business_strength_run(ns.target, force=True, max_assets=ns.max_assets)
+            print(f"Refreshed {len(scorecards)} Business Strength scorecard(s).")
+            return self
+
+        if cmd == "business-strength-show":
+            print(self.access.business_strength_show(ns.ticker))
+            return self
+
+        if cmd == "business-strength-validate":
+            for message in self.access.business_strength_validate(ns.target, max_assets=ns.max_assets):
+                print(message)
+            return self
+
+        if cmd == "business-strength-template-list":
+            for line in self.access.business_strength_template_list():
+                print(line)
+            return self
+
+        if cmd == "business-strength-template-show":
+            print(self.access.business_strength_template_show(ns.template_code))
             return self
         
         if cmd == "live-price-stream":
@@ -641,6 +674,31 @@ class DashboardView(View):
         p = _NoExitParser(prog="quant-summary", add_help=True, description="Show quant summary for a ticker.")
         p.add_argument("ticker")
         parsers["quant-summary"] = p
+
+        for name in ["business-strength-run", "business-strength-refresh"]:
+            p = _NoExitParser(prog=name, add_help=True, description="Run deterministic Business Strength scoring.")
+            p.add_argument("target")
+            p.add_argument("--force", dest="force", action="store_true")
+            p.add_argument("--max-assets", dest="max_assets", type=int, default=None)
+            p.add_argument("--as-of", dest="as_of", default=None)
+            p.add_argument("--methodology-version", dest="methodology_version", default=None)
+            p.add_argument("--template-version", dest="template_version", default=None)
+            parsers[name] = p
+
+        p = _NoExitParser(prog="business-strength-show", add_help=True, description="Show a deterministic Business Strength summary.")
+        p.add_argument("ticker")
+        parsers["business-strength-show"] = p
+
+        p = _NoExitParser(prog="business-strength-validate", add_help=True, description="Validate Business Strength scorecards.")
+        p.add_argument("target")
+        p.add_argument("--max-assets", dest="max_assets", type=int, default=None)
+        parsers["business-strength-validate"] = p
+
+        parsers["business-strength-template-list"] = _NoExitParser(prog="business-strength-template-list", add_help=True, description="List Business Strength templates.")
+
+        p = _NoExitParser(prog="business-strength-template-show", add_help=True, description="Show one Business Strength template.")
+        p.add_argument("template_code")
+        parsers["business-strength-template-show"] = p
 
         p = _NoExitParser(prog="live-price-stream", add_help=True, description="Start the live price streaming worker for portfolio assets.",)
         p.add_argument("--include-watchlist", dest="include_watchlist", action="store_true", help="Also stream active watchlist assets. Default: portfolio assets only.",)

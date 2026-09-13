@@ -1,0 +1,55 @@
+.operations-diagnostics-body {
+  padding: 0 22px 20px;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.operations-diagnostics .background-status-grid {
+  padding: 0;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+}
+
+.operations-diagnostics-body .muted,
+.operations-action-guidance {
+  color: var(--dash-text-soft, #68736f);
+}
+
+.operations-diagnostics-body summary {
+  cursor: pointer;
+  padding: 6px 0;
+}
+
+.operations-diagnostics-body ul {
+  padding-left: 20px;
+}
+
+.operations-diagnostics-body li + li {
+  margin-top: 8px;
+}
+
+.operations-diagnostics-body > p:last-child {
+  margin-bottom: 0;
+}
+
+.operations-action-guidance {
+  margin: 0 22px 18px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.operations-health { scroll-margin-top: 18px; }
+.operations-health.critical { border-color: rgba(255, 91, 103, .32); }
+.operations-health.degraded { border-color: rgba(255, 190, 92, .28); }
+.operations-health-body { padding: 0 22px 22px; }
+.operations-health-summary { margin: 0 0 16px; font-size: 14px; }
+.operations-health .background-status-grid { padding: 0; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); }
+.operations-incident-list { display: grid; gap: 10px; margin-top: 16px; }
+.operations-incident-list article { border: 1px solid var(--dash-border); border-left-width: 3px; border-radius: 10px; padding: 12px 14px; }
+.operations-incident-list article.critical { border-left-color: var(--accent-red, #ff5b67); background: rgba(255, 91, 103, .05); }
+.operations-incident-list article.warning { border-left-color: var(--accent-amber, #ffbe5c); background: rgba(255, 190, 92, .04); }
+.operations-incident-list article.info { border-left-color: #8290a3; }
+.operations-incident-list article.selected { box-shadow: 0 0 0 2px rgba(88, 210, 195, .28); }
+.operations-incident-list article > div { align-items: center; display: flex; gap: 8px; }
+.operations-incident-list article p { margin: 7px 0 0; }
+.operations-incident-list article small { color: var(--dash-text-soft); display: block; margin-top: 7px; }

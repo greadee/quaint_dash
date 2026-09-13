@@ -1,0 +1,1583 @@
+from fastapi.testclient import TestClient
+
+from dashboard.api.app import create_app
+from dashboard.api.services import PortfolioApiService
+from dashboard.db.db_conn import DB
+
+
+def test_portfolio_create_list_and_conflict(tmp_path):
+    app = create_app(tmp_path / "api.db")
+
+    with TestClient(app) as client:
+        created = client.post("/api/v1/portfolios", json={"name": "Main", "base_ccy": "cad"})
+        conflict = client.post("/api/v1/portfolios", json={"name": "Main"})
+        renamed = client.patch(
+            f"/api/v1/portfolios/{created.json()['portfolio_id']}",
+            json={"name": "Core"},
+        )
+        listed = client.get("/api/v1/portfolios")
+
+    assert created.status_code == 201
+    assert created.json()["name"] == "Main"
+    assert created.json()["base_ccy"] == "CAD"
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "conflict"
+    assert renamed.status_code == 200
+    assert renamed.json()["name"] == "Core"
+    assert listed.json()[0]["portfolio_id"] == created.json()["portfolio_id"]
+    assert listed.json()[0]["name"] == "Core"
+
+
+def test_portfolio_management_endpoints_are_backend_driven_and_deterministic(tmp_path):
+    db_path = tmp_path / "portfolio_management.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        "INSERT INTO portfolio(portfolio_id, portfolio_name, base_ccy) VALUES (1, 'Core', 'USD')"
+    )
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, sector, country, shares_outstanding)
+        VALUES
+            ('AAA', 'AAA', 'stock', 'USD', 'Technology', 'US', 100),
+            ('BBB', 'BBB', 'stock', 'USD', 'Healthcare', 'US', 100)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO position(portfolio_id, asset_id, qty, book_cost, created_at, updated_at)
+        VALUES
+            (1, 'AAA', 10, 100, now(), now()),
+            (1, 'BBB', 10, 100, now(), now())
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO txn(txn_id, portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, cash_amt, fee_amt, batch_id)
+        VALUES
+            (1, 1, '2025-01-01 09:30:00', 'buy', 'AAA', 10, 10, 'USD', NULL, 0, 1),
+            (2, 1, '2025-01-01 09:30:00', 'buy', 'BBB', 10, 10, 'USD', NULL, 0, 1),
+            (3, 1, '2025-01-03 09:30:00', 'deposit', NULL, NULL, NULL, 'USD', 50, 0, 1)
+        """
+    )
+    for asset_id, first, second, third, net_income, fcf in [
+        ("AAA", 10.0, 11.0, 12.0, 120.0, 120.0),
+        ("BBB", 10.0, 10.5, 10.0, 80.0, 80.0),
+    ]:
+        db.conn.execute(
+            """
+            INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+            VALUES
+                (?, DATE '2025-01-01', ?, ?, 'test'),
+                (?, DATE '2025-01-02', ?, ?, 'test'),
+                (?, DATE '2025-01-03', ?, ?, 'test')
+            """,
+            [asset_id, first, first, asset_id, second, second, asset_id, third, third],
+        )
+        db.conn.execute(
+            """
+            INSERT INTO financial_statement(asset_id, statement_type, year, quarter, data_json, source)
+            VALUES
+                (?, 'income', 2024, 4, ?, 'test'),
+                (?, 'balance', 2024, 4, ?, 'test'),
+                (?, 'cashflow', 2024, 4, ?, 'test'),
+                (?, 'cashflow', 2023, 4, ?, 'test')
+            """,
+            [
+                asset_id,
+                f'{{"revenue":500,"netIncome":{net_income},"eps":{net_income / 100}}}',
+                asset_id,
+                '{"totalStockholdersEquity":250,"totalAssets":500,"totalDebt":50}',
+                asset_id,
+                f'{{"freeCashFlow":{fcf}}}',
+                asset_id,
+                f'{{"freeCashFlow":{fcf * 0.9}}}',
+            ],
+        )
+    db.conn.execute(
+        """
+        INSERT INTO benchmark_index(index_id, index_name, index_family, index_category, currency, is_core, is_active)
+        VALUES ('SP500', 'S&P 500', 'S&P', 'core_geo', 'USD', TRUE, TRUE)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO benchmark_index_daily_price(index_id, price_date, close, adj_close, source, source_symbol, is_proxy)
+        VALUES
+            ('SP500', DATE '2025-01-01', 100, 100, 'test', 'SPY', FALSE),
+            ('SP500', DATE '2025-01-02', 101, 101, 'test', 'SPY', FALSE),
+            ('SP500', DATE '2025-01-03', 102, 102, 'test', 'SPY', FALSE)
+        """
+    )
+
+    with TestClient(app) as client:
+        performance = client.get("/api/v1/portfolios/1/performance?benchmark=SP500&range=MAX")
+        one_day_performance = client.get(
+            "/api/v1/portfolios/1/performance?benchmark=SP500&range=1D"
+        )
+        risk = client.get("/api/v1/portfolios/1/risk?benchmark=SP500&risk_free_rate=0.02")
+        fundamentals = client.get("/api/v1/portfolios/1/fundamentals?horizon_years=5")
+        max_cagr = client.post(
+            "/api/v1/portfolios/1/optimization/preview",
+            json={"objective": "max_expected_cagr", "constraints": {"max_weight": 0.75}},
+        )
+        max_risk_adjusted = client.post(
+            "/api/v1/portfolios/1/optimization/preview",
+            json={"objective": "max_risk_adjusted_return", "constraints": {"max_weight": 0.75}},
+        )
+        default_constraints = client.post(
+            "/api/v1/portfolios/1/optimization/preview",
+            json={"objective": "max_expected_cagr", "constraints": {}},
+        )
+
+    assert performance.status_code == 200
+    assert performance.json()["methodology"].startswith("actual daily transaction-aware")
+    assert performance.json()["points"][0]["portfolio_return_index"] == 100
+    assert performance.json()["benchmark"] == "SP500"
+    assert one_day_performance.status_code == 200
+    assert [point["date"] for point in one_day_performance.json()["points"]] == [
+        "2025-01-02",
+        "2025-01-03",
+    ]
+    assert risk.status_code == 200
+    assert risk.json()["risk_free_rate"] == 0.02
+    assert "weight_balance_score" in risk.json()
+    assert any(item["metric"] == "annualized_volatility" for item in risk.json()["metric_insights"])
+    assert fundamentals.status_code == 200
+    assert fundamentals.json()["weighted_expected_cagr"]["coverage"] > 0
+    assert fundamentals.json()["evidence"]["evidence_type"] == "financial_statement"
+    assert all(item["evidence"] for item in fundamentals.json()["holdings"])
+    expected_cagr_insight = next(
+        item
+        for item in fundamentals.json()["metric_insights"]
+        if item["metric"] == "weighted_expected_cagr"
+    )
+    assert expected_cagr_insight["formula"].startswith("sum(holding weight")
+    assert expected_cagr_insight["contributors"]
+    assert max_cagr.status_code == 200
+    assert max_risk_adjusted.status_code == 200
+    assert default_constraints.status_code == 200
+    for payload in [
+        max_cagr.json(),
+        max_risk_adjusted.json(),
+        default_constraints.json(),
+    ]:
+        assert payload["status"] == "success"
+        assert abs(sum(payload["current_weights"].values()) - 1.0) < 0.0001
+        assert abs(sum(payload["optimized_weights"].values()) - 1.0) < 0.0001
+        assert payload["before"]["expected_volatility"] is not None
+        assert payload["before"]["expected_sharpe"] is not None
+        assert payload["before"]["beta"] is not None
+        assert payload["calculation_timestamp"]
+
+
+def test_portfolio_performance_skips_incomplete_valuation_dates(tmp_path):
+    db_path = tmp_path / "portfolio_performance.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        "INSERT INTO portfolio(portfolio_id, portfolio_name, base_ccy) VALUES (1, 'Core', 'USD')"
+    )
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy)
+        VALUES ('AAA', 'AAA', 'stock', 'USD'), ('BBB', 'BBB', 'stock', 'USD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO txn(txn_id, portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id)
+        VALUES
+            (1, 1, '2025-01-01 09:30:00', 'buy', 'AAA', 10, 10, 'USD', 0, 1),
+            (2, 1, '2025-01-01 09:30:00', 'buy', 'BBB', 10, 10, 'USD', 0, 1)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+        VALUES
+            ('AAA', DATE '2025-01-01', 10, 10, 'test'),
+            ('BBB', DATE '2025-01-01', 10, 10, 'test'),
+            ('AAA', DATE '2025-01-02', 11, 11, 'test'),
+            ('AAA', DATE '2025-01-03', 12, 12, 'test'),
+            ('BBB', DATE '2025-01-03', 10, 10, 'test')
+        """
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/portfolios/1/performance?range=MAX")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [point["date"] for point in payload["points"]] == [
+        "2025-01-01",
+        "2025-01-02",
+        "2025-01-03",
+    ]
+    assert payload["points"][0]["portfolio_return_index"] == 100
+    assert abs(payload["points"][2]["portfolio_return_index"] - 110) < 0.0001
+    assert payload["coverage"] == 1
+    assert payload["missing_inputs"] == []
+
+
+def test_broker_only_portfolio_performance_uses_current_position_proxy(tmp_path):
+    db_path = tmp_path / "broker_performance.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Broker')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy)
+        VALUES ('AAPL', 'AAPL', 'stock', 'USD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO broker_portfolio_position_map(
+            provider, provider_account_id, provider_position_id,
+            portfolio_id, asset_id, quantity, book_cost, currency
+        )
+        VALUES ('snaptrade', 'acct-1', 'pos-1', 1, 'AAPL', 2, 200, 'USD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset_quote_daily(
+            asset_id, date, close, adj_close, ing_source
+        )
+        VALUES
+            ('AAPL', DATE '2025-01-01', 100, 100, 'test'),
+            ('AAPL', DATE '2025-01-02', 105, 105, 'test'),
+            ('AAPL', DATE '2025-01-03', 110, 110, 'test')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/portfolios/1/performance?range=MAX")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["observation_count"] == 3
+    assert payload["missing_inputs"] == []
+    assert payload["methodology"].startswith("current-position historical valuation proxy")
+
+
+def test_portfolio_rename_conflicts_with_existing_name(tmp_path):
+    app = create_app(tmp_path / "api.db")
+
+    with TestClient(app) as client:
+        client.post("/api/v1/portfolios", json={"name": "Main"})
+        second = client.post("/api/v1/portfolios", json={"name": "Sandbox"})
+        conflict = client.patch(
+            f"/api/v1/portfolios/{second.json()['portfolio_id']}",
+            json={"name": "Main"},
+        )
+
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "conflict"
+
+
+def test_mapped_broker_portfolio_summary_uses_broker_positions_only(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'TFSA')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy)
+        VALUES
+            ('MU.TO', 'MU.TO', 'stock', 'CAD'),
+            ('OLD.TO', 'OLD.TO', 'stock', 'CAD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO broker_account(
+            provider,
+            provider_account_id,
+            provider_connection_id,
+            account_name,
+            account_type,
+            currency,
+            portfolio_id,
+            raw_json
+        )
+        VALUES ('snaptrade', 'acct-1', 'conn-1', 'TFSA', 'tfsa', 'CAD', 1, '{}')
+        """
+    )
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO txn(
+            txn_id, portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id
+        )
+        VALUES
+            (1, 1, '2026-01-02 10:00:00', 'buy', 'OLD.TO', 10, 50, 'CAD', 0, 1),
+            (2, 1, '2026-01-03 10:00:00', 'buy', 'MU.TO', 85, 25, 'CAD', 0, 1)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO broker_portfolio_position_map(
+            provider,
+            provider_account_id,
+            provider_position_id,
+            portfolio_id,
+            asset_id,
+            quantity,
+            book_cost,
+            currency
+        )
+        VALUES ('snaptrade', 'acct-1', 'pos-mu', 1, 'MU.TO', 85, 464.10, 'CAD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO broker_position_snapshot(
+            provider,
+            provider_account_id,
+            provider_position_id,
+            as_of_date,
+            asset_id,
+            symbol,
+            quantity,
+            market_value,
+            currency
+        )
+        VALUES ('snaptrade', 'acct-1', 'pos-mu', '2026-01-03', 'MU.TO', 'MU.TO', 85, 1200, 'CAD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+        VALUES ('MU.TO', '2026-01-04', 50, 50, 'test')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        portfolios = client.get("/api/v1/portfolios")
+        positions = client.get("/api/v1/portfolios/1/positions")
+
+    assert portfolios.status_code == 200
+    summary = portfolios.json()[0]
+    assert summary["position_count"] == 1
+    assert summary["market_value"] == 4250
+    assert summary["book_cost"] == 464.1
+    assert round(summary["unrealized_gain"] / summary["book_cost"], 4) == 8.1575
+
+    assert positions.status_code == 200
+    payload = positions.json()
+    assert [item["asset_id"] for item in payload] == ["MU.TO"]
+    assert payload[0]["market_value"] == 4250
+    assert payload[0]["latest_price"] == 50
+    assert payload[0]["price_source"] == "asset_quote_daily"
+    assert payload[0]["broker_linked"] is True
+
+
+def test_portfolio_overview_positions_and_transactions(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name, sector, industry, country)
+        VALUES ('AAPL', 'AAPL', 'stock', 'USD', 'Apple Inc.', 'Technology', 'Consumer Electronics', 'US')
+        """
+    )
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO txn(
+            txn_id, portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id
+        )
+        VALUES (1, 1, '2026-01-02 10:00:00', 'buy', 'AAPL', 2, 100, 'USD', 1, 1)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO position(portfolio_id, asset_id, qty, book_cost, created_at, updated_at)
+        VALUES (1, 'AAPL', 2, 200, now(), now())
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+        SELECT
+            'AAPL',
+            DATE '2025-01-01' + CAST(i AS INTEGER),
+            100 + i * 0.05 + CASE WHEN i % 2 = 0 THEN 0.10 ELSE -0.10 END,
+            100 + i * 0.05 + CASE WHEN i % 2 = 0 THEN 0.10 ELSE -0.10 END,
+            'test'
+        FROM range(0, 366) AS prices(i)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO portfolio_analytics_snapshot(
+            portfolio_id,
+            snapshot_date,
+            market_value,
+            position_count,
+            state_signature,
+            payload_json,
+            missing_inputs_json
+        )
+        VALUES (
+            1,
+            DATE '2026-01-01',
+            236.30,
+            1,
+            'test-signature',
+            '{"forecast":{"simulation":{"horizon_years":5,"expected_value":295,"p10_value":250,"p50_value":300,"p90_value":350}}}',
+            '[]'
+        )
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        overview = client.get("/api/v1/portfolios/1/overview")
+        positions = client.get("/api/v1/portfolios/1/positions")
+        transactions = client.get("/api/v1/portfolios/1/transactions?limit=1")
+        missing = client.get("/api/v1/portfolios/99/overview")
+
+    assert overview.status_code == 200
+    assert round(overview.json()["market_value"], 2) == 236.30
+    assert round(overview.json()["unrealized_gain"], 2) == 36.30
+    assert overview.json()["projected_value"] == 300
+    assert overview.json()["projected_horizon_years"] == 5
+    assert positions.json()[0]["weight"] == 1
+    assert positions.json()[0]["name"] == "Apple Inc."
+    assert positions.json()[0]["sector"] == "Information Technology"
+    assert positions.json()[0]["industry"] == "Consumer Electronics"
+    assert positions.json()[0]["country"] == "US"
+    assert transactions.json()["total"] == 1
+    assert transactions.json()["items"][0]["transaction_type"] == "buy"
+    assert missing.status_code == 404
+
+
+class _CountingConnection:
+    def __init__(self, conn):
+        self._conn = conn
+        self.query_count = 0
+
+    def execute(self, sql, parameters=None):
+        self.query_count += 1
+        if parameters is None:
+            return self._conn.execute(sql)
+        return self._conn.execute(sql, parameters)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def test_portfolio_list_uses_batched_gain_and_projection_reads(tmp_path):
+    db_path = tmp_path / "portfolio_query_budget.db"
+    create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        """
+        INSERT INTO portfolio(portfolio_id, portfolio_name, base_ccy)
+        VALUES (1, 'Core', 'CAD'), (2, 'Growth', 'USD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO portfolio_analytics_snapshot(
+            portfolio_id,
+            snapshot_date,
+            market_value,
+            position_count,
+            state_signature,
+            payload_json,
+            missing_inputs_json
+        )
+        VALUES
+            (1, DATE '2026-01-01', 100, 0, 'core-v1',
+             '{"forecast":{"simulation":{"horizon_years":5,"expected_value":140,"p10_value":110,"p50_value":150,"p90_value":190}}}',
+             '[]'),
+            (2, DATE '2026-01-01', 200, 0, 'growth-v1',
+             '{"forecast":{"simulation":{"horizon_years":10,"expected_value":350,"p10_value":250,"p50_value":400,"p90_value":500}}}',
+             '[]')
+        """
+    )
+
+    counting = _CountingConnection(db.conn)
+    summaries = PortfolioApiService(counting).list_portfolios()
+
+    assert [item.portfolio_id for item in summaries] == [1, 2]
+    assert [item.projected_value for item in summaries] == [150, 400]
+    assert [item.projected_horizon_years for item in summaries] == [5, 10]
+    assert counting.query_count <= 3
+    db.conn.close()
+
+
+def test_portfolio_snapshot_refresh_materializes_current_reports(tmp_path):
+    db_path = tmp_path / "portfolio_snapshot_refresh.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        """
+        INSERT INTO portfolio(portfolio_id, portfolio_name, base_ccy)
+        VALUES (1, 'Core', 'CAD')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.post("/api/v1/portfolios/snapshots/refresh")
+
+    assert response.status_code == 200
+    assert response.json()["result"]["refreshed_count"] == 1
+    assert response.json()["result"]["failed_count"] == 0
+    db = DB(db_path)
+    stored = db.conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM portfolio_analytics_snapshot
+        WHERE portfolio_id = 1
+        """
+    ).fetchone()
+    assert stored[0] == 1
+    db.conn.close()
+
+
+def test_portfolio_risk_and_fundamentals_use_snapshot_query_budgets(tmp_path):
+    db_path = tmp_path / "portfolio_analytics_query_budget.db"
+    create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        """
+        INSERT INTO portfolio(portfolio_id, portfolio_name, base_ccy)
+        VALUES (1, 'Core', 'CAD')
+        """
+    )
+    PortfolioApiService(db.conn).refresh_portfolio_snapshots()
+
+    counting = _CountingConnection(db.conn)
+    service = PortfolioApiService(counting)
+    risk = service.risk(
+        portfolio_id=1,
+        benchmark_index_id=None,
+        risk_free_rate=0.0,
+        range_key="1Y",
+    )
+
+    assert risk.portfolio_id == 1
+    assert counting.query_count <= 7
+
+    counting.query_count = 0
+    fundamentals = service.fundamentals(portfolio_id=1, horizon_years=5)
+
+    assert fundamentals.portfolio_id == 1
+    assert counting.query_count <= 10
+    db.conn.close()
+
+
+def test_portfolio_positions_use_underlying_metadata_for_cdrs(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, asset_subtype, ccy, name, sector, industry, country)
+        VALUES
+            ('AMD', 'AMD', 'stock', NULL, 'USD', 'Advanced Micro Devices', 'Technology', 'Semiconductors', 'US'),
+            ('AMD.TO', 'AMD.TO', 'etf', 'cdr', 'CAD', 'AMD Canadian Depositary Receipt', NULL, NULL, 'CA')
+        """
+    )
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO txn(portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id)
+        VALUES (1, '2026-01-02 10:00:00', 'buy', 'AMD.TO', 3, 40, 'CAD', 0, 1)
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        positions = client.get("/api/v1/portfolios/1/positions")
+        asset = client.get("/api/v1/assets/AMD.TO")
+
+    assert positions.status_code == 200
+    assert positions.json()[0]["sector"] == "Information Technology"
+    assert positions.json()[0]["industry"] == "Semiconductors"
+    assert positions.json()[0]["country"] == "US"
+    assert asset.status_code == 200
+    assert asset.json()["sector"] == "Information Technology"
+    assert asset.json()["industry"] == "Semiconductors"
+    assert asset.json()["country"] == "US"
+    assert asset.json()["is_cdr"] is True
+    assert asset.json()["underlying_asset_id"] == "AMD"
+
+
+def test_asset_detail_uses_known_cdr_classification_when_underlying_is_missing(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name)
+        VALUES ('AMD.TO', 'AMD.TO', 'stock', 'CAD', 'Advanced Micro Devices, Inc. CDR')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        asset = client.get("/api/v1/assets/AMD.TO")
+        underlying = client.get("/api/v1/assets/AMD")
+
+    assert asset.status_code == 200
+    assert asset.json()["sector"] == "Information Technology"
+    assert asset.json()["industry"] == "Semiconductors"
+    assert asset.json()["country"] == "US"
+    assert asset.json()["is_cdr"] is True
+    assert asset.json()["underlying_asset_id"] == "AMD"
+    assert underlying.status_code == 200
+    assert underlying.json()["symbol"] == "AMD"
+    assert underlying.json()["is_cdr"] is False
+
+
+def test_portfolio_positions_classify_known_cdr_tickers_without_cdr_name(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name)
+        VALUES ('GOOG.TO', 'GOOG.TO', 'stock', 'CAD', 'Alphabet Inc.')
+        """
+    )
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'broker-ingest')")
+    db.conn.execute(
+        """
+        INSERT INTO txn(portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id)
+        VALUES (1, '2026-01-02 10:00:00', 'buy', 'GOOG.TO', 2, 50, 'CAD', 0, 1)
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        positions = client.get("/api/v1/portfolios/1/positions")
+
+    assert positions.status_code == 200
+    assert positions.json()[0]["allocation_class"] == "CDR"
+    assert positions.json()[0]["sector"] == "Communication Services"
+    assert positions.json()[0]["industry"] == "Internet Content & Information"
+    assert positions.json()[0]["country"] == "US"
+
+
+def test_portfolio_positions_classify_money_market_and_fixed_income_exposure(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, asset_subtype, ccy, name, sector, industry)
+        VALUES
+            ('CASH.TO', 'CASH.TO', 'etf', 'money_market', 'CAD', 'Global X High Interest Savings ETF', NULL, NULL),
+            ('ZAG.TO', 'ZAG.TO', 'etf', 'bond', 'CAD', 'BMO Aggregate Bond Index ETF', 'Fixed Income', 'Canadian bonds')
+        """
+    )
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO txn(portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id)
+        VALUES
+            (1, '2026-01-02 10:00:00', 'buy', 'CASH.TO', 100, 50, 'CAD', 0, 1),
+            (1, '2026-01-02 10:00:00', 'buy', 'ZAG.TO', 10, 20, 'CAD', 0, 1)
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        positions = client.get("/api/v1/portfolios/1/positions")
+
+    assert positions.status_code == 200
+    by_asset = {item["asset_id"]: item for item in positions.json()}
+    assert by_asset["CASH.TO"]["allocation_class"] == "Money market"
+    assert by_asset["ZAG.TO"]["allocation_class"] == "Fixed income"
+
+
+def test_portfolio_positions_classify_cdr_ticker_aliases(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name)
+        VALUES (
+            'NOWS.TO',
+            'NOWS.TO',
+            'stock',
+            'CAD',
+            'ServiceNow Inc Canadian Depository Receipt (CAD Hedged)'
+        )
+        """
+    )
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'broker-ingest')")
+    db.conn.execute(
+        """
+        INSERT INTO txn(portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id)
+        VALUES (1, '2026-01-02 10:00:00', 'buy', 'NOWS.TO', 2, 50, 'CAD', 0, 1)
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        positions = client.get("/api/v1/portfolios/1/positions")
+
+    assert positions.status_code == 200
+    assert positions.json()[0]["allocation_class"] == "CDR"
+    assert positions.json()[0]["sector"] == "Information Technology"
+    assert positions.json()[0]["industry"] == "Software - Application"
+    assert positions.json()[0]["country"] == "US"
+
+
+def test_portfolio_positions_canonicalize_exposure_taxonomy_and_etf_maps(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, asset_subtype, ccy, name, sector, industry, country)
+        VALUES
+            ('MU', 'MU', 'stock', NULL, 'USD', 'Micron Technology, Inc.', 'Technology', 'Semiconductors', 'US'),
+            ('NVDA', 'NVDA', 'stock', NULL, 'USD', 'NVIDIA Corporation', 'Information Technology', 'Semiconductors', 'US'),
+            ('LLY', 'LLY', 'stock', NULL, 'USD', 'Eli Lilly and Company', 'Healthcare', 'Medical - Pharmaceuticals', 'US'),
+            ('VTI', 'VTI', 'etf', NULL, 'USD', 'Vanguard Total Stock Market ETF', 'Financial Services', NULL, 'US'),
+            ('VGT', 'VGT', 'etf', NULL, 'USD', 'Vanguard Information Technology ETF', 'Financial Services', NULL, 'US')
+        """
+    )
+    db.conn.execute(
+        """
+        CREATE TABLE etf_holding (
+            asset_id TEXT,
+            holding_symbol TEXT,
+            holding_name TEXT,
+            weight_pct DOUBLE,
+            sector TEXT,
+            country TEXT,
+            currency TEXT
+        )
+        """
+    )
+    db.conn.executemany(
+        """
+        INSERT INTO etf_holding(asset_id, holding_symbol, holding_name, weight_pct, sector, country, currency)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            ("VTI", "AAPL", "Apple", 55, "Technology", "United States", "USD"),
+            ("VTI", "SHOP", "Shopify", 45, "Technology", "Canada", "CAD"),
+        ],
+    )
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO txn(portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id)
+        VALUES
+            (1, '2026-01-02 10:00:00', 'buy', 'MU', 1, 100, 'USD', 0, 1),
+            (1, '2026-01-02 10:00:00', 'buy', 'NVDA', 1, 100, 'USD', 0, 1),
+            (1, '2026-01-02 10:00:00', 'buy', 'LLY', 1, 100, 'USD', 0, 1),
+            (1, '2026-01-02 10:00:00', 'buy', 'VTI', 1, 100, 'USD', 0, 1),
+            (1, '2026-01-02 10:00:00', 'buy', 'VGT', 1, 100, 'USD', 0, 1)
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        positions = client.get("/api/v1/portfolios/1/positions")
+
+    assert positions.status_code == 200
+    by_asset = {item["asset_id"]: item for item in positions.json()}
+    assert by_asset["MU"]["sector"] == "Information Technology"
+    assert by_asset["NVDA"]["sector"] == "Information Technology"
+    assert by_asset["LLY"]["sector"] == "Health Care"
+    assert by_asset["VTI"]["sector"] == "Broad market"
+    assert by_asset["VGT"]["sector"] == "Information Technology"
+    assert by_asset["VTI"]["country_exposure"] == {"CA": 0.45, "US": 0.55}
+    assert by_asset["VTI"]["sector_exposure"] == {"Information Technology": 1.0}
+
+
+def test_portfolio_position_delete_warns_for_broker_linked_holding(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy)
+        VALUES ('AAPL', 'AAPL', 'stock', 'USD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO broker_portfolio_position_map(
+            provider,
+            provider_account_id,
+            provider_position_id,
+            portfolio_id,
+            asset_id,
+            quantity,
+            book_cost,
+            currency
+        )
+        VALUES ('snaptrade', 'acct-1', 'pos-1', 1, 'AAPL', 2, 200, 'USD')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        positions = client.get("/api/v1/portfolios/1/positions")
+        delete = client.delete("/api/v1/portfolios/1/positions/AAPL")
+        after = client.get("/api/v1/portfolios/1/positions")
+
+    assert positions.status_code == 200
+    assert positions.json()[0]["broker_linked"] is True
+    assert positions.json()[0]["broker_account_count"] == 1
+    assert delete.status_code == 200
+    assert delete.json()["result"]["broker_linked"] is True
+    assert delete.json()["result"]["deleted_broker_mappings"] == 1
+    assert after.json() == []
+
+
+def test_portfolio_position_delete_allows_zero_broker_holding_cleanup(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy)
+        VALUES ('OLD', 'OLD', 'stock', 'USD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO broker_portfolio_position_map(
+            provider,
+            provider_account_id,
+            provider_position_id,
+            portfolio_id,
+            asset_id,
+            quantity,
+            book_cost,
+            currency
+        )
+        VALUES ('snaptrade', 'acct-1', 'pos-old', 1, 'OLD', 0, 0, 'USD')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        delete = client.delete("/api/v1/portfolios/1/positions/OLD")
+
+    db = DB(db_path)
+    remaining = db.conn.execute(
+        "SELECT COUNT(*) FROM broker_portfolio_position_map WHERE portfolio_id = 1 AND asset_id = 'OLD'"
+    ).fetchone()[0]
+    db.conn.close()
+
+    assert delete.status_code == 200
+    assert delete.json()["result"]["deleted_broker_mappings"] == 1
+    assert remaining == 0
+
+
+def test_asset_holdings_include_portfolio_context_and_returns(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name)
+        VALUES ('MU.TO', 'MU.TO', 'stock', 'CAD', 'Micron CDR')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO broker_portfolio_position_map(
+            provider,
+            provider_account_id,
+            provider_position_id,
+            portfolio_id,
+            asset_id,
+            quantity,
+            book_cost,
+            currency
+        )
+        VALUES ('snaptrade', 'acct-1', 'pos-mu', 1, 'MU.TO', 85, 464.10, 'CAD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO broker_position_snapshot(
+            provider,
+            provider_account_id,
+            provider_position_id,
+            as_of_date,
+            asset_id,
+            symbol,
+            quantity,
+            market_value,
+            currency
+        )
+        VALUES ('snaptrade', 'acct-1', 'pos-mu', '2026-01-03', 'MU.TO', 'MU.TO', 85, 595, 'CAD')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        holdings = client.get("/api/v1/assets/MU.TO/holdings")
+        delete = client.delete("/api/v1/portfolios/1/positions/MU.TO")
+        after = client.get("/api/v1/assets/MU.TO/holdings")
+
+    assert holdings.status_code == 200
+    payload = holdings.json()
+    assert payload[0]["portfolio_id"] == 1
+    assert payload[0]["portfolio_name"] == "Main"
+    assert payload[0]["quantity"] == 85
+    assert payload[0]["book_cost"] == 464.1
+    assert payload[0]["latest_price"] == 7
+    assert payload[0]["market_value"] == 595
+    assert round(payload[0]["total_return_percent"], 4) == 0.2821
+    assert payload[0]["broker_linked"] is True
+    assert delete.status_code == 200
+    assert after.json() == []
+
+
+def test_asset_activity_lists_broker_and_local_activity(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name)
+        VALUES ('MU.TO', 'MU.TO', 'stock', 'CAD', 'Micron CDR')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO broker_account(
+            provider,
+            provider_account_id,
+            provider_connection_id,
+            account_name,
+            account_type,
+            currency,
+            balance,
+            portfolio_id,
+            raw_json
+        )
+        VALUES ('snaptrade', 'acct-1', 'conn-1', 'TFSA', 'registered', 'CAD', 0, 1, '{}')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO broker_transaction(
+            provider,
+            provider_transaction_id,
+            provider_account_id,
+            trade_date,
+            txn_type,
+            asset_id,
+            symbol,
+            quantity,
+            price,
+            amount,
+            currency,
+            raw_json
+        )
+        VALUES
+            ('snaptrade', 'buy-mu', 'acct-1', '2026-01-02', 'BUY', 'MU.TO', 'MU.TO', 85, 5.46, -464.10, 'CAD', '{}'),
+            ('snaptrade', 'div-mu', 'acct-1', '2026-01-03', 'DIVIDEND', 'MU.TO', 'MU.TO', NULL, NULL, 12.50, 'CAD', '{}')
+        """
+    )
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO txn(
+            portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id
+        )
+        VALUES (1, '2026-01-04 10:00:00', 'sell', 'MU.TO', -5, 40, 'CAD', 0, 1)
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/assets/MU.TO/activity")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 3
+    assert [item["transaction_type"] for item in payload["items"]] == ["sell", "DIVIDEND", "BUY"]
+    assert payload["items"][0]["source"] == "local"
+    assert payload["items"][1]["source"] == "broker"
+    assert payload["items"][1]["cash_amount"] == 12.5
+    assert payload["items"][2]["portfolio_name"] == "Main"
+
+
+def test_portfolio_aggregate_and_delete(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        """
+        INSERT INTO portfolio(portfolio_id, portfolio_name)
+        VALUES (1, 'Main'), (2, 'Sandbox')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy)
+        VALUES ('AAPL', 'AAPL', 'stock', 'USD'), ('MSFT', 'MSFT', 'stock', 'USD')
+        """
+    )
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO txn(
+            portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id
+        )
+        VALUES
+            (1, '2026-01-02 10:00:00', 'buy', 'AAPL', 2, 100, 'USD', 0, 1),
+            (2, '2026-01-02 10:00:00', 'buy', 'MSFT', 1, 300, 'USD', 0, 1)
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        aggregate = client.get("/api/v1/portfolios/aggregate/overview")
+        delete = client.delete("/api/v1/portfolios/2")
+        listed = client.get("/api/v1/portfolios")
+        missing = client.get("/api/v1/portfolios/2/overview")
+
+    assert aggregate.status_code == 200
+    assert aggregate.json()["name"] == "All portfolios"
+    assert aggregate.json()["book_cost"] == 500
+    assert delete.status_code == 200
+    assert [item["portfolio_id"] for item in listed.json()] == [1]
+    assert missing.status_code == 404
+
+
+def test_overview_updates_include_movers_and_news(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name)
+        VALUES ('AAPL', 'AAPL', 'stock', 'USD', 'Apple Inc.')
+        """
+    )
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO txn(portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id)
+        VALUES (1, '2026-01-02 10:00:00', 'buy', 'AAPL', 2, 100, 'USD', 0, 1)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+        VALUES
+            ('AAPL', '2026-01-02', 100, 100, 'test'),
+            ('AAPL', '2026-01-03', 125, 125, 'test')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO news_article(article_id, source_name, provider, title, url, published_at, content_hash)
+        VALUES (1, 'Test Wire', 'test-news', 'Apple updates guidance', 'https://example.test/aapl', '2026-01-03 12:00:00', 'hash-aapl')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO news_article_asset_mention(article_id, asset_id, ticker)
+        VALUES (1, 'AAPL', 'AAPL')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/overview/updates")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_market_value"] == 250
+    assert payload["price_movers"][0]["symbol"] == "AAPL"
+    assert payload["price_movers"][0]["change_percent"] == 0.25
+    assert payload["news"][0]["title"] == "Apple updates guidance"
+    assert payload["news"][0]["symbol"] == "AAPL"
+
+
+def test_overview_updates_returns_all_price_movers(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    for index in range(9):
+        asset_id = f"T{index}"
+        db.conn.execute(
+            "INSERT INTO asset(asset_id, symbol, asset_type, ccy, name) VALUES (?, ?, 'stock', 'USD', ?)",
+            [asset_id, asset_id, f"Ticker {index}"],
+        )
+        db.conn.execute(
+            """
+            INSERT INTO txn(portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id)
+            VALUES (1, '2026-01-02 10:00:00', 'buy', ?, 1, 100, 'USD', 0, 1)
+            """,
+            [asset_id],
+        )
+        db.conn.execute(
+            """
+            INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+            VALUES
+                (?, '2026-01-02', 100, 100, 'test'),
+                (?, '2026-01-03', ?, ?, 'test')
+            """,
+            [asset_id, asset_id, 101 + index, 101 + index],
+        )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/overview/updates")
+
+    assert response.status_code == 200
+    assert response.json()["mover_count"] == 9
+    assert len(response.json()["price_movers"]) == 9
+
+
+def test_stock_rankings_rank_buy_and_sell_signals_from_stored_metrics(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    assets = [
+        ("BUYME", "BUYME", "Buy Momentum"),
+        ("SELLME", "SELLME", "Sell Momentum"),
+        ("FLAT", "FLAT", "Flat Holding"),
+    ]
+    for asset_id, symbol, name in assets:
+        db.conn.execute(
+            "INSERT INTO asset(asset_id, symbol, asset_type, ccy, name) VALUES (?, ?, 'stock', 'USD', ?)",
+            [asset_id, symbol, name],
+        )
+        db.conn.execute(
+            """
+            INSERT INTO txn(portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id)
+            VALUES (1, '2026-01-02 10:00:00', 'buy', ?, 1, 100, 'USD', 0, 1)
+            """,
+            [asset_id],
+        )
+    price_paths = {
+        "BUYME": [100 + index for index in range(70)],
+        "SELLME": [170 - index for index in range(70)],
+        "FLAT": [100 for _index in range(70)],
+    }
+    for asset_id, closes in price_paths.items():
+        for index, close in enumerate(closes):
+            db.conn.execute(
+                """
+                INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+                VALUES (?, DATE '2026-01-01' + CAST(? AS INTEGER), ?, ?, 'test')
+                """,
+                [asset_id, index, close, close],
+            )
+    db.conn.execute(
+        """
+        INSERT INTO stock_catalog(asset_id, symbol, exchange_code, ccy, name)
+        VALUES ('AAAACAT', 'AAAACAT', 'NYSE', 'USD', 'Catalog Only')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/v1/rankings/stocks?factor=share_price_momentum&universe=tracked&direction=buy"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["factor"] == "share_price_momentum"
+    assert payload["universe"] == "tracked"
+    assert payload["timeframe"] == "monthly"
+    assert "stored daily close momentum" in payload["methodology"]
+    by_symbol = {item["symbol"]: item for item in payload["items"]}
+    assert list(by_symbol)[0] == "BUYME"
+    assert by_symbol["BUYME"]["action"] in {"Buy", "Strong Buy"}
+    assert by_symbol["SELLME"]["action"] in {"Sell", "Strong Sell"}
+    assert by_symbol["BUYME"]["is_held"] is True
+    assert 0.7 <= by_symbol["BUYME"]["confidence"] < 1
+    assert by_symbol["BUYME"]["data_status"] == "complete"
+    assert [component["name"] for component in by_symbol["BUYME"]["components"]] == [
+        "Price trend",
+        "Risk",
+    ]
+    assert by_symbol["BUYME"]["components"][0]["available"] is True
+    assert by_symbol["BUYME"]["components"][1]["available"] is True
+
+    with TestClient(app) as client:
+        sell_response = client.get(
+            "/api/v1/rankings/stocks?factor=share_price_momentum&universe=tracked&direction=sell"
+        )
+
+    assert sell_response.status_code == 200
+    assert sell_response.json()["items"][0]["symbol"] == "SELLME"
+
+    with TestClient(app) as client:
+        all_response = client.get(
+            "/api/v1/rankings/stocks?factor=aggregate&universe=all&direction=buy&limit=100"
+        )
+
+    all_payload = all_response.json()
+    assert all_response.status_code == 200
+    catalog_row = next(item for item in all_payload["items"] if item["symbol"] == "AAAACAT")
+    assert catalog_row["is_tracked"] is False
+    assert catalog_row["data_status"] == "partial"
+    assert catalog_row["missing_inputs"] == [
+        (
+            "Needs at least two stored income statements with revenue or EPS inputs.; "
+            "Needs an earnings event with actual and estimated EPS or revenue."
+        )
+    ]
+    assert [component["name"] for component in catalog_row["components"]] == [
+        "Share price momentum",
+        "News sentiment",
+        "Earnings momentum",
+        "Institutional buying",
+    ]
+    assert all_payload["include_retail_sentiment"] is False
+    assert "Retail sentiment is excluded" in all_payload["methodology"]
+
+    with TestClient(app) as client:
+        retail_addon_response = client.get(
+            "/api/v1/rankings/stocks?factor=aggregate&universe=all&direction=buy&include_retail_sentiment=true&limit=100"
+        )
+
+    retail_addon_payload = retail_addon_response.json()
+    assert retail_addon_response.status_code == 200
+    retail_catalog_row = next(
+        item for item in retail_addon_payload["items"] if item["symbol"] == "AAAACAT"
+    )
+    assert retail_addon_payload["include_retail_sentiment"] is True
+    assert "small 10% social-attention add-on" in retail_addon_payload["methodology"]
+    assert [component["name"] for component in retail_catalog_row["components"]] == [
+        "Share price momentum",
+        "News sentiment",
+        "Earnings momentum",
+        "Institutional buying",
+        "Retail sentiment add-on",
+    ]
+
+
+def test_retail_sentiment_overview_lists_holdings_and_popular_social_names(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name)
+        VALUES
+            ('BUYME', 'BUYME', 'stock', 'USD', 'Buy Momentum'),
+            ('LOUD', 'LOUD', 'stock', 'USD', 'Crowd Favorite')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO txn(portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id)
+        VALUES (1, '2026-01-02 10:00:00', 'buy', 'BUYME', 2, 100, 'USD', 0, 1)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO ticker_sentiment_daily(
+            asset_id, ticker, date, retail_sentiment_score, reddit_post_count, x_post_count,
+            bullish_count, neutral_count, bearish_count, sentiment_momentum_1d, unusual_volume_flag
+        )
+        VALUES
+            ('BUYME', 'BUYME', CURRENT_DATE, 0.42, 6, 4, 8, 1, 1, 0.08, TRUE),
+            ('LOUD', 'LOUD', CURRENT_DATE, -0.37, 20, 12, 2, 3, 18, -0.12, FALSE)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO social_post(provider, source_post_id, source_name, title, url, published_at, score, comment_count)
+        VALUES ('reddit', 't3_buyme', 'r/stocks', '$BUYME breakout thread', 'https://reddit.test/buyme', now(), 15, 6)
+        """
+    )
+    post_id = db.conn.execute(
+        "SELECT post_id FROM social_post WHERE source_post_id = 't3_buyme'"
+    ).fetchone()[0]
+    db.conn.execute(
+        """
+        INSERT INTO social_post_asset_mention(post_id, asset_id, ticker, relevance_score, mention_reason)
+        VALUES (?, 'BUYME', 'BUYME', 1.0, 'cashtag')
+        """,
+        [post_id],
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/retail-sentiment?limit=10")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "social-attention layer" in payload["methodology"]
+    assert payload["summary"]["holding_count"] == 1
+    assert payload["summary"]["holding_with_sentiment_count"] == 1
+    assert payload["evidence"]["action_eligibility"] == "blocked"
+    assert "configured Reddit or X provider" in payload["evidence"]["missing_inputs"]
+    holding = payload["holdings"][0]
+    assert holding["symbol"] == "BUYME"
+    assert holding["sentiment_label"] == "Strongly bullish"
+    assert holding["portfolio_names"] == ["Main"]
+    assert holding["latest_posts"][0]["title"] == "$BUYME breakout thread"
+    assert holding["evidence"]["action_eligibility"] == "blocked"
+    popular_symbols = [item["symbol"] for item in payload["popular"]]
+    assert popular_symbols[0] == "LOUD"
+
+
+def test_holding_signals_returns_current_holding_factor_grades_without_estimates(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (2, 'Other')")
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name, mkt_cap)
+        VALUES
+            ('BUYME', 'BUYME', 'stock', 'USD', 'Buy Momentum', 1000),
+            ('OTH', 'OTH', 'stock', 'USD', 'Other Holding', 1000)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO txn(portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id)
+        VALUES
+            (1, '2026-01-02 10:00:00', 'buy', 'BUYME', 1, 100, 'USD', 0, 1),
+            (2, '2026-01-02 10:00:00', 'buy', 'OTH', 1, 100, 'USD', 0, 1)
+        """
+    )
+    for index in range(70):
+        close = 100 + index
+        db.conn.execute(
+            """
+            INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+            VALUES
+                ('BUYME', DATE '2026-01-01' + CAST(? AS INTEGER), ?, ?, 'test'),
+                ('OTH', DATE '2026-01-01' + CAST(? AS INTEGER), ?, ?, 'test')
+            """,
+            [index, close, close, index, close, close],
+        )
+    db.conn.execute(
+        """
+        INSERT INTO financial_statement(asset_id, statement_type, year, quarter, period_end_date, data_json, source)
+        VALUES
+            ('BUYME', 'income', 2025, 4, '2025-10-02', '{"revenue":800,"grossProfit":420,"operatingIncome":160,"netIncome":100,"eps":1.0,"ebitda":200}', 'test'),
+            ('BUYME', 'income', 2026, 1, '2026-01-02', '{"revenue":1000,"grossProfit":600,"operatingIncome":300,"netIncome":200,"eps":2.0,"ebitda":360,"customerConcentration":30,"revenueConcentration":35}', 'test'),
+            ('BUYME', 'balance', 2026, 1, '2026-01-02', '{"cashAndCashEquivalents":150,"totalDebt":50,"totalCurrentAssets":300,"totalCurrentLiabilities":100,"totalStockholdersEquity":500}', 'test'),
+            ('BUYME', 'cashflow', 2026, 1, '2026-01-02', '{"freeCashFlow":120,"stockBasedCompensation":20,"commonStockRepurchased":-30}', 'test')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO earnings_calendar_event(asset_id, earnings_date, eps_estimated, eps_actual, revenue_estimated, revenue_actual, source)
+        VALUES ('BUYME', '2026-02-01', 1.8, 2.0, 950, 1000, 'test')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO ticker_sentiment_daily(
+            asset_id, ticker, date, retail_sentiment_score, news_sentiment_score,
+            blended_sentiment_score, reddit_post_count, x_post_count, article_count,
+            sentiment_momentum_1d, sentiment_momentum_7d, sentiment_momentum_30d
+        )
+        VALUES ('BUYME', 'BUYME', CURRENT_DATE, 0.4, 0.5, 0.45, 3, 2, 4, 0.05, 0.12, 0.2)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO institutional_buying_daily(asset_id, ticker, date, net_flow_score, accumulation_score, volume_ratio, source)
+        VALUES ('BUYME', 'BUYME', CURRENT_DATE, 35, 45, 1.4, 'test')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/holdings/signals?timeframe=1m&portfolio_id=1")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["timeframe"] == "1m"
+    assert "Kiviat grades use stored factor inputs" in payload["methodology"]
+    assert len(payload["items"]) == 1
+    item = payload["items"][0]
+    assert item["symbol"] == "BUYME"
+    assert item["grade"] in {"A", "B", "C", "D", "F"}
+    components = {component["name"]: component for component in item["components"]}
+    assert list(components) == [
+        "Value",
+        "Growth",
+        "Quality",
+        "Profitability",
+        "Financial strength",
+        "Momentum",
+        "Sentiment",
+        "Ownership",
+    ]
+    assert components["Value"]["available"] is True
+    assert components["Growth"]["available"] is True
+    assert components["Quality"]["available"] is True
+    assert components["Profitability"]["available"] is True
+    assert components["Financial strength"]["available"] is True
+    assert components["Momentum"]["available"] is True
+    assert components["Sentiment"]["available"] is True
+    assert components["Ownership"]["available"] is True
+    assert components["Growth"]["grade"] in {"A", "B"}
+
+    db = DB(db_path)
+    estimate_count = db.conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM asset_quote_daily
+        WHERE ing_source = 'ranking_local_estimate'
+        """
+    ).fetchone()[0]
+    db.conn.close()
+    assert estimate_count == 0
+
+
+def test_stock_ranking_snapshot_refresh_persists_current_scores(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name, track)
+        VALUES ('AAPL', 'AAPL', 'stock', 'USD', 'Apple Inc.', TRUE)
+        """
+    )
+    for index in range(70):
+        db.conn.execute(
+            """
+            INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+            VALUES ('AAPL', DATE '2026-01-01' + CAST(? AS INTEGER), ?, ?, 'test')
+            """,
+            [index, 100 + index, 100 + index],
+        )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/rankings/stocks/snapshots",
+            json={"factor": "share_price_momentum", "universe": "tracked", "limit": 10},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["factor"] == "share_price_momentum"
+    assert payload["refreshed_count"] == 1
+
+    db = DB(db_path)
+    row = db.conn.execute(
+        """
+        SELECT factor, universe, score, action, data_status, components_json
+        FROM stock_ranking_snapshot
+        WHERE asset_id = 'AAPL'
+        """
+    ).fetchone()
+    db.conn.close()
+    assert row[0] == "share_price_momentum"
+    assert row[1] == "tracked"
+    assert row[2] > 0
+    assert row[3] in {"Strong Buy", "Buy"}
+    assert row[4] == "complete"
+    assert "Price trend" in row[5]
+
+
+def test_add_catalog_stock_to_watchlist_creates_untracked_asset(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute(
+        """
+        INSERT INTO stock_catalog(asset_id, symbol, exchange_code, ccy, name)
+        VALUES ('CATONLY', 'CATONLY', 'NASDAQ', 'USD', 'Catalog Only')
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.post("/api/v1/watchlist/assets/CATONLY")
+        rankings = client.get(
+            "/api/v1/rankings/stocks?factor=aggregate&universe=tracked&direction=buy"
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "asset_id": "CATONLY",
+        "symbol": "CATONLY",
+        "is_watchlisted": True,
+    }
+    assert any(
+        item["asset_id"] == "CATONLY" and item["is_watchlisted"]
+        for item in rankings.json()["items"]
+    )
+
+    db = DB(db_path)
+    asset = db.conn.execute(
+        "SELECT asset_id, symbol, track FROM asset WHERE asset_id = 'CATONLY'"
+    ).fetchone()
+    watchlist = db.conn.execute(
+        "SELECT asset_id, is_active, source FROM watchlist_ticker WHERE asset_id = 'CATONLY'"
+    ).fetchone()
+    db.conn.close()
+    assert asset == ("CATONLY", "CATONLY", False)
+    assert watchlist == ("CATONLY", True, "manual")
+
+
+def test_portfolio_positions_normalize_object_like_currency_code(tmp_path):
+    db_path = tmp_path / "api.db"
+    app = create_app(db_path)
+    db = DB(db_path)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Main')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name)
+        VALUES ('CADHOLD', 'CADHOLD', 'stock', '{''CODE'': ''CAD'', ''NAME'': ''CANADIAN DOLLAR''}', 'CAD Holding')
+        """
+    )
+    db.conn.execute("INSERT INTO import_batch(batch_id, batch_type) VALUES (1, 'manual-entry')")
+    db.conn.execute(
+        """
+        INSERT INTO txn(portfolio_id, time_stamp, txn_type, asset_id, qty, price, ccy, fee_amt, batch_id)
+        VALUES (1, '2026-01-02 10:00:00', 'buy', 'CADHOLD', 1, 100, 'CAD', 0, 1)
+        """
+    )
+    db.conn.close()
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/portfolios/1/positions")
+
+    assert response.status_code == 200
+    assert response.json()[0]["currency"] == "CAD"

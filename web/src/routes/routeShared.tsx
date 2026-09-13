@@ -1,0 +1,138 @@
+import { ChartFrame as SharedChartFrame, SegmentedControl } from "@prool-ui/react";
+import { AlertTriangle, ArrowLeft, ArrowRight, BarChart3, Info, LineChart, RefreshCw, SearchX } from "lucide-react";
+import type { CSSProperties, ReactNode } from "react";
+import type { EvidenceDisplay } from "../api";
+import type { HelpItem } from "./routeTypes";
+
+export function HelpDisclosure({ title, items, note }: { title: string; items: HelpItem[]; note?: string }) {
+  return (
+    <details className="info-popover">
+      <summary aria-label={`${"Explain " + title}`}>
+        <Info size={15} />
+      </summary>
+      <div className="info-panel">
+        <strong>{title}</strong>
+        <dl>
+          {items.map((item) => (
+            <div key={item.term}>
+              <dt>{item.term}</dt>
+              <dd>{item.detail}</dd>
+            </div>
+          ))}
+        </dl>
+        {note ? <p>{note}</p> : null}
+      </div>
+    </details>
+  );
+}
+
+export function Metric({ icon, label, value, detail, positive }: { icon: ReactNode; label: string; value: string; detail?: string; positive?: boolean }) {
+  const tone = positive == null ? "" : positive ? " positive" : " negative";
+  return <article className={`metric card${tone}`}><div className="metric-icon">{icon}</div><p>{label}</p><strong>{value}</strong>{detail && <span>{detail}</span>}</article>;
+}
+
+export function Loading({ compact = false }: { compact?: boolean }) {
+  return <div className={compact ? "loading compact" : "loading"} role="status" aria-live="polite"><RefreshCw /><span>Loading dashboard data</span></div>;
+}
+
+export function ErrorPanel({ error }: { error: Error }) {
+  return <div className="error-panel" role="alert"><AlertTriangle size={20} /><strong>Unable to load data</strong><span>{error.message}</span></div>;
+}
+
+export function EmptyRow({ text }: { text: string }) {
+  return <div className="empty-row"><SearchX size={18} /><span>{text}</span></div>;
+}
+
+export function EvidenceBadge({ evidence, compact = false }: { evidence?: EvidenceDisplay | null; compact?: boolean }) {
+  if (!evidence) return <span className="evidence-badge unknown">Evidence unknown</span>;
+  const state = evidence.action_eligibility;
+  const label = evidence.source_kind === "fixture"
+    ? "Sample only"
+    : state === "blocked"
+      ? `Not decision eligible · ${evidence.freshness_state}`
+      : `${evidence.freshness_state} · ${state}`;
+  const title = [
+    evidence.source_name ? `Source: ${evidence.source_name}` : "Source unavailable",
+    evidence.observed_at ? `Observed: ${new Date(evidence.observed_at).toLocaleString()}` : "Observation time unavailable",
+    evidence.coverage_state !== "complete" ? `Coverage: ${evidence.coverage_state}` : "",
+  ].filter(Boolean).join(". ");
+  return <span className={`evidence-badge ${state} ${compact ? "compact" : ""}`} title={title}>{label}</span>;
+}
+
+export function MetricLine({ label, value }: { label: string; value: string }) {
+  return <p className="metric-line"><span>{label}</span><b>{value}</b></p>;
+}
+
+export function Signal({ label, value }: { label: string; value: string }) {
+  return <div className="signal"><span>{label}</span><strong>{value}</strong></div>;
+}
+
+export function DataList({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <div className={`data-list ${className}`.trim()}>{children}</div>;
+}
+
+export function ScoreGauge({ value, label, detail }: { value: number | null | undefined; label: string; detail?: string }) {
+  const normalized = value == null ? 0 : Math.max(0, Math.min(100, value));
+  const style = { "--score": `${normalized}%` } as CSSProperties;
+  return (
+    <div className="score-gauge" style={style} aria-label={`${label}${detail ? `, ${detail}` : ""}`}>
+      <div>
+        <strong>{label}</strong>
+        {detail ? <span>{detail}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+export function TabBar<T extends string>({ tabs, selected, onSelect, label }: { tabs: { value: T; label: string }[]; selected: T; onSelect: (value: T) => void; label: string }) {
+  return <div className="tab-bar" role="tablist" aria-label={label}>{tabs.map((tab) => <button role="tab" aria-selected={selected === tab.value} className={selected === tab.value ? "active" : ""} onClick={() => onSelect(tab.value)} key={tab.value}>{tab.label}</button>)}</div>;
+}
+
+export function RangeSelector({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const ranges = ["1D", "1W", "1M", "1Y", "YTD", "5Y"] as const;
+  return <SegmentedControl
+    className="segmented-control"
+    label="Performance range"
+    options={ranges.map((item) => ({ value: item, label: item }))}
+    value={value.toUpperCase()}
+    onChange={onChange}
+  />;
+}
+
+export function ChartTypeToggle({ value, onChange }: { value: "line" | "bar"; onChange: (value: "line" | "bar") => void }) {
+  return <div className="segmented-control compact" aria-label="Chart type">
+    <button className={value === "line" ? "active" : ""} onClick={() => onChange("line")} title="Line chart"><LineChart size={14} /><span>Line</span></button>
+    <button className={value === "bar" ? "active" : ""} onClick={() => onChange("bar")} title="Bar chart"><BarChart3 size={14} /><span>Bar</span></button>
+  </div>;
+}
+
+export function ChartFrame({ eyebrow, title, detail, tools, children, className = "", id, tabIndex }: { eyebrow: string; title: string; detail?: string; tools?: ReactNode; children: ReactNode; className?: string; id?: string; tabIndex?: number }) {
+  return (
+    <SharedChartFrame
+      className={`card chart-card chart-frame ${className}`.trim()}
+      id={id}
+      tabIndex={tabIndex}
+      eyebrow={eyebrow}
+      title={title}
+      description={tools ? undefined : detail}
+      actions={tools ? <div className="chart-controls">{tools}</div> : undefined}
+      footer={tools && detail ? detail : undefined}
+    >
+      {children}
+    </SharedChartFrame>
+  );
+}
+
+export function Pager({ total, limit, offset, onChange }: { total: number; limit: number; offset: number; onChange: (offset: number) => void }) {
+  const nextOffset = offset + limit;
+  const previousOffset = Math.max(offset - limit, 0);
+  const start = total ? offset + 1 : 0;
+  const end = Math.min(offset + limit, total);
+  return <div className="pager">
+    <span>{start}-{end} of {total}</span>
+    <div className="actions">
+      <button onClick={() => onChange(previousOffset)} disabled={offset <= 0}><ArrowLeft size={14} />Previous</button>
+      <button onClick={() => onChange(nextOffset)} disabled={nextOffset >= total}>Next<ArrowRight size={14} /></button>
+    </div>
+  </div>;
+}

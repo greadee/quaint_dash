@@ -1,0 +1,48 @@
+flowchart LR
+  Contracts["contracts"]
+  Portfolio["portfolio"]
+  Holdings["holdings"]
+  Assets["asset research"]
+  Market["market prices"]
+  Fundamentals["fundamentals"]
+  Valuation["valuation"]
+  Analytics["performance/risk analytics"]
+  Bench["benchmarking"]
+  Compare["comparisons"]
+  News["news"]
+  Sentiment["sentiment"]
+  Strength["business strength"]
+  Ops["operations/data quality"]
+  AI["AI insights"]
+  Infra["infrastructure adapters"]
+  API["API adapter"]
+  UI["platform UI"]
+
+  UI --> API --> Contracts
+  API --> Portfolio
+  API --> Assets
+  API --> Compare
+  API --> Ops
+  Portfolio --> Holdings
+  Portfolio --> Market
+  Portfolio --> Analytics
+  Holdings --> Assets
+  Holdings --> Strength
+  Assets --> Market
+  Assets --> Fundamentals
+  Assets --> News
+  Fundamentals --> Valuation
+  Fundamentals --> Strength
+  Analytics --> Market
+  Bench --> Market
+  Compare --> Assets
+  Compare --> Portfolio
+  Compare --> Bench
+  Compare --> Strength
+  News --> Sentiment
+  AI --> Contracts
+  AI --> News
+  AI --> Assets
+  Ops --> Infra
+  Infra --> Contracts
+

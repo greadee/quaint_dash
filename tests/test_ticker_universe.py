@@ -166,6 +166,78 @@ def test_stream_subscriptions_fallback_to_asset_id_when_symbol_is_null():
     assert subscriptions[0].symbol == "MSFT"
 
 
+def test_stream_subscriptions_include_cdr_and_underlying_when_cdr_is_held():
+    conn = make_new_universe_conn()
+    conn.execute("ALTER TABLE asset ADD COLUMN asset_subtype TEXT")
+    conn.execute("ALTER TABLE asset ADD COLUMN name TEXT")
+    conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, exchange_code, asset_type, asset_subtype, name, track)
+        VALUES ('AMD.TO', 'AMD.TO', 'XTSE', 'stock', 'cdr', 'Advanced Micro Devices CDR', TRUE)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'AMD.TO', TRUE, 'position')
+        """
+    )
+
+    subscriptions = TickerUniverseRepository(conn).stream_subscriptions()
+
+    assert [(item.symbol, item.asset_id, item.source_scope) for item in subscriptions] == [
+        ("AMD", "AMD", "portfolio_underlying"),
+        ("AMD.TO", "AMD.TO", "portfolio"),
+    ]
+    assert TickerUniverseRepository(conn).earnings_asset_ids() == ["AMD"]
+
+
+def test_stream_subscriptions_do_not_duplicate_underlying_when_it_is_held_directly():
+    conn = make_new_universe_conn()
+    conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, exchange_code, asset_type, track)
+        VALUES ('AMD', 'AMD', 'XNAS', 'stock', TRUE)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'AMD', TRUE, 'position')
+        """
+    )
+
+    subscriptions = TickerUniverseRepository(conn).stream_subscriptions()
+
+    assert [(item.symbol, item.asset_id, item.source_scope) for item in subscriptions] == [
+        ("AMD", "AMD", "portfolio"),
+    ]
+
+
+def test_known_cdr_symbol_resolves_underlying_without_descriptive_metadata():
+    conn = make_new_universe_conn()
+    conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, exchange_code, asset_type, track)
+        VALUES ('BKNG.TO', 'BKNG.TO', 'XTSE', 'stock', TRUE)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'BKNG.TO', TRUE, 'position')
+        """
+    )
+
+    repo = TickerUniverseRepository(conn)
+
+    assert repo.earnings_asset_ids() == ["BKNG"]
+    assert [(item.symbol, item.source_scope) for item in repo.stream_subscriptions()] == [
+        ("BKNG", "portfolio_underlying"),
+        ("BKNG.TO", "portfolio"),
+    ]
+
+
 def test_sync_portfolio_tickers_from_positions_handles_qty_and_ignores_zero_positions():
     conn = make_new_universe_conn()
     conn.execute(
@@ -193,6 +265,238 @@ def test_sync_portfolio_tickers_from_positions_handles_qty_and_ignores_zero_posi
         (1, "AAPL", True, "position"),
         (2, "SPY", True, "position"),
     ]
+
+
+def test_sync_portfolio_tickers_from_positions_includes_broker_position_maps():
+    conn = make_new_universe_conn()
+    conn.execute(
+        """
+        CREATE TABLE broker_portfolio_position_map (
+            provider TEXT,
+            provider_account_id TEXT,
+            provider_position_id TEXT,
+            portfolio_id BIGINT,
+            asset_id TEXT,
+            quantity DOUBLE,
+            book_cost DOUBLE
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO broker_portfolio_position_map(
+            provider,
+            provider_account_id,
+            provider_position_id,
+            portfolio_id,
+            asset_id,
+            quantity,
+            book_cost
+        )
+        VALUES
+            ('snaptrade', 'acct-1', 'pos-aapl', 1, 'AAPL', 10, 100),
+            ('snaptrade', 'acct-1', 'pos-msft', 1, 'MSFT', 0, 0),
+            ('snaptrade', 'acct-2', 'pos-spy', 2, 'SPY', 3, 300)
+        """
+    )
+
+    count = TickerUniverseRepository(conn).sync_portfolio_tickers_from_positions()
+
+    rows = conn.execute(
+        """
+        SELECT portfolio_id, asset_id, is_active, source
+        FROM portfolio_ticker
+        ORDER BY portfolio_id, asset_id
+        """
+    ).fetchall()
+
+    assert count == 2
+    assert rows == [
+        (1, "AAPL", True, "position"),
+        (2, "SPY", True, "position"),
+    ]
+
+
+def test_sync_portfolio_tickers_from_positions_deactivates_unheld_portfolio_tickers():
+    conn = make_new_universe_conn()
+    conn.execute(
+        """
+        INSERT INTO position(portfolio_id, asset_id, qty)
+        VALUES (1, 'AAPL', 10)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES
+            (1, 'AAPL', FALSE, 'position'),
+            (1, 'OLD', TRUE, 'position'),
+            (2, 'SPY', TRUE, 'position')
+        """
+    )
+
+    count = TickerUniverseRepository(conn).sync_portfolio_tickers_from_positions()
+
+    rows = conn.execute(
+        """
+        SELECT portfolio_id, asset_id, is_active
+        FROM portfolio_ticker
+        ORDER BY portfolio_id, asset_id
+        """
+    ).fetchall()
+
+    assert count == 1
+    assert rows == [
+        (1, "AAPL", True),
+        (1, "OLD", False),
+        (2, "SPY", False),
+    ]
+
+
+def test_sync_does_not_reactivate_historical_transactions_when_positions_exist():
+    conn = make_new_universe_conn()
+    conn.execute(
+        """
+        CREATE TABLE txn (
+            portfolio_id BIGINT,
+            asset_id TEXT,
+            txn_type TEXT,
+            qty DOUBLE
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO position(portfolio_id, asset_id, qty)
+        VALUES (1, 'AAPL', 10)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO txn(portfolio_id, asset_id, txn_type, qty)
+        VALUES (1, 'OLD', 'buy', 25)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'OLD', TRUE, 'position')
+        """
+    )
+
+    TickerUniverseRepository(conn).sync_portfolio_tickers_from_positions()
+
+    assert conn.execute(
+        "SELECT is_active FROM portfolio_ticker WHERE asset_id = 'OLD'"
+    ).fetchone() == (False,)
+
+
+def test_sync_retires_future_work_but_preserves_historical_data():
+    conn = make_new_universe_conn()
+    conn.execute(
+        """
+        CREATE TABLE ingestion_job (
+            job_id BIGINT PRIMARY KEY,
+            asset_id TEXT,
+            status TEXT,
+            error_message TEXT,
+            terminal_reason TEXT,
+            lease_owner TEXT,
+            leased_at TIMESTAMP,
+            lease_expires_at TIMESTAMP,
+            completed_at TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT now()
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE fundamental_subscription (
+            asset_id TEXT PRIMARY KEY,
+            is_active BOOLEAN,
+            next_refresh_at TIMESTAMP,
+            subscription_source TEXT,
+            updated_at TIMESTAMP DEFAULT now()
+        )
+        """
+    )
+    conn.execute("CREATE TABLE stored_quote(asset_id TEXT, price DOUBLE)")
+    conn.execute("CREATE TABLE stored_transaction(asset_id TEXT, qty DOUBLE)")
+    conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'OLD', TRUE, 'position')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO ingestion_job(job_id, asset_id, status)
+        VALUES (1, 'OLD', 'pending'), (2, 'OLD', 'done')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO fundamental_subscription(
+            asset_id, is_active, next_refresh_at, subscription_source
+        )
+        VALUES ('OLD', TRUE, now(), 'ticker_universe')
+        """
+    )
+    conn.execute("INSERT INTO stored_quote VALUES ('OLD', 42)")
+    conn.execute("INSERT INTO stored_transaction VALUES ('OLD', 25)")
+
+    TickerUniverseRepository(conn).sync_portfolio_tickers_from_positions()
+
+    assert conn.execute(
+        "SELECT job_id, status FROM ingestion_job ORDER BY job_id"
+    ).fetchall() == [(1, "superseded"), (2, "done")]
+    assert conn.execute(
+        "SELECT is_active FROM fundamental_subscription WHERE asset_id = 'OLD'"
+    ).fetchone() == (False,)
+    assert conn.execute("SELECT * FROM stored_quote").fetchall() == [("OLD", 42.0)]
+    assert conn.execute("SELECT * FROM stored_transaction").fetchall() == [("OLD", 25.0)]
+
+
+def test_sync_keeps_future_work_when_asset_remains_watchlisted():
+    conn = make_new_universe_conn()
+    conn.execute(
+        """
+        CREATE TABLE ingestion_job (
+            job_id BIGINT PRIMARY KEY,
+            asset_id TEXT,
+            status TEXT,
+            error_message TEXT,
+            terminal_reason TEXT,
+            lease_owner TEXT,
+            leased_at TIMESTAMP,
+            lease_expires_at TIMESTAMP,
+            completed_at TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT now()
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'OLD', TRUE, 'position')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO watchlist_ticker(asset_id, is_active, source)
+        VALUES ('OLD', TRUE, 'manual')
+        """
+    )
+    conn.execute("INSERT INTO ingestion_job(job_id, asset_id, status) VALUES (1, 'OLD', 'pending')")
+
+    TickerUniverseRepository(conn).sync_portfolio_tickers_from_positions()
+
+    assert conn.execute(
+        "SELECT is_active FROM portfolio_ticker WHERE asset_id = 'OLD'"
+    ).fetchone() == (False,)
+    assert conn.execute(
+        "SELECT status FROM ingestion_job WHERE job_id = 1"
+    ).fetchone() == ("pending",)
 
 
 def test_legacy_position_and_watchlist_asset_fallbacks_still_work_without_new_tables():

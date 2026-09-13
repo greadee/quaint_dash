@@ -351,12 +351,18 @@ def _account_from_snaptrade(row: dict[str, Any], provider_connection_id: str) ->
     balance = _first_number(
         _number_value(row, "balance"),
         _nested_number(row, "balance", "total"),
+        _nested_number(_dict_value(row, "balance"), "total", "amount"),
+        _nested_number(_dict_value(row, "balance"), "total", "value"),
         _nested_number(row, "total_value", "value"),
+        _number_value(row, "totalValue"),
+        _number_value(row, "accountValue"),
+        _number_value(row, "netLiquidationValue"),
     )
     currency = (
-        _str_value(row, "currency")
-        or _nested_str(row, "balance", "currency")
-        or _nested_str(row, "total_value", "currency")
+        _currency_value(row.get("currency"))
+        or _nested_currency(row, "balance", "currency")
+        or _nested_currency(_dict_value(row, "balance"), "total", "currency")
+        or _nested_currency(row, "total_value", "currency")
     )
     return BrokerAccount(
         provider=SNAPTRADE_PROVIDER,
@@ -378,6 +384,8 @@ def _position_from_snaptrade(row: dict[str, Any], provider_account_id: str) -> B
         _number_value(row, "market_value"),
         _number_value(row, "marketValue"),
         _number_value(row, "value"),
+        _number_value(row, "total_value"),
+        _number_value(row, "totalValue"),
     )
     if market_value is None and quantity is not None:
         price = _number_value(row, "price")
@@ -390,7 +398,7 @@ def _position_from_snaptrade(row: dict[str, Any], provider_account_id: str) -> B
         description=_str_value(row, "description") or _nested_str(row, "symbol", "description"),
         quantity=quantity,
         market_value=market_value,
-        currency=_str_value(row, "currency") or _nested_str(row, "symbol", "currency"),
+        currency=_currency_value(row.get("currency")) or _nested_currency(row, "symbol", "currency"),
         as_of_date=_date_value(row.get("as_of_date") or row.get("last_updated")),
         raw_payload=row,
     )
@@ -416,19 +424,31 @@ def _transaction_from_snaptrade(row: dict[str, Any], provider_account_id: str) -
 
 
 def _symbol_from_row(row: dict[str, Any]) -> str | None:
-    symbol = row.get("symbol")
+    symbol = _value(row, "symbol")
     if isinstance(symbol, dict):
         return _str_value(symbol, "symbol") or _str_value(symbol, "ticker") or _str_value(symbol, "raw_symbol")
     return _str_value(row, "symbol") or _str_value(row, "ticker")
 
 
+def _value(row: dict[str, Any], key: str) -> Any:
+    if key in row:
+        return row[key]
+    upper = key.upper()
+    if upper in row:
+        return row[upper]
+    lower = key.lower()
+    if lower in row:
+        return row[lower]
+    return None
+
+
 def _dict_value(row: dict[str, Any], key: str) -> dict[str, Any]:
-    value = row.get(key)
+    value = _value(row, key)
     return value if isinstance(value, dict) else {}
 
 
 def _str_value(row: dict[str, Any], key: str) -> str | None:
-    value = row.get(key)
+    value = _value(row, key)
     if value is None:
         return None
     return str(value)
@@ -438,12 +458,29 @@ def _nested_str(row: dict[str, Any], parent: str, child: str) -> str | None:
     return _str_value(_dict_value(row, parent), child)
 
 
-def _number_value(row: dict[str, Any], key: str) -> float | None:
-    value = row.get(key)
+def _currency_value(value: Any) -> str | None:
     if value is None:
         return None
     if isinstance(value, dict):
-        value = value.get("value")
+        return (
+            _str_value(value, "code")
+            or _str_value(value, "currency")
+            or _str_value(value, "symbol")
+            or _str_value(value, "name")
+        )
+    return str(value)
+
+
+def _nested_currency(row: dict[str, Any], parent: str, child: str) -> str | None:
+    return _currency_value(_value(_dict_value(row, parent), child))
+
+
+def _number_value(row: dict[str, Any], key: str) -> float | None:
+    value = _value(row, key)
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        value = value.get("value", value.get("amount"))
     try:
         return float(value)
     except (TypeError, ValueError):

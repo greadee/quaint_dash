@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.25"]
+requires = ["hatchling==1.32.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -15,24 +15,31 @@ authors = [
 ]
 
 dependencies = [
-  "duckdb>=1.0.0",
+  "duckdb==1.5.5",
+  "fastapi>=0.115.0",
   "python-dotenv",
-  "yfinance",  
+  "yfinance",
+  "lxml",
   "requests>=2.32.0",
   "pandas>=2.0.0",
   "pandas-market-calendars>=4.4.0",
+  "uvicorn>=0.30.0",
   "websocket-client>=1.8.0",
 ]
 
 [project.optional-dependencies]
 dev = [
+  "editables==0.5",
+  "hatchling==1.32.0",
   "pytest>=8.0.0",
   "pytest-cov>=5.0.0",
-  "ruff>=0.5.0",
+  "httpx2>=2.0.0",
+  "ruff==0.15.15",
 ]
 
 [project.scripts]
 dashboard = "dashboard.cli:main"
+dashboard-web = "dashboard.api.app:main"
 
 [project.urls]
 Home-page = "https://github.com/greadee/quaint_dash"

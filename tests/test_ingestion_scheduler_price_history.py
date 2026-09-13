@@ -17,6 +17,8 @@ import pytest
 
 from dashboard.db.db_conn import DB, init_db
 from dashboard.models.storage import DashboardManager
+from dashboard.ingestion.price_history.db.ingestion_repo import PriceHistoryIngestionRepository
+from dashboard.ingestion.price_history.models import DividendEventRow, SplitEventRow
 from dashboard.ingestion.price_history.models import PriceDailyRow
 from dashboard.ingestion.price_history.service import PriceHistoryIngestionService
 
@@ -144,6 +146,128 @@ def insert_asset(manager: DashboardManager, asset_id: str, ccy: str = "CAD"):
     )
 
 
+def test_market_job_ids_stay_above_existing_rows(manager):
+    insert_asset(manager, "BN.TO")
+    manager.conn.execute(
+        """
+        INSERT INTO ingestion_job(
+            job_id, asset_id, domain, job_type, dataset, status, priority,
+            requested_start_date, requested_end_date, attempt_count, error_message,
+            created_at, updated_at
+        )
+        VALUES (100, 'BN.TO', 'market', 'refresh', 'price_daily', 'done', 100, NULL, NULL, 0, NULL, now(), now())
+        """
+    )
+    init_db(manager.db)
+
+    repo = PriceHistoryIngestionRepository(manager.conn)
+
+    assert repo.next_job_id() == 101
+
+
+def test_market_claim_skips_obsolete_pending_jobs_with_newer_done_job(manager):
+    insert_asset(manager, "BN.TO")
+    manager.conn.execute(
+        """
+        INSERT INTO ingestion_job(
+            job_id, asset_id, domain, job_type, dataset, status, priority,
+            requested_start_date, requested_end_date, attempt_count, error_message,
+            created_at, updated_at
+        )
+        VALUES
+            (10, 'BN.TO', 'market', 'refresh', 'dividends', 'pending', 90, DATE '2026-01-01', DATE '2026-01-02', 1, NULL, TIMESTAMP '2026-01-01 00:00:00', now()),
+            (11, 'BN.TO', 'market', 'refresh', 'dividends', 'done', 90, DATE '2026-01-01', DATE '2026-01-02', 1, NULL, TIMESTAMP '2026-01-02 00:00:00', now()),
+            (12, 'BN.TO', 'market', 'refresh', 'splits', 'pending', 80, DATE '2026-01-01', DATE '2026-01-02', 0, NULL, TIMESTAMP '2026-01-03 00:00:00', now())
+        """
+    )
+
+    repo = PriceHistoryIngestionRepository(manager.conn)
+    job = repo.claim_next_pending_job()
+
+    assert job is not None
+    assert job.job_id == 12
+    rows = manager.conn.execute(
+        """
+        SELECT job_id, status
+        FROM ingestion_job
+        WHERE job_id IN (10, 12)
+        ORDER BY job_id
+        """
+    ).fetchall()
+    assert rows == [(10, "superseded"), (12, "running")]
+
+
+def test_market_claim_skips_pending_jobs_already_satisfied_by_sync_state(manager):
+    insert_asset(manager, "BN.TO")
+    manager.conn.execute(
+        """
+        INSERT INTO ingestion_job(
+            job_id, asset_id, domain, job_type, dataset, status, priority,
+            requested_start_date, requested_end_date, attempt_count, error_message,
+            created_at, updated_at
+        )
+        VALUES
+            (10, 'BN.TO', 'market', 'refresh', 'dividends', 'pending', 90, DATE '2026-01-01', DATE '2026-01-02', 1, NULL, TIMESTAMP '2026-01-01 00:00:00', TIMESTAMP '2026-01-01 00:00:00'),
+            (11, 'BN.TO', 'market', 'refresh', 'splits', 'pending', 80, DATE '2026-01-01', DATE '2026-01-02', 0, NULL, TIMESTAMP '2026-01-03 00:00:00', TIMESTAMP '2026-01-03 00:00:00')
+        """
+    )
+    manager.conn.execute(
+        """
+        INSERT INTO asset_sync_state(
+            asset_id, domain, dataset, backfill_status, last_successful_at, last_successful_date
+        )
+        VALUES ('BN.TO', 'market', 'dividends', 'done', TIMESTAMP '2026-01-02 00:00:00', DATE '2026-01-02')
+        """
+    )
+
+    repo = PriceHistoryIngestionRepository(manager.conn)
+    job = repo.claim_next_pending_job()
+
+    assert job is not None
+    assert job.job_id == 11
+    rows = manager.conn.execute(
+        """
+        SELECT job_id, status
+        FROM ingestion_job
+        WHERE job_id IN (10, 11)
+        ORDER BY job_id
+        """
+    ).fetchall()
+    assert rows == [(10, "superseded"), (11, "running")]
+
+
+def test_market_claim_skips_jobs_at_attempt_budget(manager):
+    insert_asset(manager, "BN.TO")
+    manager.conn.execute(
+        """
+        INSERT INTO ingestion_job(
+            job_id, asset_id, domain, job_type, dataset, status, priority,
+            requested_start_date, requested_end_date, attempt_count, error_message,
+            created_at, updated_at
+        )
+        VALUES
+            (10, 'BN.TO', 'market', 'refresh', 'dividends', 'pending', 90, NULL, NULL, 3, NULL, now(), now()),
+            (11, 'BN.TO', 'market', 'refresh', 'splits', 'pending', 80, NULL, NULL, 1, NULL, now(), now())
+        """
+    )
+
+    job = PriceHistoryIngestionRepository(manager.conn).claim_next_pending_job()
+
+    assert job is not None
+    assert job.job_id == 11
+    assert job.status == "running"
+    assert job.attempt_count == 2
+    rows = manager.conn.execute(
+        """
+        SELECT job_id, status, attempt_count
+        FROM ingestion_job
+        WHERE job_id IN (10, 11)
+        ORDER BY job_id
+        """
+    ).fetchall()
+    assert rows == [(10, "pending", 3), (11, "running", 2)]
+
+
 def test_metadata_scheduler_refreshes_pending_assets(manager, monkeypatch):
     """
     refresh_due_asset_metadata should select pending metadata rows and pass them
@@ -204,6 +328,35 @@ def test_metadata_scheduler_respects_max_assets(manager, monkeypatch):
     assert n_synced == 1
     assert len(FakeAssetImporter.calls) == 1
     assert len(FakeAssetImporter.calls[0]) == 1
+
+
+def test_metadata_refresh_pipeline_forces_all_ingestible_assets(manager, monkeypatch):
+    """
+    metadata-refresh bypasses due checks so fixed metadata mappings can repair
+    already-synced asset rows.
+    """
+
+    FakeAssetImporter.calls = []
+
+    insert_asset(manager, "BN.TO")
+    insert_asset(manager, "AAPL", ccy="USD")
+
+    manager.conn.execute(
+        """
+        UPDATE asset_metadata_sync
+        SET sync_status = 'synced', last_succeeded_at = now()
+        """
+    )
+
+    monkeypatch.setattr(
+        "dashboard.services.asset_importer.AssetImporter",
+        FakeAssetImporter,
+    )
+
+    n_synced = manager.schedule_ingestion_jobs(pipeline="metadata-refresh")
+
+    assert n_synced == 2
+    assert FakeAssetImporter.calls == [["AAPL", "BN.TO"]] or FakeAssetImporter.calls == [["BN.TO", "AAPL"]]
 
 
 def test_price_history_scheduler_enqueues_backfill_jobs(manager):
@@ -270,6 +423,43 @@ def test_price_history_scheduler_does_not_duplicate_pending_jobs(manager):
     assert n_jobs == 3
 
 
+def test_market_scheduler_can_target_one_portfolio_ticker(manager):
+    insert_asset(manager, "AAPL", ccy="USD")
+    insert_asset(manager, "MSFT", ccy="USD")
+    manager.conn.execute(
+        """
+        INSERT INTO portfolio(portfolio_id, portfolio_name)
+        VALUES (1, 'Core')
+        """
+    )
+    manager.conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES
+            (1, 'AAPL', TRUE, 'position'),
+            (1, 'MSFT', TRUE, 'position')
+        """
+    )
+
+    n_jobs = manager.schedule_ingestion_jobs(
+        pipeline="market",
+        asset_id="AAPL",
+        max_assets=10,
+        years=1,
+    )
+
+    rows = manager.conn.execute(
+        """
+        SELECT DISTINCT asset_id
+        FROM ingestion_job
+        ORDER BY asset_id
+        """
+    ).fetchall()
+
+    assert n_jobs == 6
+    assert rows == [("AAPL",)]
+
+
 def test_price_history_scheduler_processes_one_backfill_job(manager, monkeypatch):
     """
     Scheduler can enqueue jobs, then run one queued price history backfill job.
@@ -328,6 +518,84 @@ def test_price_history_scheduler_processes_one_backfill_job(manager, monkeypatch
     assert quote_rows[0][3] == "fake_yfinance"
 
 
+def test_market_ingestion_upserts_dividends_and_splits_on_conflict(manager):
+    """
+    Dividend and split upserts should work for both new rows and conflict updates.
+    """
+
+    insert_asset(manager, "AAPL")
+    repo = PriceHistoryIngestionRepository(manager.conn)
+
+    repo.upsert_dividend_rows(
+        [
+            DividendEventRow(
+                asset_id="AAPL",
+                ex_date=date(2024, 1, 5),
+                payment_date=None,
+                record_date=None,
+                declaration_date=None,
+                dividend_per_share=0.24,
+                currency="USD",
+                source="test",
+            )
+        ]
+    )
+    repo.upsert_dividend_rows(
+        [
+            DividendEventRow(
+                asset_id="AAPL",
+                ex_date=date(2024, 1, 5),
+                payment_date=None,
+                record_date=None,
+                declaration_date=None,
+                dividend_per_share=0.25,
+                currency="USD",
+                source="test",
+            )
+        ]
+    )
+    repo.upsert_split_rows(
+        [
+            SplitEventRow(
+                asset_id="AAPL",
+                ex_date=date(2024, 2, 1),
+                split_from=1,
+                split_to=2,
+                source="test",
+            )
+        ]
+    )
+    repo.upsert_split_rows(
+        [
+            SplitEventRow(
+                asset_id="AAPL",
+                ex_date=date(2024, 2, 1),
+                split_from=1,
+                split_to=4,
+                source="test",
+            )
+        ]
+    )
+
+    dividend = manager.conn.execute(
+        """
+        SELECT dividend_per_share, currency
+        FROM dividend_event
+        WHERE asset_id = 'AAPL'
+        """
+    ).fetchone()
+    split = manager.conn.execute(
+        """
+        SELECT split_from, split_to
+        FROM split_event
+        WHERE asset_id = 'AAPL'
+        """
+    ).fetchone()
+
+    assert dividend == (0.25, "USD")
+    assert split == (1, 4)
+
+
 def test_price_history_scheduler_ignores_completed_asset(manager):
     """
     Assets with completed price_daily sync state should not be scheduled again.
@@ -376,6 +644,85 @@ def test_price_history_scheduler_ignores_completed_asset(manager):
     )
 
     assert n_jobs == 0
+
+
+def test_price_history_scheduler_respects_successful_zero_row_backfill(manager):
+    insert_asset(manager, "BN.TO")
+    manager.conn.execute(
+        """
+        INSERT INTO asset_sync_state(
+            asset_id,
+            domain,
+            dataset,
+            backfill_status,
+            backfill_start_date,
+            backfill_end_date,
+            last_successful_date,
+            last_attempted_at,
+            last_successful_at,
+            needs_repair
+        )
+        VALUES (
+            'BN.TO', 'market', 'price_daily', 'done',
+            DATE '2025-01-01', DATE '2026-01-01', NULL,
+            now(), now(), FALSE
+        )
+        """
+    )
+
+    n_jobs = manager.schedule_due_price_history_backfills(
+        max_assets=1,
+        years=1,
+    )
+
+    assert n_jobs == 0
+
+
+def test_market_refresh_uses_successful_empty_dataset_coverage(manager):
+    insert_asset(manager, "BN.TO")
+    today = date.today()
+    manager.conn.execute(
+        """
+        INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+        VALUES ('BN.TO', ?, 50, 50, 'test')
+        """,
+        [today],
+    )
+    manager.conn.execute(
+        """
+        INSERT INTO asset_sync_state(
+            asset_id,
+            domain,
+            dataset,
+            backfill_status,
+            backfill_start_date,
+            backfill_end_date,
+            last_successful_date,
+            last_attempted_at,
+            last_successful_at,
+            needs_repair
+        )
+        VALUES
+            (
+                'BN.TO', 'market', 'dividends', 'done',
+                ? - INTERVAL 365 DAY, ?, ? - INTERVAL 1 DAY,
+                now(), now(), FALSE
+            ),
+            (
+                'BN.TO', 'market', 'splits', 'done',
+                ? - INTERVAL 365 DAY, ?, NULL, now(), now(), FALSE
+            )
+        """,
+        [today, today, today, today, today],
+    )
+
+    job_ids = PriceHistoryIngestionService(manager.conn).enqueue_refresh_one(
+        "BN.TO",
+        include_dividends=True,
+        include_splits=True,
+    )
+
+    assert job_ids == []
 
 
 def test_price_history_enqueue_all_uses_portfolio_and_watchlist_ticker_universe(manager):

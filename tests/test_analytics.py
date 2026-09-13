@@ -13,6 +13,7 @@ from dashboard.analytics import (
     AnalyticsRepository,
     AnalyticsStorageService,
     PricePoint,
+    allocation_class,
     analytics_report_payload,
     compare_ai_snapshot_facts,
     discounted_cash_flow_model,
@@ -47,6 +48,57 @@ def test_risk_return_metrics_calculate_core_ratios():
     assert metrics.max_drawdown == pytest.approx((105.0 / 110.0) - 1.0)
     assert metrics.best_daily_return == pytest.approx((120.0 / 105.0) - 1.0)
     assert metrics.worst_daily_return == pytest.approx((105.0 / 110.0) - 1.0)
+
+
+def test_risk_return_metrics_sorts_prices_before_drawdown():
+    prices = [
+        PricePoint(date(2025, 1, 3), 80.0),
+        PricePoint(date(2025, 1, 1), 100.0),
+        PricePoint(date(2025, 1, 2), 120.0),
+        PricePoint(date(2025, 1, 4), 90.0),
+    ]
+
+    metrics = risk_return_metrics(prices)
+
+    assert metrics.start_date == date(2025, 1, 1)
+    assert metrics.end_date == date(2025, 1, 4)
+    assert metrics.max_drawdown == pytest.approx((80.0 / 120.0) - 1.0)
+
+
+def test_allocation_class_splits_stocks_cdrs_etfs_and_money_market():
+    assert allocation_class(symbol="AAPL", asset_type="stock") == "Stock"
+    assert allocation_class(symbol="SPY", asset_type="etf") == "ETF"
+    assert allocation_class(
+        symbol="NOWS.TO",
+        asset_type="stock",
+        name="ServiceNow Inc Canadian Depository Receipt (CAD Hedged)",
+    ) == "CDR"
+    assert allocation_class(
+        symbol="AMD.TO",
+        asset_type="stock",
+        name="Advanced Micro Devices, Inc. CDR",
+    ) == "CDR"
+    assert allocation_class(
+        symbol="ASML.TO",
+        asset_type="stock",
+        name="ASML Holding N.V. Depositary Receipt",
+    ) == "CDR"
+    assert allocation_class(symbol="UBER.TO", asset_type="stock", name="UBER") == "CDR"
+    assert (
+        allocation_class(
+            symbol="VUN.TO",
+            asset_type="stock",
+            name="Vanguard U.S. Total Market Index Fund",
+        )
+        == "ETF"
+    )
+    assert allocation_class(
+        symbol="CASH.TO",
+        asset_type="etf",
+        asset_subtype="money_market",
+        name="Global X High Interest Savings ETF",
+    ) == "Money market"
+    assert allocation_class(symbol="CASH", asset_type="cash") == "Cash"
 
 
 def test_relative_metrics_calculate_beta_alpha_and_correlation():
@@ -142,29 +194,17 @@ def test_asset_report_uses_default_benchmark_from_asset_metadata(tmp_path):
     init_db(db)
     db.conn.execute(
         """
-        CREATE TABLE benchmark_index (
-            index_id TEXT PRIMARY KEY,
-            country_code TEXT,
-            currency TEXT,
-            is_core BOOLEAN,
-            is_active BOOLEAN
+        INSERT INTO benchmark_index(
+            index_id,
+            index_name,
+            index_family,
+            index_category,
+            country_code,
+            currency,
+            is_core,
+            is_active
         )
-        """
-    )
-    db.conn.execute(
-        """
-        CREATE TABLE benchmark_index_daily_price (
-            index_id TEXT,
-            price_date DATE,
-            close DOUBLE,
-            adj_close DOUBLE
-        )
-        """
-    )
-    db.conn.execute(
-        """
-        INSERT INTO benchmark_index(index_id, country_code, currency, is_core, is_active)
-        VALUES ('SP500', 'US', 'USD', TRUE, TRUE)
+        VALUES ('SP500', 'S&P 500', 'S&P', 'core_geo', 'US', 'USD', TRUE, TRUE)
         """
     )
     db.conn.execute(
@@ -184,8 +224,15 @@ def test_asset_report_uses_default_benchmark_from_asset_metadata(tmp_path):
         )
         db.conn.execute(
             """
-            INSERT INTO benchmark_index_daily_price(index_id, price_date, close, adj_close)
-            VALUES ('SP500', ?, ?, ?)
+            INSERT INTO benchmark_index_daily_price(
+                index_id,
+                price_date,
+                close,
+                adj_close,
+                source,
+                source_symbol
+            )
+            VALUES ('SP500', ?, ?, ?, 'test', 'SPY')
             """,
             [start + timedelta(days=i), 200.0 + i, 200.0 + i],
         )
@@ -543,9 +590,156 @@ def test_portfolio_report_rolls_up_holding_valuation_metrics(tmp_path):
     assert report.valuation.weighted_pe_ratio == pytest.approx(20.0)
     assert report.valuation.weighted_price_to_free_cash_flow == pytest.approx(20.0)
     assert report.valuation.weighted_expected_cagr is not None
+    assert report.forecast.expected_cagr_from_valuation == pytest.approx(
+        report.valuation.weighted_expected_cagr
+    )
+    assert report.forecast.blended_expected_cagr == pytest.approx(
+        report.valuation.weighted_expected_cagr
+    )
     assert len(report.valuation.position_contributions) == 2
     assert any(fact.key == "weighted_pe_ratio" for fact in report.ai_context.facts)
     assert any(explanation.topic == "portfolio_valuation" for explanation in report.ai_context.explanations)
+
+
+def test_portfolio_valuation_rollup_uses_cdr_underlying_fundamentals(tmp_path):
+    db = DB(str(tmp_path / "portfolio_cdr_valuation_rollup.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, asset_subtype, ccy, name, shares_outstanding)
+        VALUES
+            ('AMD', 'AMD', 'stock', NULL, 'USD', 'Advanced Micro Devices', 100),
+            ('AMD.TO', 'AMD.TO', 'stock', 'cdr', 'CAD', 'AMD Canadian Depositary Receipt', NULL)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO position(portfolio_id, asset_id, qty, book_cost, created_at, updated_at)
+        VALUES (1, 'AMD.TO', 1, 10, now(), now())
+        """
+    )
+    for asset_id, close in [("AMD", 20.0), ("AMD.TO", 10.0)]:
+        db.conn.execute(
+            """
+            INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+            VALUES
+                (?, DATE '2026-01-01', ?, ?, 'test'),
+                (?, DATE '2026-01-02', ?, ?, 'test')
+            """,
+            [asset_id, close - 1, close - 1, asset_id, close, close],
+        )
+    db.conn.execute(
+        """
+        INSERT INTO financial_statement(asset_id, statement_type, year, quarter, data_json, source)
+        VALUES
+            ('AMD', 'income', 2025, 4, '{"revenue":500,"netIncome":100,"eps":1}', 'test'),
+            ('AMD', 'balance', 2025, 4, '{"totalStockholdersEquity":250,"totalAssets":500,"totalDebt":50}', 'test'),
+            ('AMD', 'cashflow', 2025, 4, '{"freeCashFlow":100}', 'test'),
+            ('AMD', 'cashflow', 2024, 4, '{"freeCashFlow":90}', 'test')
+        """
+    )
+
+    report = AnalyticsEngine(AnalyticsRepository(db.conn)).portfolio_report(1)
+
+    assert report.valuation.weighted_pe_ratio == pytest.approx(20.0)
+    assert report.valuation.weighted_price_to_free_cash_flow == pytest.approx(20.0)
+    assert report.valuation.weighted_margin_of_safety is not None
+    assert report.valuation.position_contributions[0].asset_id == "AMD.TO"
+    assert report.valuation.position_contributions[0].valuation_asset_id == "AMD"
+    assert report.valuation.position_contributions[0].fee_adjustment == pytest.approx(0.006)
+    assert "AMD.TO: income statement" not in report.valuation.missing_inputs
+    assert "AMD.TO: dividend growth history" not in report.valuation.missing_inputs
+
+
+def test_cdr_aliases_use_underlying_company_for_valuation(tmp_path):
+    db = DB(str(tmp_path / "portfolio_cdr_alias_valuation.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, name)
+        VALUES
+            ('CEGS.TO', 'CEGS.TO', 'stock', 'CAD', 'Constellation Energy CDR (CAD Hedged)'),
+            ('NVON.NE', 'NVON.NE', 'stock', 'CAD', 'Novo Nordisk A/S Depositary Receipt'),
+            ('UBER.TO', 'UBER.TO', 'stock', 'CAD', 'UBER')
+        """
+    )
+
+    repo = AnalyticsRepository(db.conn)
+
+    assert repo.valuation_asset_id("CEGS.TO") == "CEG"
+    assert repo.valuation_asset_id("NVON.NE") == "NVO"
+    assert repo.valuation_asset_id("UBER.TO") == "UBER"
+
+
+def test_portfolio_expected_cagr_is_not_normalized_over_missing_holdings(tmp_path):
+    db = DB(str(tmp_path / "portfolio_partial_expected_cagr.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Core')")
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy, shares_outstanding)
+        VALUES
+            ('READY', 'READY', 'stock', 'USD', 100),
+            ('MISSING', 'MISSING', 'stock', 'USD', NULL)
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO position(portfolio_id, asset_id, qty, book_cost, created_at, updated_at)
+        VALUES
+            (1, 'READY', 1, 10, now(), now()),
+            (1, 'MISSING', 1, 10, now(), now())
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset_quote_daily(asset_id, date, close, adj_close, ing_source)
+        VALUES
+            ('READY', DATE '2026-01-01', 9, 9, 'test'),
+            ('READY', DATE '2026-01-02', 10, 10, 'test'),
+            ('MISSING', DATE '2026-01-01', 9, 9, 'test'),
+            ('MISSING', DATE '2026-01-02', 10, 10, 'test')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO financial_statement(asset_id, statement_type, year, quarter, data_json, source)
+        VALUES
+            ('READY', 'income', 2025, 4, '{"revenue":500,"netIncome":100,"eps":1}', 'test'),
+            ('READY', 'balance', 2025, 4, '{"totalStockholdersEquity":250,"totalAssets":500,"totalDebt":50}', 'test'),
+            ('READY', 'cashflow', 2025, 4, '{"freeCashFlow":100}', 'test'),
+            ('READY', 'cashflow', 2024, 4, '{"freeCashFlow":90}', 'test')
+        """
+    )
+
+    report = AnalyticsEngine(AnalyticsRepository(db.conn)).portfolio_report(1)
+    ready = next(item for item in report.valuation.position_contributions if item.asset_id == "READY")
+
+    assert ready.weight == pytest.approx(0.5)
+    assert report.valuation.weighted_expected_cagr == pytest.approx(
+        ready.weighted_expected_cagr_contribution
+    )
+    assert report.valuation.weighted_expected_cagr == pytest.approx(ready.expected_cagr * 0.5)
+
+
+def test_valuation_asset_id_does_not_treat_all_tsx_stocks_as_cdrs(tmp_path):
+    db = DB(str(tmp_path / "tsx_common_stock.db"))
+    init_db(db)
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, asset_subtype, ccy, name)
+        VALUES
+            ('CSU.TO', 'CSU.TO', 'stock', NULL, 'CAD', 'Constellation Software Inc.'),
+            ('VISA.TO', 'VISA.TO', 'stock', 'cdr', 'CAD', 'Visa CDR')
+        """
+    )
+
+    repo = AnalyticsRepository(db.conn)
+
+    assert repo.valuation_asset_id("CSU.TO") == "CSU.TO"
+    assert repo.valuation_asset_id("VISA.TO") == "V"
 
 
 def test_analytics_report_payload_has_stable_public_shape(tmp_path):
@@ -663,16 +857,6 @@ def test_asset_report_includes_etf_profile_holdings_and_overlap(tmp_path):
     )
     db.conn.execute(
         """
-        CREATE TABLE benchmark_index_daily_price (
-            index_id TEXT,
-            price_date DATE,
-            close DOUBLE,
-            adj_close DOUBLE
-        )
-        """
-    )
-    db.conn.execute(
-        """
         INSERT INTO asset(asset_id, symbol, asset_type, ccy)
         VALUES
             ('VTI', 'VTI', 'etf', 'USD'),
@@ -691,6 +875,21 @@ def test_asset_report_includes_etf_profile_holdings_and_overlap(tmp_path):
         """
         INSERT INTO etf_profile(asset_id, expense_ratio, benchmark_index_id)
         VALUES ('VTI', 0.0003, 'TOTAL_US')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO benchmark_index(
+            index_id,
+            index_name,
+            index_family,
+            index_category,
+            country_code,
+            currency,
+            is_core,
+            is_active
+        )
+        VALUES ('TOTAL_US', 'Total US Market', 'CRSP', 'core_geo', 'US', 'USD', TRUE, TRUE)
         """
     )
     db.conn.execute(
@@ -732,8 +931,15 @@ def test_asset_report_includes_etf_profile_holdings_and_overlap(tmp_path):
         )
         db.conn.execute(
             """
-            INSERT INTO benchmark_index_daily_price(index_id, price_date, close, adj_close)
-            VALUES ('TOTAL_US', ?, ?, ?)
+            INSERT INTO benchmark_index_daily_price(
+                index_id,
+                price_date,
+                close,
+                adj_close,
+                source,
+                source_symbol
+            )
+            VALUES ('TOTAL_US', ?, ?, ?, 'test', 'VTI')
             """,
             [start + timedelta(days=i), 100.0 + (i * 1.8), 100.0 + (i * 1.8)],
         )
@@ -804,8 +1010,8 @@ def test_portfolio_risk_decomposition_calculates_concentration_and_exposures():
         positions=positions,
         price_history_by_asset=price_history,
         exposure_metadata={
-            "AAA": {"sector": "Technology", "country": "US", "currency": "USD"},
-            "BBB": {"sector": "Financials", "country": "CA", "currency": "CAD"},
+            "AAA": {"asset_class": "Equity", "sector": "Technology", "country": "US", "currency": "USD"},
+            "BBB": {"asset_class": "Fixed income", "sector": "Financials", "country": "CA", "currency": "CAD"},
         },
     )
 
@@ -823,6 +1029,10 @@ def test_portfolio_risk_decomposition_calculates_concentration_and_exposures():
     assert decomposition.sector_exposure == {
         "Financials": pytest.approx(0.40),
         "Technology": pytest.approx(0.60),
+    }
+    assert decomposition.asset_class_exposure == {
+        "Equity": pytest.approx(0.60),
+        "Fixed income": pytest.approx(0.40),
     }
     assert decomposition.country_exposure == {"CA": pytest.approx(0.40), "US": pytest.approx(0.60)}
     assert decomposition.currency_exposure == {

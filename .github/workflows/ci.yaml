@@ -8,29 +8,74 @@ permissions:
     contents: read
 
 jobs:
-  test:
+  python:
+    name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.14"]
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
-          python-version: "3.10"
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements.lock
 
       - name: Create virtual environment
         run: python -m venv .venv
 
       - name: Upgrade pip
-        run: .venv/bin/python -m pip install --upgrade pip
+        run: .venv/bin/python -m pip install --upgrade pip==26.2.1
 
-      - name: Install project (dev)
-        run: .venv/bin/python -m pip install -e ".[dev]"
+      - name: Install locked dependencies
+        run: .venv/bin/python -m pip install --require-hashes -r requirements.lock
+
+      - name: Install project
+        run: .venv/bin/python -m pip install --no-build-isolation --no-deps -e .
+
+      - name: Check dependency compatibility
+        run: .venv/bin/python -m pip check
 
       - name: Lint with Ruff
-        run: .venv/bin/ruff check .
+        run: .venv/bin/ruff check . --output-format=github
 
       - name: Run tests
         run: .venv/bin/pytest --cov=dashboard --cov-report=term-missing
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        run: npm ci
+
+      - name: Lint web application
+        run: npm run lint
+
+      - name: Run web tests
+        # Avoid competing jsdom workers distorting the wall-clock route budget.
+        run: npm test -- --no-file-parallelism
+
+      - name: Build web application
+        run: npm run build

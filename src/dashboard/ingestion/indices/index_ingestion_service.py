@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 import statistics
 from datetime import date
 from typing import Any
@@ -119,24 +120,7 @@ class BenchmarkIndexIngestionService:
                 proxy_purpose="proxy_holdings",
             )
 
-            selected_symbol: IndexSymbol | None = None
-            constituents = []
-
-            for symbol in symbols:
-                provider = self.provider_registry.get(symbol.provider)
-                if provider is None:
-                    continue
-
-                rows = provider.get_constituents(
-                    index_id=symbol.index_id,
-                    provider_symbol=symbol.provider_symbol,
-                    is_proxy=symbol.is_proxy,
-                )
-
-                if rows:
-                    selected_symbol = symbol
-                    constituents = rows
-                    break
+            selected_symbol, constituents = self._fetch_constituents_with_fallback(symbols)
 
             if selected_symbol is None or not constituents:
                 raise ValueError(f"No composition data returned for {index_id}")
@@ -505,7 +489,71 @@ class BenchmarkIndexIngestionService:
                 f"{exact_purpose}/{proxy_purpose}"
             )
 
-        return symbols
+        return self._with_yfinance_proxy_fallbacks(symbols)
+
+    def _with_yfinance_proxy_fallbacks(self, symbols: list[IndexSymbol]) -> list[IndexSymbol]:
+        augmented = list(symbols)
+        existing = {
+            (symbol.provider, symbol.provider_symbol, symbol.symbol_purpose)
+            for symbol in symbols
+        }
+
+        for symbol in symbols:
+            if symbol.symbol_purpose not in {"proxy_price", "proxy_holdings"}:
+                continue
+            if not symbol.is_proxy:
+                continue
+
+            key = ("yfinance", symbol.provider_symbol, symbol.symbol_purpose)
+            if key in existing:
+                continue
+
+            augmented.append(
+                IndexSymbol(
+                    index_id=symbol.index_id,
+                    provider="yfinance",
+                    provider_symbol=symbol.provider_symbol,
+                    symbol_purpose=symbol.symbol_purpose,
+                    is_primary=False,
+                    is_proxy=True,
+                )
+            )
+            existing.add(key)
+
+        return augmented
+
+    def _fetch_constituents_with_fallback(
+        self,
+        symbols: list[IndexSymbol],
+    ) -> tuple[IndexSymbol, list[Any]]:
+        errors: list[str] = []
+
+        for symbol in symbols:
+            provider = self.provider_registry.get(symbol.provider)
+
+            if provider is None:
+                errors.append(f"{symbol.provider}: provider not registered")
+                continue
+
+            try:
+                rows = provider.get_constituents(
+                    index_id=symbol.index_id,
+                    provider_symbol=symbol.provider_symbol,
+                    is_proxy=symbol.is_proxy,
+                )
+
+                if rows:
+                    return symbol, rows
+
+                errors.append(f"{symbol.provider}/{symbol.provider_symbol}: no rows")
+
+            except Exception as exc:
+                errors.append(
+                    f"{symbol.provider}/{symbol.provider_symbol}: "
+                    f"{self._sanitize_provider_error(exc)}"
+                )
+
+        raise ValueError("All composition providers failed: " + " | ".join(errors))
 
     def _fetch_with_fallback(
         self,
@@ -538,7 +586,10 @@ class BenchmarkIndexIngestionService:
                 errors.append(f"{symbol.provider}/{symbol.provider_symbol}: no rows")
 
             except Exception as exc:
-                errors.append(f"{symbol.provider}/{symbol.provider_symbol}: {exc}")
+                errors.append(
+                    f"{symbol.provider}/{symbol.provider_symbol}: "
+                    f"{self._sanitize_provider_error(exc)}"
+                )
 
         raise ValueError("All providers failed: " + " | ".join(errors))
 
@@ -622,15 +673,23 @@ class BenchmarkIndexIngestionService:
             ("currency", "currency"),
         ]:
             weights: dict[str, float] = {}
+            unclassified_weight = 0.0
 
             for constituent in constituents:
                 value = getattr(constituent, attr_name)
                 weight = constituent.weight_pct
 
-                if value is None or weight is None:
+                if weight is None:
+                    continue
+
+                if value is None:
+                    unclassified_weight += weight
                     continue
 
                 weights[value] = weights.get(value, 0.0) + weight
+
+            if unclassified_weight > 0:
+                weights["Unclassified"] = weights.get("Unclassified", 0.0) + unclassified_weight
 
             for value, weight in weights.items():
                 self.conn.execute(
@@ -651,7 +710,16 @@ class BenchmarkIndexIngestionService:
         self.conn.execute(iq.UPSERT_SYNC_STATE_SUCCESS, [index_id, job_type, success_date])
 
     def _mark_sync_failure(self, index_id: str, job_type: str, exc: Exception) -> None:
-        self.conn.execute(iq.UPSERT_SYNC_STATE_FAILURE, [index_id, job_type, str(exc)[:1000]])
+        self.conn.execute(
+            iq.UPSERT_SYNC_STATE_FAILURE,
+            [index_id, job_type, self._sanitize_provider_error(exc)[:1000]],
+        )
+
+    def _sanitize_provider_error(self, exc: Exception) -> str:
+        message = str(exc)
+        message = re.sub(r"([?&]apikey=)[^&\s|]+", r"\1[redacted]", message)
+        message = re.sub(r"([?&]api_key=)[^&\s|]+", r"\1[redacted]", message)
+        return message
 
     def _sum_known_weights(self, weights: list[float | None]) -> float | None:
         known = [weight for weight in weights if weight is not None]

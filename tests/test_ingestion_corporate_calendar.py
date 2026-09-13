@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 
 import duckdb
+import pandas as pd
 
 from dashboard.ingestion.fundamentals.schema import ensure_fundamental_phase1_schema
 from dashboard.ingestion.corporate_calendar.models import (
@@ -10,6 +11,9 @@ from dashboard.ingestion.corporate_calendar.models import (
 from dashboard.ingestion.corporate_calendar.service import (
     CorporateCalendarIngestionService,
 )
+from dashboard.ingestion.corporate_calendar.provider_fmp import FmpEntitlementError
+from dashboard.ingestion.corporate_calendar.provider_yahoo import YahooEarningsProvider
+from dashboard.ingestion.rate_limits import InMemoryRateLimiter, RateLimitPolicy
 
 
 class FakeCorporateProvider:
@@ -62,6 +66,69 @@ class FakeCorporateProvider:
         ]
 
 
+class EntitlementFailingProvider(FakeCorporateProvider):
+    def fetch_quarterly_statements(self, asset_id, limit=16):
+        raise FmpEntitlementError(
+            "FMP HTTP error 402: plan does not include this corporate endpoint"
+        )
+
+
+class BackupStatementsProvider:
+    source = "backup"
+
+    def fetch_quarterly_statements(self, asset_id, limit=16):
+        return [
+            FinancialStatementRow(
+                asset_id=asset_id,
+                statement_type="income",
+                fiscal_year=2026,
+                fiscal_quarter=2,
+                period_end_date=date(2026, 6, 30),
+                report_date=None,
+                data_json={"revenue": 100.0},
+                source="backup",
+            )
+        ]
+
+
+class PartialEarningsProvider(FakeCorporateProvider):
+    def fetch_earnings_for_symbol(self, asset_id, limit=16):
+        return [
+            CorporateCalendarEventRow(
+                asset_id=asset_id,
+                earnings_date=date.today() - timedelta(days=1),
+                fiscal_year=2026,
+                fiscal_quarter=1,
+                time="amc",
+                eps_estimated=None,
+                eps_actual=1.7,
+                revenue_estimated=None,
+                revenue_actual=95.0,
+                source="primary",
+            )
+        ]
+
+
+class BackupEarningsProvider:
+    source = "backup"
+
+    def fetch_earnings_for_symbol(self, asset_id, limit=16):
+        return [
+            CorporateCalendarEventRow(
+                asset_id=asset_id,
+                earnings_date=date.today() - timedelta(days=1),
+                fiscal_year=None,
+                fiscal_quarter=None,
+                time=None,
+                eps_estimated=1.5,
+                eps_actual=1.7,
+                revenue_estimated=None,
+                revenue_actual=None,
+                source="backup",
+            )
+        ]
+
+
 def make_conn():
     conn = duckdb.connect(":memory:")
 
@@ -89,6 +156,12 @@ def make_conn():
             requested_end_date DATE,
             attempt_count INTEGER NOT NULL DEFAULT 0,
             error_message TEXT,
+            lease_owner TEXT,
+            leased_at TIMESTAMP,
+            lease_expires_at TIMESTAMP,
+            max_attempts INTEGER DEFAULT 3,
+            terminal_reason TEXT,
+            completed_at TIMESTAMP,
             created_at TIMESTAMP NOT NULL DEFAULT now(),
             updated_at TIMESTAMP NOT NULL DEFAULT now()
         )
@@ -208,6 +281,293 @@ def test_stage_2_due_earnings_update_appends_actuals_and_financials():
     """).fetchone()
 
     assert stmt == ("income", 2026, 1)
+
+
+def test_financial_statement_job_uses_backup_when_primary_provider_is_blocked():
+    conn = make_conn()
+    service = CorporateCalendarIngestionService(
+        conn,
+        provider=EntitlementFailingProvider(),
+        backup_statement_provider=BackupStatementsProvider(),
+    )
+    job_id = service.repo.create_job(
+        asset_id="AAPL",
+        job_type="backfill",
+        dataset="financial_statements",
+        priority=90,
+        start_date=None,
+        end_date=None,
+    )
+
+    assert service.process_jobs(max_jobs=1) == 1
+    assert conn.execute(
+        "SELECT status, error_message FROM ingestion_job WHERE job_id = ?",
+        [job_id],
+    ).fetchone() == ("done", None)
+    assert conn.execute(
+        """
+        SELECT statement_type, year, quarter, source
+        FROM financial_statement
+        WHERE asset_id = 'AAPL'
+        """
+    ).fetchone() == ("income", 2026, 2, "backup")
+
+
+def test_yahoo_earnings_provider_parses_estimate_and_reported_eps(monkeypatch):
+    frame = pd.DataFrame(
+        {
+            "EPS Estimate": [3.12, 3.05],
+            "Reported EPS": [3.18, None],
+        },
+        index=pd.to_datetime(["2026-07-29", "2026-10-28"], utc=True),
+    )
+
+    class FakeTicker:
+        def get_earnings_dates(self, limit):
+            assert limit == 16
+            return frame
+
+    monkeypatch.setattr(
+        "dashboard.ingestion.corporate_calendar.provider_yahoo.yf.Ticker",
+        lambda symbol: FakeTicker(),
+    )
+    provider = YahooEarningsProvider(
+        rate_limiter=InMemoryRateLimiter(),
+        rate_limit_policy=RateLimitPolicy(
+            provider="test-yahoo-earnings",
+            calls=10,
+            period_seconds=1,
+        ),
+    )
+
+    rows = provider.fetch_earnings_for_symbol("MSFT", limit=16)
+
+    assert [(row.asset_id, row.earnings_date) for row in rows] == [
+        ("MSFT", date(2026, 7, 29)),
+        ("MSFT", date(2026, 10, 28)),
+    ]
+    assert rows[0].eps_estimated == 3.12
+    assert rows[0].eps_actual == 3.18
+    assert rows[0].source == "yfinance_earnings_backup"
+
+
+def test_missing_surprise_job_merges_backup_without_erasing_primary_values():
+    conn = make_conn()
+    ensure_fundamental_phase1_schema(conn)
+    service = CorporateCalendarIngestionService(
+        conn,
+        provider=PartialEarningsProvider(),
+        backup_earnings_provider=BackupEarningsProvider(),
+    )
+    earnings_date = date.today() - timedelta(days=1)
+    conn.execute(
+        """
+        INSERT INTO earnings_calendar_event(
+            asset_id, earnings_date, fiscal_year, fiscal_quarter,
+            eps_actual, revenue_actual, source
+        )
+        VALUES ('AAPL', ?, 2026, 1, 1.7, 95.0, 'primary')
+        """,
+        [earnings_date],
+    )
+    conn.execute(
+        """
+        INSERT INTO earnings_calendar_event(
+            asset_id, earnings_date, fiscal_year, fiscal_quarter,
+            eps_estimated, eps_actual, revenue_estimated, revenue_actual, source
+        )
+        VALUES ('AAPL', ?, 2025, 4, 1.4, 1.6, 88.0, 91.0, 'ranking_local_estimate')
+        """,
+        [earnings_date - timedelta(days=90)],
+    )
+
+    job_ids = service.schedule_missing_earnings_surprise_updates(max_assets=10)
+    processed = service.process_jobs(max_jobs=1)
+    repeated = service.schedule_missing_earnings_surprise_updates(max_assets=10)
+    row = conn.execute(
+        """
+        SELECT eps_estimated, eps_actual, revenue_actual, source
+        FROM earnings_calendar_event
+        WHERE asset_id = 'AAPL' AND earnings_date = ?
+        """,
+        [earnings_date],
+    ).fetchone()
+
+    assert len(job_ids) == 1
+    assert processed == 1
+    assert repeated == []
+    assert row == (1.5, 1.7, 95.0, "primary+backup")
+
+
+def test_latest_incomplete_earnings_event_is_not_masked_by_older_complete_event():
+    class LatestIncompleteEarningsProvider(PartialEarningsProvider):
+        def fetch_earnings_for_symbol(self, symbol: str, limit: int = 16):
+            latest = super().fetch_earnings_for_symbol(symbol, limit)
+            latest.append(
+                CorporateCalendarEventRow(
+                    asset_id=symbol,
+                    earnings_date=date.today() - timedelta(days=91),
+                    fiscal_year=2025,
+                    fiscal_quarter=4,
+                    eps_estimated=1.4,
+                    eps_actual=1.6,
+                    revenue_estimated=88.0,
+                    revenue_actual=91.0,
+                    source="primary",
+                )
+            )
+            return latest
+
+    class TrackingBackupEarningsProvider(BackupEarningsProvider):
+        def __init__(self):
+            self.calls = 0
+
+        def fetch_earnings_for_symbol(self, asset_id, limit=16):
+            self.calls += 1
+            return super().fetch_earnings_for_symbol(asset_id, limit)
+
+    conn = make_conn()
+    ensure_fundamental_phase1_schema(conn)
+    backup_provider = TrackingBackupEarningsProvider()
+    service = CorporateCalendarIngestionService(
+        conn,
+        provider=LatestIncompleteEarningsProvider(),
+        backup_earnings_provider=backup_provider,
+    )
+
+    job_ids = service.schedule_missing_earnings_surprise_updates(max_assets=10)
+    processed = service.process_jobs(max_jobs=1)
+    latest = conn.execute(
+        """
+        SELECT eps_estimated, eps_actual, source
+        FROM earnings_calendar_event
+        WHERE asset_id = 'AAPL'
+          AND earnings_date <= current_date
+        ORDER BY earnings_date DESC
+        LIMIT 1
+        """
+    ).fetchone()
+
+    assert len(job_ids) == 1
+    assert processed == 1
+    assert backup_provider.calls == 1
+    assert latest[:2] == (1.5, 1.7)
+
+
+def test_missing_surprise_trigger_picks_up_future_subscribed_holdings():
+    conn = make_conn()
+    ensure_fundamental_phase1_schema(conn)
+    service = CorporateCalendarIngestionService(
+        conn,
+        provider=PartialEarningsProvider(),
+        backup_earnings_provider=BackupEarningsProvider(),
+    )
+    conn.execute(
+        """
+        CREATE TABLE portfolio_ticker (
+            portfolio_id BIGINT,
+            asset_id TEXT,
+            is_active BOOLEAN,
+            source TEXT,
+            created_at TIMESTAMP DEFAULT now(),
+            updated_at TIMESTAMP DEFAULT now(),
+            PRIMARY KEY(portfolio_id, asset_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'AAPL', TRUE, 'position')
+        """
+    )
+
+    initial_ids = service.schedule_missing_earnings_surprise_updates(max_assets=10)
+    initial_subscription = conn.execute(
+        """
+        SELECT is_active, subscription_source
+        FROM fundamental_subscription
+        WHERE asset_id = 'AAPL'
+        """
+    ).fetchone()
+
+    conn.execute(
+        """
+        INSERT INTO asset(asset_id, asset_type, ccy, track)
+        VALUES ('MSFT', 'stock', 'USD', TRUE)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'MSFT', TRUE, 'position')
+        """
+    )
+    future_ids = service.schedule_missing_earnings_surprise_updates(max_assets=10)
+    jobs = conn.execute(
+        """
+        SELECT asset_id, job_type, dataset, status
+        FROM ingestion_job
+        ORDER BY job_id
+        """
+    ).fetchall()
+
+    assert len(initial_ids) == 1
+    assert initial_subscription == (True, "ticker_universe")
+    assert len(future_ids) == 1
+    assert jobs == [
+        ("AAPL", "earnings_backup", "earnings_actuals", "pending"),
+        ("MSFT", "earnings_backup", "earnings_actuals", "pending"),
+    ]
+
+
+def test_missing_surprise_trigger_ignores_fmp_statement_entitlement_deactivation():
+    conn = make_conn()
+    ensure_fundamental_phase1_schema(conn)
+    service = CorporateCalendarIngestionService(conn, provider=PartialEarningsProvider())
+    conn.execute(
+        """
+        INSERT INTO fundamental_subscription(
+            asset_id, is_active, next_refresh_at, subscription_source
+        )
+        VALUES ('AAPL', FALSE, TIMESTAMP '9999-12-31', 'ticker_universe')
+        """
+    )
+
+    job_ids = service.schedule_missing_earnings_surprise_updates(max_assets=10)
+
+    assert len(job_ids) == 1
+    assert conn.execute(
+        """
+        SELECT asset_id, job_type, dataset, status
+        FROM ingestion_job
+        WHERE job_id = ?
+        """,
+        [job_ids[0]],
+    ).fetchone() == ("AAPL", "earnings_backup", "earnings_actuals", "pending")
+
+
+def test_forced_missing_surprise_trigger_can_retry_after_same_day_incomplete_backup():
+    conn = make_conn()
+    ensure_fundamental_phase1_schema(conn)
+    service = CorporateCalendarIngestionService(
+        conn,
+        provider=PartialEarningsProvider(),
+        backup_earnings_provider=None,
+    )
+
+    first_ids = service.schedule_missing_earnings_surprise_updates(max_assets=10)
+    assert service.process_jobs(max_jobs=1) == 1
+
+    normal_ids = service.schedule_missing_earnings_surprise_updates(max_assets=10)
+    forced_ids = service.schedule_missing_earnings_surprise_updates(
+        max_assets=10,
+        force=True,
+    )
+
+    assert len(first_ids) == 1
+    assert normal_ids == []
+    assert len(forced_ids) == 1
 
 
 def test_stage_3_backfill_enqueues_earnings_and_statement_jobs():
@@ -519,6 +879,84 @@ def test_scheduler_fundamental_backfill_queues_only_active_subscribed_universe_a
     assert requested_at is not None
 
 
+def test_scheduler_fundamental_backfill_auto_subscribes_active_universe_assets():
+    conn = make_conn()
+    ensure_fundamental_phase1_schema(conn)
+    service = CorporateCalendarIngestionService(conn, provider=FakeCorporateProvider())
+
+    conn.execute(
+        """
+        CREATE TABLE portfolio_ticker (
+            portfolio_id BIGINT,
+            asset_id TEXT,
+            is_active BOOLEAN,
+            source TEXT,
+            created_at TIMESTAMP DEFAULT now(),
+            updated_at TIMESTAMP DEFAULT now(),
+            PRIMARY KEY(portfolio_id, asset_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO portfolio_ticker(portfolio_id, asset_id, is_active, source)
+        VALUES (1, 'AAPL', TRUE, 'position')
+        """
+    )
+
+    job_ids = service.schedule_due_fundamental_subscription_backfills(max_assets=10)
+
+    subscription = conn.execute(
+        """
+        SELECT is_active, subscription_source, last_backfill_requested_at
+        FROM fundamental_subscription
+        WHERE asset_id = 'AAPL'
+        """
+    ).fetchone()
+    job = conn.execute(
+        """
+        SELECT asset_id, job_type, dataset, status
+        FROM ingestion_job
+        WHERE dataset = 'financial_statements'
+        """
+    ).fetchone()
+
+    assert len(job_ids) == 1
+    assert subscription[0] is True
+    assert subscription[1] == "ticker_universe"
+    assert subscription[2] is not None
+    assert job == ("AAPL", "backfill", "financial_statements", "pending")
+
+
+def test_scheduler_fundamental_backfill_can_target_one_universe_asset():
+    conn = make_conn()
+    ensure_fundamental_phase1_schema(conn)
+    service = CorporateCalendarIngestionService(conn, provider=FakeCorporateProvider())
+
+    conn.execute(
+        """
+        INSERT INTO asset(asset_id, asset_type, ccy, track)
+        VALUES ('MSFT', 'stock', 'USD', TRUE)
+        """
+    )
+
+    job_ids = service.schedule_due_fundamental_subscription_backfills(
+        max_assets=10,
+        asset_id="MSFT",
+    )
+
+    rows = conn.execute(
+        """
+        SELECT asset_id, job_type, dataset
+        FROM ingestion_job
+        ORDER BY asset_id
+        """
+    ).fetchall()
+
+    assert len(job_ids) == 1
+    assert rows == [("MSFT", "backfill", "financial_statements")]
+
+
 def test_scheduler_fundamental_backfill_does_not_duplicate_open_jobs():
     conn = make_conn()
     ensure_fundamental_phase1_schema(conn)
@@ -613,3 +1051,97 @@ def test_worker_marks_fundamental_refresh_succeeded_after_statement_ingestion():
 
     assert processed == 1
     assert last_refresh_succeeded_at is not None
+
+
+def test_worker_deactivates_fundamental_subscription_on_fmp_402():
+    conn = make_conn()
+    ensure_fundamental_phase1_schema(conn)
+    service = CorporateCalendarIngestionService(conn, provider=EntitlementFailingProvider())
+
+    conn.execute(
+        """
+        INSERT INTO fundamental_subscription(asset_id, is_active, next_refresh_at)
+        VALUES ('AAPL', TRUE, now() - INTERVAL 1 DAY)
+        """
+    )
+
+    job_ids = service.schedule_due_fundamental_subscription_refreshes(max_assets=10)
+    assert len(job_ids) == 1
+
+    processed = service.process_jobs(max_jobs=1)
+
+    subscription_row = conn.execute(
+        """
+        SELECT is_active, next_refresh_at
+        FROM fundamental_subscription
+        WHERE asset_id = 'AAPL'
+        """
+    ).fetchone()
+    job_row = conn.execute(
+        """
+        SELECT status, error_message
+        FROM ingestion_job
+        WHERE job_id = ?
+        """,
+        [job_ids[0]],
+    ).fetchone()
+    sync_error = conn.execute(
+        """
+        SELECT last_error
+        FROM asset_sync_state
+        WHERE asset_id = 'AAPL'
+          AND domain = 'corporate'
+          AND dataset = 'financial_statements'
+        """
+    ).fetchone()[0]
+    next_job_ids = service.schedule_due_fundamental_subscription_refreshes(max_assets=10)
+
+    assert processed == 1
+    assert subscription_row[0] is False
+    assert str(subscription_row[1]).startswith("9999-12-31")
+    assert job_row[0] == "failed"
+    assert "FMP HTTP error 402" in job_row[1]
+    assert "FMP HTTP error 402" in sync_error
+    assert next_job_ids == []
+
+
+def test_scheduler_deactivates_existing_fmp_402_subscriptions_before_refresh():
+    conn = make_conn()
+    ensure_fundamental_phase1_schema(conn)
+    service = CorporateCalendarIngestionService(conn, provider=FakeCorporateProvider())
+
+    conn.execute(
+        """
+        INSERT INTO fundamental_subscription(asset_id, is_active, next_refresh_at)
+        VALUES ('AAPL', TRUE, now() - INTERVAL 1 DAY)
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO asset_sync_state(
+            asset_id, domain, dataset, backfill_status, last_error, needs_repair
+        )
+        VALUES (
+            'AAPL',
+            'corporate',
+            'financial_statements',
+            'failed',
+            'FMP HTTP error 402: plan does not include this corporate endpoint',
+            FALSE
+        )
+        """
+    )
+
+    job_ids = service.schedule_due_fundamental_subscription_refreshes(max_assets=10)
+
+    subscription_row = conn.execute(
+        """
+        SELECT is_active, next_refresh_at
+        FROM fundamental_subscription
+        WHERE asset_id = 'AAPL'
+        """
+    ).fetchone()
+
+    assert job_ids == []
+    assert subscription_row[0] is False
+    assert str(subscription_row[1]).startswith("9999-12-31")

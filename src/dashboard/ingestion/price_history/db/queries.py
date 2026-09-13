@@ -21,8 +21,58 @@ INSERT INTO ingestion_job (
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 """
 
-SELECT_NEXT_PENDING_JOB = """
-SELECT
+CLAIM_NEXT_PENDING_JOB = """
+UPDATE ingestion_job
+SET
+    status = ?,
+    attempt_count = attempt_count + 1,
+    error_message = NULL,
+    lease_owner = ?,
+    leased_at = CURRENT_TIMESTAMP,
+    lease_expires_at = CURRENT_TIMESTAMP + (? * INTERVAL '1 second'),
+    terminal_reason = NULL,
+    completed_at = NULL,
+    updated_at = CURRENT_TIMESTAMP
+WHERE job_id = (
+    SELECT candidate.job_id
+    FROM ingestion_job candidate
+    WHERE candidate.domain = ?
+      AND candidate.status = ?
+      AND COALESCE(candidate.attempt_count, 0) < COALESCE(
+          candidate.max_attempts,
+          ?
+      )
+      AND NOT EXISTS (
+          SELECT 1
+          FROM ingestion_job newer
+          WHERE newer.asset_id = candidate.asset_id
+            AND newer.domain = candidate.domain
+            AND newer.dataset = candidate.dataset
+            AND newer.status = 'done'
+            AND newer.job_id > candidate.job_id
+      )
+      AND NOT EXISTS (
+          SELECT 1
+          FROM asset_sync_state sync
+          WHERE sync.asset_id = candidate.asset_id
+            AND sync.domain = candidate.domain
+            AND sync.dataset = candidate.dataset
+            AND (
+                sync.backfill_status = 'done'
+                OR sync.last_successful_at IS NOT NULL
+                OR sync.last_successful_date IS NOT NULL
+            )
+            AND COALESCE(
+                sync.last_successful_at,
+                sync.last_attempted_at,
+                TIMESTAMP '1970-01-01'
+            ) >= candidate.updated_at
+      )
+    ORDER BY candidate.priority DESC, candidate.created_at ASC
+    LIMIT 1
+)
+  AND status = ?
+RETURNING
     job_id,
     asset_id,
     domain,
@@ -34,20 +84,6 @@ SELECT
     requested_end_date,
     attempt_count,
     error_message
-FROM ingestion_job
-WHERE domain = ?
-  AND status = ?
-ORDER BY priority DESC, created_at ASC
-LIMIT 1
-"""
-
-MARK_JOB_RUNNING = """
-UPDATE ingestion_job
-SET
-    status = ?,
-    attempt_count = attempt_count + 1,
-    updated_at = CURRENT_TIMESTAMP
-WHERE job_id = ?
 """
 
 MARK_JOB_DONE = """
@@ -55,6 +91,10 @@ UPDATE ingestion_job
 SET
     status = ?,
     error_message = NULL,
+    lease_owner = NULL,
+    leased_at = NULL,
+    lease_expires_at = NULL,
+    completed_at = CURRENT_TIMESTAMP,
     updated_at = CURRENT_TIMESTAMP
 WHERE job_id = ?
 """
@@ -64,6 +104,10 @@ UPDATE ingestion_job
 SET
     status = ?,
     error_message = ?,
+    lease_owner = NULL,
+    leased_at = NULL,
+    lease_expires_at = NULL,
+    completed_at = CURRENT_TIMESTAMP,
     updated_at = CURRENT_TIMESTAMP
 WHERE job_id = ?
 """
@@ -182,7 +226,7 @@ INSERT INTO dividend_event (
     source,
     as_of_ts
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, now())
 ON CONFLICT (asset_id, ex_date)
 DO UPDATE SET
     payment_date = excluded.payment_date,
@@ -191,7 +235,7 @@ DO UPDATE SET
     dividend_per_share = excluded.dividend_per_share,
     currency = excluded.currency,
     source = excluded.source,
-    as_of_ts = CURRENT_TIMESTAMP
+    as_of_ts = now()
 """
 
 UPSERT_SPLIT_EVENT = """
@@ -203,13 +247,13 @@ INSERT INTO split_event (
     source,
     as_of_ts
 )
-VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+VALUES (?, ?, ?, ?, ?, now())
 ON CONFLICT (asset_id, ex_date)
 DO UPDATE SET
     split_from = excluded.split_from,
     split_to = excluded.split_to,
     source = excluded.source,
-    as_of_ts = CURRENT_TIMESTAMP
+    as_of_ts = now()
 """
 
 SELECT_ALL_ASSET_IDS = """

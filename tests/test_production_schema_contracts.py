@@ -31,6 +31,9 @@ def test_production_schema_contains_command_service_tables(tmp_path):
         "current_asset_price",
         "live_price_tick",
         "live_price_provider_health",
+        "candidate_run",
+        "candidate_review",
+        "candidate_evidence",
     } <= tables
 
 

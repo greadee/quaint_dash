@@ -137,6 +137,23 @@ def test_broker_repository_persists_user_connection_account_and_sync_run(tmp_pat
     assert row == ("done", "default", 1, 2, 3)
 
 
+def test_broker_sync_run_ids_follow_existing_rows_when_sequence_lags(tmp_path):
+    db = DB(str(tmp_path / "broker_sync_run_sequence.db"))
+    init_db(db)
+    repo = BrokerSyncRepository(db.conn)
+    db.conn.execute(
+        """
+        INSERT INTO broker_sync_run(sync_run_id, provider, user_key, status)
+        VALUES (70, 'snaptrade', 'default', 'done')
+        """
+    )
+
+    sync_run_id = repo.create_sync_run("snaptrade", user_key="default")
+
+    assert sync_run_id == 71
+    assert db.conn.execute("SELECT COUNT(*) FROM broker_sync_run").fetchone()[0] == 2
+
+
 def test_broker_repository_can_disable_raw_payload_storage(tmp_path):
     db = DB(str(tmp_path / "broker_raw_payload_toggle.db"))
     init_db(db)
@@ -178,6 +195,60 @@ def test_fake_broker_provider_outputs_can_be_persisted(tmp_path):
     assert db.conn.execute("SELECT COUNT(*) FROM broker_account").fetchone()[0] == 1
     assert db.conn.execute("SELECT COUNT(*) FROM broker_position_snapshot").fetchone()[0] == 1
     assert db.conn.execute("SELECT COUNT(*) FROM broker_transaction").fetchone()[0] == 1
+
+
+def test_broker_account_upsert_preserves_rows_referenced_by_return_override(tmp_path):
+    db = DB(str(tmp_path / "broker_account_override.db"))
+    init_db(db)
+    repo = BrokerSyncRepository(db.conn)
+    account = BrokerAccount(
+        provider="snaptrade",
+        provider_account_id="acct-1",
+        provider_connection_id="conn-1",
+        account_name="TFSA",
+        account_type="registered",
+        currency="CAD",
+        balance=1000.0,
+    )
+
+    repo.upsert_account(account)
+    db.conn.execute(
+        """
+        INSERT INTO broker_account_return_override(provider, provider_account_id, total_return_percent, note)
+        VALUES ('snaptrade', 'acct-1', 0.42, 'manual')
+        """
+    )
+    repo.upsert_account(
+        BrokerAccount(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_connection_id="conn-1",
+            account_name="TFSA refreshed",
+            account_type="registered",
+            currency="CAD",
+            balance=1200.0,
+        )
+    )
+
+    row = db.conn.execute(
+        """
+        SELECT account_name, balance
+        FROM broker_account
+        WHERE provider = 'snaptrade'
+          AND provider_account_id = 'acct-1'
+        """
+    ).fetchone()
+    override = db.conn.execute(
+        """
+        SELECT total_return_percent
+        FROM broker_account_return_override
+        WHERE provider = 'snaptrade'
+          AND provider_account_id = 'acct-1'
+        """
+    ).fetchone()
+
+    assert row == ("TFSA refreshed", 1200.0)
+    assert override == (0.42,)
 
 
 def test_snaptrade_signature_uses_canonical_payload_shape():
@@ -283,15 +354,15 @@ def test_snaptrade_provider_maps_connections_accounts_positions_and_transactions
                     "id": "acct-1",
                     "name": "TFSA",
                     "type": "registered",
-                    "balance": {"total": 1234.5, "currency": "CAD"},
+                    "balance": {"total": {"amount": 1234.5, "currency": "CAD"}},
                 }
             ],
             [
                 {
-                    "symbol": {"symbol": "AAPL", "description": "Apple Inc."},
+                    "symbol": {"SYMBOL": "AAPL", "DESCRIPTION": "Apple Inc."},
                     "units": 2,
                     "price": 400,
-                    "currency": "USD",
+                    "currency": {"CODE": "USD", "NAME": "US Dollar"},
                     "last_updated": "2026-01-05T12:00:00Z",
                 }
             ],
@@ -327,7 +398,9 @@ def test_snaptrade_provider_maps_connections_accounts_positions_and_transactions
     assert connection.institution_name == "Wealthsimple"
     assert account.provider_account_id == "acct-1"
     assert account.balance == 1234.5
+    assert account.currency == "CAD"
     assert position.symbol == "AAPL"
+    assert position.currency == "USD"
     assert position.as_of_date == date(2026, 1, 5)
     assert transaction.provider_transaction_id == "act-1"
     assert transaction.trade_date == date(2026, 1, 4)
@@ -421,6 +494,108 @@ def test_broker_sync_service_persists_provider_data_and_sync_run(tmp_path):
     assert db.conn.execute("SELECT COUNT(*) FROM broker_transaction").fetchone()[0] == 1
     assert db.conn.execute("SELECT status FROM broker_sync_run").fetchone()[0] == "done"
     assert db.conn.execute("SELECT user_key FROM broker_sync_run").fetchone()[0] == "default"
+
+
+def test_broker_sync_replaces_stale_positions_and_reprojects_mapped_portfolio(tmp_path):
+    db = DB(str(tmp_path / "broker_sync_replaces_positions.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Broker')")
+    repo = BrokerSyncRepository(db.conn)
+    cipher = LocalSecretCipher("test-key")
+    repo.upsert_broker_user(
+        BrokerUser("snaptrade", "default", "user-1", "secret"),
+        cipher,
+    )
+    provider = SequencedPositionBrokerProvider()
+    service = BrokerSyncService(repo, provider, cipher)
+
+    service.sync_user("default")
+    repo.map_account_to_portfolio("snaptrade", "acct-1", 1)
+    BrokerPortfolioIntegrationService(db.conn).project_account_positions("acct-1", 1)
+    provider.positions = [
+        BrokerPosition(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_position_id="acct-1:MSFT",
+            symbol="MSFT",
+            description="Microsoft Corp.",
+            quantity=1.0,
+            market_value=300.0,
+            currency="USD",
+            as_of_date=date(2026, 1, 6),
+        )
+    ]
+
+    service.sync_user("default")
+
+    snapshots = db.conn.execute(
+        "SELECT symbol, quantity FROM broker_position_snapshot ORDER BY symbol"
+    ).fetchall()
+    mapped = db.conn.execute(
+        "SELECT asset_id, quantity FROM broker_portfolio_position_map ORDER BY asset_id"
+    ).fetchall()
+    positions = db.conn.execute(
+        "SELECT asset_id, qty FROM position ORDER BY asset_id"
+    ).fetchall()
+
+    assert snapshots == [("MSFT", 1.0)]
+    assert mapped == [("MSFT", 1.0)]
+    assert positions == [("MSFT", 1.0)]
+
+
+def test_broker_projection_prefers_provider_book_value_and_average_price(tmp_path):
+    db = DB(str(tmp_path / "broker_projection_cost.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Broker')")
+    repo = BrokerSyncRepository(db.conn)
+    repo.upsert_account(
+        BrokerAccount(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_connection_id="conn-1",
+            account_name="TFSA",
+            account_type="registered",
+            currency="CAD",
+            balance=1000,
+        )
+    )
+    repo.upsert_position_snapshot(
+        BrokerPosition(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_position_id="pos-direct",
+            symbol="AAPL",
+            description="Apple Inc.",
+            quantity=2,
+            market_value=300,
+            currency="CAD",
+            as_of_date=date(2026, 6, 20),
+            raw_payload={"bookValue": {"amount": 225.5, "currency": "CAD"}},
+        )
+    )
+    repo.upsert_position_snapshot(
+        BrokerPosition(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_position_id="pos-average",
+            symbol="MSFT",
+            description="Microsoft",
+            quantity=3,
+            market_value=450,
+            currency="CAD",
+            as_of_date=date(2026, 6, 20),
+            raw_payload={"averagePurchasePrice": {"amount": 41.25, "currency": "CAD"}},
+        )
+    )
+
+    BrokerPortfolioIntegrationService(db.conn).project_account_positions("acct-1", 1)
+
+    mapped = dict(
+        db.conn.execute(
+            "SELECT asset_id, book_cost FROM broker_portfolio_position_map ORDER BY asset_id"
+        ).fetchall()
+    )
+    assert mapped == {"AAPL": 225.5, "MSFT": 123.75}
 
 
 def test_broker_sync_scheduler_syncs_due_users_once_per_day(tmp_path):
@@ -691,6 +866,315 @@ def test_broker_portfolio_integration_imports_mapped_transactions_idempotently(t
     assert position_row == (1, "AAPL", 2.0, 400.0)
 
 
+def test_broker_projected_positions_use_transaction_cost_basis(tmp_path):
+    db = DB(str(tmp_path / "broker_projected_cost_basis.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Broker')")
+    repo = BrokerSyncRepository(db.conn)
+    repo.upsert_account(
+        BrokerAccount(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_connection_id="conn-1",
+            account_name="TFSA",
+            account_type="registered",
+            currency="CAD",
+            balance=1000.0,
+            portfolio_id=1,
+        )
+    )
+    repo.upsert_position_snapshot(
+        BrokerPosition(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_position_id="acct-1:MU.TO",
+            symbol="MU.TO",
+            description="Micron CDR",
+            quantity=85.0,
+            market_value=1200.0,
+            currency="CAD",
+            as_of_date=date(2026, 1, 5),
+        )
+    )
+    repo.upsert_transaction(
+        BrokerTransaction(
+            provider="snaptrade",
+            provider_transaction_id="buy-mu",
+            provider_account_id="acct-1",
+            txn_type="BUY",
+            trade_date=date(2025, 12, 1),
+            symbol="MU.TO",
+            quantity=85.0,
+            price=5.46,
+            amount=-464.10,
+            currency="CAD",
+        )
+    )
+
+    BrokerPortfolioIntegrationService(db.conn).project_account_positions("acct-1", 1)
+
+    row = db.conn.execute(
+        """
+        SELECT quantity, book_cost
+        FROM broker_portfolio_position_map
+        WHERE asset_id = 'MU.TO'
+        """
+    ).fetchone()
+    position_row = db.conn.execute(
+        "SELECT qty, book_cost FROM position WHERE asset_id = 'MU.TO'"
+    ).fetchone()
+
+    assert row == (85.0, 464.1)
+    assert position_row == (85.0, 464.1)
+
+
+def test_broker_projected_positions_skip_closed_zero_value_or_weight_rows(tmp_path):
+    db = DB(str(tmp_path / "broker_projected_closed_positions.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Broker')")
+    repo = BrokerSyncRepository(db.conn)
+    for position in [
+        BrokerPosition(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_position_id="acct-1:ACTIVE",
+            symbol="ACTIVE",
+            description="Active Holding",
+            quantity=10.0,
+            market_value=500.0,
+            currency="USD",
+            as_of_date=date(2026, 1, 5),
+            raw_payload={"weight": 0.25},
+        ),
+        BrokerPosition(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_position_id="acct-1:CLOSEDVALUE",
+            symbol="CLOSEDVALUE",
+            description="Closed Value",
+            quantity=5.0,
+            market_value=0.0,
+            currency="USD",
+            as_of_date=date(2026, 1, 5),
+        ),
+        BrokerPosition(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_position_id="acct-1:CLOSEDWEIGHT",
+            symbol="CLOSEDWEIGHT",
+            description="Closed Weight",
+            quantity=5.0,
+            market_value=100.0,
+            currency="USD",
+            as_of_date=date(2026, 1, 5),
+            raw_payload={"weight": 0},
+        ),
+    ]:
+        repo.upsert_position_snapshot(position)
+
+    result = BrokerPortfolioIntegrationService(db.conn).project_account_positions("acct-1", 1)
+
+    mapped = db.conn.execute(
+        "SELECT asset_id, quantity, book_cost FROM broker_portfolio_position_map ORDER BY asset_id"
+    ).fetchall()
+    active_positions = db.conn.execute(
+        "SELECT asset_id, qty, book_cost FROM position ORDER BY asset_id"
+    ).fetchall()
+
+    assert result.upserted_positions == 1
+    assert result.skipped_positions == 2
+    assert mapped == [("ACTIVE", 10.0, 500.0)]
+    assert active_positions == [("ACTIVE", 10.0, 500.0)]
+
+
+def test_broker_projected_positions_prefer_reported_average_over_transaction_cost(tmp_path):
+    db = DB(str(tmp_path / "broker_projected_activity_basis.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Broker')")
+    repo = BrokerSyncRepository(db.conn)
+    repo.upsert_position_snapshot(
+        BrokerPosition(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_position_id="acct-1:MU.TO",
+            symbol="MU.TO",
+            description="Micron CDR",
+            quantity=85.0,
+            market_value=3250.4,
+            currency="CAD",
+            as_of_date=date(2026, 1, 5),
+            raw_payload={"average_purchase_price": 5.46},
+        )
+    )
+    repo.upsert_transaction(
+        BrokerTransaction(
+            provider="snaptrade",
+            provider_transaction_id="buy-mu",
+            provider_account_id="acct-1",
+            txn_type="BUY",
+            trade_date=date(2025, 12, 1),
+            symbol="MU.TO",
+            quantity=85.0,
+            price=25.0,
+            amount=-2125.0,
+            currency="CAD",
+        )
+    )
+
+    BrokerPortfolioIntegrationService(db.conn).project_account_positions("acct-1", 1)
+
+    assert db.conn.execute(
+        "SELECT quantity, book_cost FROM broker_portfolio_position_map WHERE asset_id = 'MU.TO'"
+    ).fetchone() == (85.0, 464.1)
+
+
+def test_broker_projected_positions_use_raw_activity_payload_for_missing_price(tmp_path):
+    db = DB(str(tmp_path / "broker_projected_raw_activity_basis.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Broker')")
+    repo = BrokerSyncRepository(db.conn)
+    repo.upsert_position_snapshot(
+        BrokerPosition(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_position_id="acct-1:MU.TO",
+            symbol="MU.TO",
+            description="Micron CDR",
+            quantity=85.0,
+            market_value=3250.4,
+            currency="CAD",
+            as_of_date=date(2026, 1, 5),
+            raw_payload={"average_purchase_price": 5.46},
+        )
+    )
+    repo.upsert_transaction(
+        BrokerTransaction(
+            provider="snaptrade",
+            provider_transaction_id="buy-mu",
+            provider_account_id="acct-1",
+            txn_type="BUY",
+            trade_date=date(2025, 12, 1),
+            symbol="MU.TO",
+            quantity=85.0,
+            amount=-464.10,
+            currency="CAD",
+            raw_payload={"quantity": 85, "amount": -464.10},
+        )
+    )
+
+    BrokerPortfolioIntegrationService(db.conn).project_account_positions("acct-1", 1)
+
+    assert db.conn.execute(
+        "SELECT quantity, book_cost FROM broker_portfolio_position_map WHERE asset_id = 'MU.TO'"
+    ).fetchone() == (85.0, 464.1)
+
+
+def test_broker_projected_positions_do_not_double_count_imported_transactions(tmp_path):
+    db = DB(str(tmp_path / "broker_projected_no_double_count.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Broker')")
+    repo = BrokerSyncRepository(db.conn)
+    repo.upsert_account(
+        BrokerAccount(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_connection_id="conn-1",
+            account_name="TFSA",
+            account_type="registered",
+            currency="CAD",
+            balance=1000.0,
+            portfolio_id=1,
+        )
+    )
+    repo.upsert_position_snapshot(
+        BrokerPosition(
+            provider="snaptrade",
+            provider_account_id="acct-1",
+            provider_position_id="acct-1:MU.TO",
+            symbol="MU.TO",
+            description="Micron CDR",
+            quantity=85.0,
+            market_value=1200.0,
+            currency="CAD",
+            as_of_date=date(2026, 1, 5),
+        )
+    )
+    repo.upsert_transaction(
+        BrokerTransaction(
+            provider="snaptrade",
+            provider_transaction_id="buy-mu",
+            provider_account_id="acct-1",
+            txn_type="BUY",
+            trade_date=date(2025, 12, 1),
+            symbol="MU.TO",
+            quantity=85.0,
+            price=5.46,
+            amount=-464.10,
+            currency="CAD",
+        )
+    )
+    service = BrokerPortfolioIntegrationService(db.conn)
+
+    imported = service.import_mapped_transactions()
+    service.project_account_positions("acct-1", 1)
+
+    position_row = db.conn.execute(
+        "SELECT qty, book_cost FROM position WHERE asset_id = 'MU.TO'"
+    ).fetchone()
+
+    assert imported.imported_transactions == 1
+    assert position_row == (85.0, 464.1)
+
+
+def test_broker_projected_cost_basis_recalculates_existing_position_maps(tmp_path):
+    db = DB(str(tmp_path / "broker_projected_cost_recalc.db"))
+    init_db(db)
+    db.conn.execute("INSERT INTO portfolio(portfolio_id, portfolio_name) VALUES (1, 'Broker')")
+    repo = BrokerSyncRepository(db.conn)
+    repo.upsert_transaction(
+        BrokerTransaction(
+            provider="snaptrade",
+            provider_transaction_id="buy-mu",
+            provider_account_id="acct-1",
+            txn_type="BUY",
+            trade_date=date(2025, 12, 1),
+            symbol="MU.TO",
+            quantity=85.0,
+            price=5.46,
+            amount=-464.10,
+            currency="CAD",
+        )
+    )
+    db.conn.execute(
+        """
+        INSERT INTO asset(asset_id, symbol, asset_type, ccy)
+        VALUES ('MU.TO', 'MU.TO', 'stock', 'CAD')
+        """
+    )
+    db.conn.execute(
+        """
+        INSERT INTO broker_portfolio_position_map(
+            provider,
+            provider_account_id,
+            provider_position_id,
+            portfolio_id,
+            asset_id,
+            quantity,
+            book_cost,
+            currency
+        )
+        VALUES ('snaptrade', 'acct-1', 'acct-1:MU.TO', 1, 'MU.TO', 85, 1200, 'CAD')
+        """
+    )
+
+    updated = BrokerPortfolioIntegrationService(db.conn).recalculate_projected_book_costs()
+
+    assert updated == 1
+    assert db.conn.execute(
+        "SELECT book_cost FROM broker_portfolio_position_map WHERE asset_id = 'MU.TO'"
+    ).fetchone()[0] == 464.1
+
+
 def test_broker_portfolio_integration_normalizes_sells_and_skips_bad_asset_rows(tmp_path):
     db = DB(str(tmp_path / "broker_portfolio_sell.db"))
     init_db(db)
@@ -948,6 +1432,46 @@ class FakeBrokerProvider:
 
     def disconnect(self, user: BrokerUser, connection: BrokerConnection) -> None:
         return None
+
+
+class SequencedPositionBrokerProvider(FakeBrokerProvider):
+    def __init__(self) -> None:
+        self.positions = [
+            BrokerPosition(
+                provider=self.provider_name,
+                provider_account_id="acct-1",
+                provider_position_id="acct-1:AAPL",
+                symbol="AAPL",
+                description="Apple Inc.",
+                quantity=2.0,
+                market_value=400.0,
+                currency="USD",
+                as_of_date=date(2026, 1, 5),
+            ),
+            BrokerPosition(
+                provider=self.provider_name,
+                provider_account_id="acct-1",
+                provider_position_id="acct-1:MSFT",
+                symbol="MSFT",
+                description="Microsoft Corp.",
+                quantity=1.0,
+                market_value=300.0,
+                currency="USD",
+                as_of_date=date(2026, 1, 5),
+            ),
+        ]
+
+    def list_positions(self, user: BrokerUser, account: BrokerAccount) -> list[BrokerPosition]:
+        return self.positions
+
+    def list_transactions(
+        self,
+        user: BrokerUser,
+        account: BrokerAccount,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> list[BrokerTransaction]:
+        return []
 
 
 class FakeSnapTradeResponse:

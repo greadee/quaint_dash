@@ -5,7 +5,13 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from .calculations import _extract_number, _json_object, _normalize_code, normalize_weight
+from .calculations import (
+    _extract_number,
+    _json_object,
+    _normalize_code,
+    allocation_class,
+    normalize_weight,
+)
 from .models import (
     DEFAULT_BENCHMARK_BY_COUNTRY,
     DEFAULT_BENCHMARK_BY_CURRENCY,
@@ -14,6 +20,41 @@ from .models import (
     PositionAnalytics,
     PricePoint,
 )
+
+
+_CDR_SYMBOL_ALIASES = {
+    "CEGS": "CEG",
+    "NVON": "NVO",
+    "NOWS": "NOW",
+    "VISA": "V",
+}
+
+_KNOWN_CDR_BASE_SYMBOLS = {
+    "AAPL",
+    "AMD",
+    "AMZN",
+    "ANET",
+    "ASML",
+    "AVGO",
+    "BKNG",
+    "CEG",
+    "GEV",
+    "GOOG",
+    "ISRG",
+    "LLY",
+    "META",
+    "MSFT",
+    "MU",
+    "NOW",
+    "NVDA",
+    "NVO",
+    "SPGI",
+    "TSLA",
+    "UBER",
+    "V",
+}
+
+DEFAULT_CDR_FEE_ADJUSTMENT = 0.006
 
 
 class AnalyticsRepository:
@@ -198,16 +239,57 @@ class AnalyticsRepository:
     def latest_price(self, asset_id: str) -> float | None:
         row = self.conn.execute(
             """
-            SELECT COALESCE(adj_close, close)
+            SELECT close
             FROM asset_quote_daily
             WHERE asset_id = ?
-              AND COALESCE(adj_close, close) IS NOT NULL
+              AND close IS NOT NULL
             ORDER BY date DESC
             LIMIT 1
             """,
             [asset_id.upper().strip()],
         ).fetchone()
         return float(row[0]) if row and row[0] is not None else None
+
+    def valuation_asset_id(self, asset_id: str) -> str:
+        """Return the asset id whose fundamentals should drive valuation models."""
+        asset_id = asset_id.upper().strip()
+        row = self.conn.execute(
+            """
+            SELECT asset_id, symbol, asset_subtype, name, description
+            FROM asset
+            WHERE asset_id = ?
+            """,
+            [asset_id],
+        ).fetchone()
+        if row is None:
+            return asset_id
+
+        symbol = str(row[1] or row[0])
+        base = symbol.split(".", maxsplit=1)[0].upper()
+        base = _CDR_SYMBOL_ALIASES.get(base, base)
+        if base == asset_id or not self._looks_like_cdr_listing(row):
+            return asset_id
+        return base
+
+    def wrapper_fee_adjustment(self, asset_id: str) -> float | None:
+        """Return annual wrapper fee drag for held wrappers whose fundamentals use another asset."""
+        asset_id = asset_id.upper().strip()
+        row = self.conn.execute(
+            """
+            SELECT asset_id, symbol, asset_subtype, name, description
+            FROM asset
+            WHERE asset_id = ?
+            """,
+            [asset_id],
+        ).fetchone()
+        if row is None or not self._looks_like_cdr_listing(row):
+            return None
+
+        stored = self.etf_profile(asset_id).get("expense_ratio")
+        if stored is not None:
+            value = float(stored)
+            return value / 100.0 if value > 1.0 else value
+        return DEFAULT_CDR_FEE_ADJUSTMENT
 
     def annual_dividend_per_share(
         self, asset_id: str, as_of_date: date | None = None
@@ -256,7 +338,35 @@ class AnalyticsRepository:
             """,
             [asset_id.upper().strip()],
         ).fetchone()
-        return float(row[0]) if row and row[0] is not None and row[0] > 0 else None
+        if row and row[0] is not None and row[0] > 0:
+            return float(row[0])
+        rows = self.conn.execute(
+            """
+            SELECT data_json
+            FROM financial_statement
+            WHERE asset_id = ?
+              AND statement_type = 'income'
+            ORDER BY year DESC, quarter DESC
+            LIMIT 8
+            """,
+            [asset_id.upper().strip()],
+        ).fetchall()
+        for statement_row in rows:
+            data = _json_object(statement_row[0])
+            shares = _extract_number(
+                data,
+                (
+                    "weightedAverageShsOutDil",
+                    "weightedAverageShsOut",
+                    "weighted_average_shares_diluted",
+                    "weighted_average_shares",
+                    "sharesOutstanding",
+                    "shares_outstanding",
+                ),
+            )
+            if shares is not None and shares > 0:
+                return shares
+        return None
 
     def latest_free_cash_flow(self, asset_id: str) -> float | None:
         rows = self.conn.execute(
@@ -291,6 +401,57 @@ class AnalyticsRepository:
                 return fcf
         return None
 
+    def latest_free_cash_flow_is_nonpositive(self, asset_id: str) -> bool:
+        rows = self.conn.execute(
+            """
+            SELECT data_json
+            FROM financial_statement
+            WHERE asset_id = ?
+              AND statement_type = 'cashflow'
+            ORDER BY year DESC, quarter DESC
+            LIMIT 8
+            """,
+            [asset_id.upper().strip()],
+        ).fetchall()
+        for row in rows:
+            data = _json_object(row[0])
+            fcf = _extract_number(
+                data,
+                ("freeCashFlow", "free_cash_flow", "free_cashflow"),
+            )
+            if fcf is None:
+                operating = _extract_number(
+                    data,
+                    (
+                        "operatingCashFlow",
+                        "cashFlowFromOperations",
+                        "netCashProvidedByOperatingActivities",
+                    ),
+                )
+                capex = _extract_number(
+                    data,
+                    ("capitalExpenditure", "capital_expenditure", "capex"),
+                )
+                if operating is not None and capex is not None:
+                    fcf = operating - abs(capex)
+            if fcf is not None:
+                return fcf <= 0
+        return False
+
+    def current_price_uses_stored_fallback(self, asset_id: str) -> bool:
+        row = self.conn.execute(
+            """
+            SELECT provider
+            FROM current_asset_price
+            WHERE asset_id = ?
+            """,
+            [asset_id.upper().strip()],
+        ).fetchone()
+        return bool(
+            row
+            and str(row[0] or "").lower() == "stored_close_fallback"
+        )
+
     def financial_statement_history(
         self, asset_id: str, statement_type: str
     ) -> list[dict[str, Any]]:
@@ -318,15 +479,29 @@ class AnalyticsRepository:
     def asset_profile(self, asset_id: str) -> dict[str, str | None]:
         row = self.conn.execute(
             """
-            SELECT asset_type, asset_subtype, symbol
+            SELECT asset_type, asset_subtype, symbol, name, sector, industry
             FROM asset
             WHERE asset_id = ?
             """,
             [asset_id.upper().strip()],
         ).fetchone()
         if row is None:
-            return {"asset_type": None, "asset_subtype": None, "symbol": None}
-        return {"asset_type": row[0], "asset_subtype": row[1], "symbol": row[2]}
+            return {
+                "asset_type": None,
+                "asset_subtype": None,
+                "symbol": None,
+                "name": None,
+                "sector": None,
+                "industry": None,
+            }
+        return {
+            "asset_type": row[0],
+            "asset_subtype": row[1],
+            "symbol": row[2],
+            "name": row[3],
+            "sector": row[4],
+            "industry": row[5],
+        }
 
     def etf_profile(self, asset_id: str) -> dict[str, Any]:
         if not self._table_exists("etf_profile"):
@@ -445,7 +620,7 @@ class AnalyticsRepository:
         placeholders = ", ".join("?" for _ in asset_ids)
         rows = self.conn.execute(
             f"""
-            SELECT asset_id, sector, country, ccy
+            SELECT asset_id, symbol, asset_type, asset_subtype, name, sector, industry, country, ccy
             FROM asset
             WHERE asset_id IN ({placeholders})
             """,
@@ -453,9 +628,18 @@ class AnalyticsRepository:
         ).fetchall()
         return {
             row[0]: {
-                "sector": row[1],
-                "country": row[2],
-                "currency": row[3],
+                "sector": row[5],
+                "country": row[7],
+                "currency": row[8],
+                "asset_class": allocation_class(
+                    asset_id=row[0],
+                    symbol=row[1],
+                    asset_type=row[2],
+                    asset_subtype=row[3],
+                    name=row[4],
+                    sector=row[5],
+                    industry=row[6],
+                ),
             }
             for row in rows
         }
@@ -496,3 +680,49 @@ class AnalyticsRepository:
             [table_name],
         ).fetchone()
         return bool(row and row[0])
+
+    def _has_valuation_inputs(self, asset_id: str) -> bool:
+        asset_id = asset_id.upper().strip()
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM financial_statement
+            WHERE UPPER(asset_id) = ?
+            """,
+            [asset_id],
+        ).fetchone()
+        if row and row[0]:
+            return True
+        row = self.conn.execute(
+            """
+            SELECT shares_outstanding
+            FROM asset
+            WHERE UPPER(asset_id) = ?
+            """,
+            [asset_id],
+        ).fetchone()
+        if row and row[0] is not None and row[0] > 0:
+            return True
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM dividend_event
+            WHERE UPPER(asset_id) = ?
+            """,
+            [asset_id],
+        ).fetchone()
+        return bool(row and row[0])
+
+    @staticmethod
+    def _looks_like_cdr_listing(row: Any) -> bool:
+        asset_id = str(row[0] or "")
+        symbol = str(row[1] or asset_id)
+        asset_subtype = str(row[2] or "")
+        name = str(row[3] or "")
+        description = str(row[4] or "")
+        text = f"{asset_id} {symbol} {asset_subtype} {name} {description}".lower()
+        base = symbol.split(".", maxsplit=1)[0].upper()
+        base = _CDR_SYMBOL_ALIASES.get(base, base)
+        if "cdr" in text or "depositary receipt" in text or "depository receipt" in text:
+            return True
+        return symbol.upper().endswith(".TO") and base in _KNOWN_CDR_BASE_SYMBOLS

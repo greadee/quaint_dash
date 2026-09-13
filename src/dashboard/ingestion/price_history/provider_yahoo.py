@@ -23,6 +23,17 @@ from dashboard.ingestion.price_history.models import (
     SplitEventRow,
 )
 
+
+def yahoo_symbol_for_asset_id(asset_id: str) -> str:
+    """Translate internal Canadian listing conventions to Yahoo symbols."""
+    symbol = asset_id.upper().strip()
+    if symbol.endswith(".VN"):
+        return f"{symbol[:-3]}.V"
+    if ".UN.TO" in symbol:
+        return symbol.replace(".UN.TO", "-UN.TO")
+    return symbol
+
+
 class YahooPriceProvider:
     """
     Provider for historical OHLCV, dividends, and splits using yfinance.
@@ -45,12 +56,13 @@ class YahooPriceProvider:
         """
         yfinance treats end as exclusive, so add one day.
         """
-        cache_key = (asset_id.upper(), start_date, end_date)
+        provider_symbol = yahoo_symbol_for_asset_id(asset_id)
+        cache_key = (provider_symbol, start_date, end_date)
         if cache_key in self._history_cache:
             return self._history_cache[cache_key]
 
         self.rate_limiter.acquire(self.rate_limit_policy)
-        ticker = yf.Ticker(asset_id)
+        ticker = yf.Ticker(provider_symbol)
 
         history = ticker.history(
             start=start_date.isoformat(),

@@ -21,6 +21,11 @@ from dashboard.ingestion.price_history.constants import (
     STATUS_RUNNING,
 )
 from dashboard.ingestion.price_history.models import DividendEventRow, IngestionJob, PriceDailyRow, SplitEventRow
+from dashboard.ingestion.job_policy import (
+    INGESTION_JOB_LEASE_SECONDS,
+    MAX_INGESTION_JOB_ATTEMPTS,
+    ingestion_worker_id,
+)
 from dashboard.ingestion.ticker_universe import TickerUniverseRepository
 import dashboard.ingestion.price_history.db.queries as qry
 
@@ -72,17 +77,51 @@ class PriceHistoryIngestionRepository:
         )
 
     def claim_next_pending_job(self) -> Optional[IngestionJob]:
+        # Work excluded by the claim query must leave the visible pending queue.
+        self.conn.execute("""
+            UPDATE ingestion_job AS candidate
+            SET status = 'superseded',
+                terminal_reason = 'newer successful market ingestion covers this job',
+                completed_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE candidate.domain = 'market' AND candidate.status = 'pending'
+              AND (
+                EXISTS (
+                    SELECT 1 FROM ingestion_job newer
+                    WHERE newer.asset_id = candidate.asset_id
+                      AND newer.domain = candidate.domain
+                      AND newer.dataset = candidate.dataset
+                      AND newer.status = 'done' AND newer.job_id > candidate.job_id
+                ) OR EXISTS (
+                    SELECT 1 FROM asset_sync_state sync
+                    WHERE sync.asset_id = candidate.asset_id
+                      AND sync.domain = candidate.domain
+                      AND sync.dataset = candidate.dataset
+                      AND (sync.backfill_status = 'done'
+                           OR sync.last_successful_at IS NOT NULL
+                           OR sync.last_successful_date IS NOT NULL)
+                      AND COALESCE(sync.last_successful_at, sync.last_attempted_at,
+                          TIMESTAMP '1970-01-01') >= candidate.updated_at
+                )
+              )
+        """)
         row = self.conn.execute(
-            qry.SELECT_NEXT_PENDING_JOB,
-            [DOMAIN_MARKET, STATUS_PENDING],
+            qry.CLAIM_NEXT_PENDING_JOB,
+            [
+                STATUS_RUNNING,
+                ingestion_worker_id(),
+                INGESTION_JOB_LEASE_SECONDS,
+                DOMAIN_MARKET,
+                STATUS_PENDING,
+                MAX_INGESTION_JOB_ATTEMPTS,
+                STATUS_PENDING,
+            ],
         ).fetchone()
 
         if row is None:
             return None
 
-        job = IngestionJob(*row)
-        self.conn.execute(qry.MARK_JOB_RUNNING, [STATUS_RUNNING, job.job_id])
-        return job
+        return IngestionJob(*row)
 
     def mark_job_done(
         self,
@@ -216,9 +255,30 @@ class PriceHistoryIngestionRepository:
 
     def get_latest_dataset_date(self, asset_id: str, dataset: str) -> Optional[date]:
         if dataset == DATASET_PRICE_DAILY:
-            return self.latest_price_date(asset_id)
-        if dataset == DATASET_DIVIDENDS:
-            return self.latest_dividend_date(asset_id)
-        if dataset == DATASET_SPLITS:
-            return self.latest_split_date(asset_id)
-        raise ValueError(f"unsupported dataset: {dataset}")
+            stored_date = self.latest_price_date(asset_id)
+        elif dataset == DATASET_DIVIDENDS:
+            stored_date = self.latest_dividend_date(asset_id)
+        elif dataset == DATASET_SPLITS:
+            stored_date = self.latest_split_date(asset_id)
+        else:
+            raise ValueError(f"unsupported dataset: {dataset}")
+
+        sync_row = self.conn.execute(
+            """
+            SELECT CASE
+                WHEN last_successful_date IS NULL THEN backfill_end_date
+                WHEN backfill_end_date IS NULL THEN last_successful_date
+                ELSE GREATEST(last_successful_date, backfill_end_date)
+            END
+            FROM asset_sync_state
+            WHERE asset_id = ?
+              AND domain = ?
+              AND dataset = ?
+              AND backfill_status = ?
+              AND needs_repair = FALSE
+            """,
+            [asset_id, DOMAIN_MARKET, dataset, BACKFILL_DONE],
+        ).fetchone()
+        covered_date = sync_row[0] if sync_row else None
+        dates = [value for value in (stored_date, covered_date) if value is not None]
+        return max(dates) if dates else None
